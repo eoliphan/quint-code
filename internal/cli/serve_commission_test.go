@@ -623,6 +623,143 @@ func TestHandleHaftCommission_CompleteOrBlockRecordsProjectionDebtForExternalReq
 	}
 }
 
+func TestCompleteExternalWorkCommission_CompletesPreflightingCommission(t *testing.T) {
+	store := setupCLIArtifactStore(t)
+	ctx := context.Background()
+	haftDir := t.TempDir()
+
+	decision := createCommissionDecisionFixture(t, ctx, store, haftDir, "External lifecycle", "internal/cli/commission.go")
+	createdResult, err := handleHaftCommission(ctx, store, map[string]any{
+		"action":        "create_from_decision",
+		"decision_ref":  decision.Meta.ID,
+		"repo_ref":      "local:haft",
+		"base_sha":      "base-r1",
+		"target_branch": "dev",
+		"valid_until":   "2099-01-01T00:00:00Z",
+		"spec_readiness_override": map[string]any{
+			"kind":              "tactical",
+			"out_of_spec":       true,
+			"project_readiness": "needs_onboard",
+			"reason":            "unit test fixture without project spec carriers",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := map[string]map[string]any{}
+	if err := json.Unmarshal([]byte(createdResult), &created); err != nil {
+		t.Fatal(err)
+	}
+	commissionID := created["commission"]["id"].(string)
+
+	_, err = handleHaftCommission(ctx, store, map[string]any{
+		"action":        "claim_for_preflight",
+		"commission_id": commissionID,
+		"runner_id":     "external:test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := completeExternalWorkCommission(ctx, store, map[string]any{
+		"commission_id": commissionID,
+		"runner_id":     "external:test",
+		"event":         "external_runtime_terminal",
+		"verdict":       "completed",
+		"reason":        "external_runtime_succeeded_diff_pending_reviewer",
+		"payload": map[string]any{
+			"final_message_path": "logs/wc.last-message.txt",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	completed := map[string]map[string]any{}
+	if err := json.Unmarshal([]byte(result), &completed); err != nil {
+		t.Fatal(err)
+	}
+	commission := completed["commission"]
+	if commission["state"] != "completed" {
+		t.Fatalf("state = %#v, want completed", commission["state"])
+	}
+
+	events, ok := commission["events"].([]any)
+	if !ok || len(events) != 2 {
+		t.Fatalf("events = %#v, want start and terminal events", commission["events"])
+	}
+	first, _ := events[0].(map[string]any)
+	last, _ := events[1].(map[string]any)
+	if first["action"] != "start_after_preflight" || first["verdict"] != "pass" {
+		t.Fatalf("first event = %#v, want start_after_preflight/pass", first)
+	}
+	if last["action"] != "complete_or_block" || last["verdict"] != "completed" {
+		t.Fatalf("last event = %#v, want complete_or_block/completed", last)
+	}
+	if last["event"] != "external_runtime_terminal" {
+		t.Fatalf("terminal event = %#v", last["event"])
+	}
+}
+
+func TestCompleteExternalWorkCommissionIsIdempotentForMatchingTerminalState(t *testing.T) {
+	store := setupCLIArtifactStore(t)
+	ctx := context.Background()
+
+	_, err := handleHaftCommission(ctx, store, map[string]any{
+		"action":     "create",
+		"commission": workCommissionFixture("wc-external-cli-already-complete", "completed", "2099-01-01T00:00:00Z"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := completeExternalWorkCommission(ctx, store, map[string]any{
+		"commission_id": "wc-external-cli-already-complete",
+		"runner_id":     "external:test",
+		"event":         "external_runtime_terminal",
+		"verdict":       "completed",
+		"reason":        "external_runtime_succeeded",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shown := map[string]map[string]any{}
+	if err := json.Unmarshal([]byte(result), &shown); err != nil {
+		t.Fatal(err)
+	}
+	if shown["commission"]["state"] != "completed" {
+		t.Fatalf("state = %#v, want completed", shown["commission"]["state"])
+	}
+}
+
+func TestCompleteExternalWorkCommissionRejectsQueuedCommission(t *testing.T) {
+	store := setupCLIArtifactStore(t)
+	ctx := context.Background()
+
+	_, err := handleHaftCommission(ctx, store, map[string]any{
+		"action":     "create",
+		"commission": workCommissionFixture("wc-external-cli-queued", "queued", "2099-01-01T00:00:00Z"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = completeExternalWorkCommission(ctx, store, map[string]any{
+		"commission_id": "wc-external-cli-queued",
+		"runner_id":     "external:test",
+		"event":         "external_runtime_terminal",
+		"verdict":       "completed",
+		"reason":        "external_runtime_succeeded",
+	})
+	if err == nil {
+		t.Fatal("expected queued commission completion to fail")
+	}
+	if !strings.Contains(err.Error(), "commission_complete_external_not_allowed") {
+		t.Fatalf("err = %v, want commission_complete_external_not_allowed", err)
+	}
+}
+
 func TestHandleHaftCommission_CompleteOrBlockKeepsLocalOnlyCompletionUnaffected(t *testing.T) {
 	store := setupCLIArtifactStore(t)
 	ctx := context.Background()
@@ -2489,7 +2626,6 @@ func workCommissionFixture(id, state, validUntil string) map[string]any {
 	}
 }
 
-
 func TestHandleHaftCommission_CreateFromDecisionRequiresSliceDescriptionOnSecondCommission(t *testing.T) {
 	store := setupCLIArtifactStore(t)
 	ctx := context.Background()
@@ -2633,4 +2769,3 @@ func TestHandleHaftCommission_CreateFromDecisionAcceptsExplicitSliceDescription(
 		t.Fatalf("second commission slice_description = %#v, want slice-B: MCP schema additions only", got)
 	}
 }
-

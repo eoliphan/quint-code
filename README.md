@@ -230,6 +230,7 @@ haft commission list --selector stale
 haft commission show wc-...
 haft commission requeue wc-... --reason stale_operator_recovery
 haft commission cancel wc-... --reason no_longer_relevant
+haft commission complete-external wc-... --runner external-runner --reason external_runtime_succeeded --payload-file runtime-evidence.json
 haft commission list-runnable
 haft commission claim wc-...
 ```
