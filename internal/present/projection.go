@@ -10,22 +10,87 @@ import (
 
 // ProjectionResponse renders one deterministic audience projection over the same artifact graph.
 func ProjectionResponse(graph artifact.ProjectionGraph, view artifact.ProjectionView) string {
+	var body string
 	switch view {
 	case artifact.ProjectionViewEngineer:
-		return engineerProjectionResponse(graph)
+		body = engineerProjectionResponse(graph)
 	case artifact.ProjectionViewManager:
-		return managerProjectionResponse(graph)
+		body = managerProjectionResponse(graph)
 	case artifact.ProjectionViewAudit:
-		return auditProjectionResponse(graph)
+		body = auditProjectionResponse(graph)
 	case artifact.ProjectionViewCompare:
-		return compareProjectionResponse(graph)
+		body = compareProjectionResponse(graph)
 	case artifact.ProjectionViewDelegatedAgent:
-		return delegatedAgentProjectionResponse(graph)
+		body = delegatedAgentProjectionResponse(graph)
 	case artifact.ProjectionViewChangeRationale:
-		return changeRationaleProjectionResponse(graph)
+		body = changeRationaleProjectionResponse(graph)
 	default:
 		return fmt.Sprintf("Unsupported projection view: %s\n", view)
 	}
+	return body + renderCarrierFootnote(collectProjectionSources(graph))
+}
+
+// projectionSourceRef is one underlying artifact referenced by a projection.
+// Per FPF A.15.4 ("Work-Relevant Source Restoration") a projection is a
+// carrier — not authorization, evidence, or work. The footer lists these so
+// the consumer can recover source before acting on the rendered carrier.
+type projectionSourceRef struct {
+	Kind  artifact.Kind
+	Ref   string
+	Title string
+}
+
+// renderCarrierFootnote emits the A.15.4 source-restoration footer appended to
+// every projection. Empty sources still render the section with an explicit
+// "no underlying source artifacts" note so the carrier semantics stay visible.
+func renderCarrierFootnote(sources []projectionSourceRef) string {
+	var sb strings.Builder
+	sb.WriteString("\n---\n\n## Carrier — Not Source of Truth (A.15.4)\n\n")
+	sb.WriteString("This is a projection rendered for boundary-crossing handoff. Per FPF A.15.4, before action (approval, gate passage, evidence use, engineering justification, release), recover the underlying project source:\n\n")
+	if len(sources) == 0 {
+		sb.WriteString("- (no underlying source artifacts; this projection is informational only)\n\n")
+	} else {
+		for _, source := range sources {
+			label := source.Kind.UserFacingLabel()
+			if title := strings.TrimSpace(source.Title); title != "" {
+				sb.WriteString(fmt.Sprintf("- %s: `%s` — %q\n", label, source.Ref, title))
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("- %s: `%s`\n", label, source.Ref))
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("Recover via `haft_query(action=\"get\", ref=\"<id>\")` or read directly from `.haft/{decisions|problems|solutions|evidence}/<id>.md`.\n")
+	return sb.String()
+}
+
+// collectProjectionSources enumerates every artifact node that participated in
+// the projection so the carrier footer can list them. Deterministic ordering:
+// problems → portfolios → decisions, each in the graph's existing sort order.
+func collectProjectionSources(graph artifact.ProjectionGraph) []projectionSourceRef {
+	sources := make([]projectionSourceRef, 0, len(graph.Problems)+len(graph.Portfolios)+len(graph.Decisions))
+	for _, problem := range graph.Problems {
+		sources = append(sources, projectionSourceRef{
+			Kind:  artifact.KindProblemCard,
+			Ref:   problem.Meta.ID,
+			Title: problem.Meta.Title,
+		})
+	}
+	for _, portfolio := range graph.Portfolios {
+		sources = append(sources, projectionSourceRef{
+			Kind:  artifact.KindSolutionPortfolio,
+			Ref:   portfolio.Meta.ID,
+			Title: portfolio.Meta.Title,
+		})
+	}
+	for _, decision := range graph.Decisions {
+		sources = append(sources, projectionSourceRef{
+			Kind:  artifact.KindDecisionRecord,
+			Ref:   decision.Meta.ID,
+			Title: decision.Meta.Title,
+		})
+	}
+	return sources
 }
 
 func engineerProjectionResponse(graph artifact.ProjectionGraph) string {

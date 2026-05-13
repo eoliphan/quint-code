@@ -877,6 +877,9 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 		if v, ok := args["valid_until"].(string); ok {
 			input.ValidUntil = v
 		}
+		if v, ok := args["causal_support_basis"].(string); ok {
+			input.CausalSupportBasis = v
+		}
 		if cl, ok := args["congruence_level"].(float64); ok {
 			input.CongruenceLevel = int(cl)
 		}
@@ -897,9 +900,11 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 
 		wlnk := artifact.ComputeWLNKSummary(ctx, store, input.ArtifactRef)
 		navStrip := present.NavStrip(artifact.ComputeNavState(ctx, store, contextName))
-		return present.DecisionResponse("evidence", nil, "",
-			fmt.Sprintf("Evidence attached: %s [%s]\nVerdict: %s\nWLNK: %s\n", item.ID, item.Type, item.Verdict, wlnk.Summary),
-			navStrip), "", nil
+		extra := fmt.Sprintf("Evidence attached: %s [%s]\nVerdict: %s\nWLNK: %s\n", item.ID, item.Type, item.Verdict, wlnk.Summary)
+		if warning := evidenceCausalUseWarning(input, item); warning != "" {
+			extra += "\n" + warning + "\n"
+		}
+		return present.DecisionResponse("evidence", nil, "", extra, navStrip), "", nil
 
 	case "baseline":
 		input := artifact.BaselineInput{}
@@ -1375,6 +1380,35 @@ func parseStrictParityPlanFromArgs(args map[string]any, key string) (*artifact.P
 	}
 
 	return &value, nil
+}
+
+// evidenceCausalUseWarning surfaces the C.28 / CC-B3.9 advisory when the
+// attached evidence content reads like a causal-use claim but the caller did
+// not declare a CausalSupportBasis. Warning, not reject — legacy ingest
+// continues unchanged.
+func evidenceCausalUseWarning(input artifact.EvidenceInput, item *artifact.EvidenceItem) string {
+	if item == nil || item.CausalSupportBasis != "" {
+		return ""
+	}
+	lower := strings.ToLower(input.Content)
+	triggers := []string{
+		"causal",
+		"caused",
+		"intervention",
+		"counterfactual",
+		"uplift",
+		"treatment effect",
+		"causal effect",
+		" effect of ",
+	}
+	for _, trigger := range triggers {
+		if strings.Contains(lower, trigger) {
+			return "Warning (C.28): evidence content suggests a causal-use claim but causal_support_basis is not declared. " +
+				"Per CC-B3.9, undeclared basis cannot raise R for causal-ladder climbs. " +
+				"Consider re-attaching with causal_support_basis in {observational|interventional|realized_counterfactual|identified_estimate|simulation_only}."
+		}
+	}
+	return ""
 }
 
 func parsePredictionInputsFromArgs(args map[string]any, key string) ([]artifact.PredictionInput, error) {

@@ -962,10 +962,11 @@ Actions:
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"claim":        map[string]any{"type": "string", "description": "What should be true after implementation"},
-							"observable":   map[string]any{"type": "string", "description": "How to verify (test name, command, file check)"},
-							"threshold":    map[string]any{"type": "string", "description": "What counts as passing"},
-							"verify_after": map[string]any{"type": "string", "description": "When to check (RFC3339 or YYYY-MM-DD) — for async claims that need time before evidence is available"},
+							"claim":         map[string]any{"type": "string", "description": "What should be true after implementation"},
+							"observable":    map[string]any{"type": "string", "description": "How to verify (test name, command, file check)"},
+							"threshold":     map[string]any{"type": "string", "description": "What counts as passing"},
+							"verify_after":  map[string]any{"type": "string", "description": "When to check (RFC3339 or YYYY-MM-DD) — for async claims that need time before evidence is available"},
+							"realizability": map[string]any{"type": "string", "enum": []string{"realizable", "nonrealizable", "unknown"}, "description": "C.28 CounterfactualSamplingRealizabilityProfile verdict; nonrealizable caps R_eff at 0.5 per CC-B3.9"},
 						},
 						"required": []string{"claim", "observable", "threshold"},
 					},
@@ -990,7 +991,11 @@ Actions:
 				"congruence_level": map[string]any{"type": "integer", "description": "CL 0-3: 3=same context, 2=similar, 1=different, 0=opposed (evidence)"},
 				"claim_refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Exact decision claim IDs this evidence binds to when available (evidence)"},
 				"claim_scope":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Fallback claim scope labels for older artifacts or non-claim evidence (evidence)"},
-				"mode":             map[string]any{"type": "string", "description": "tactical | standard | deep"},
+				"causal_support_basis": map[string]any{
+					"type":        "string",
+					"description": "C.28 CausalEvidenceSupportBasis — basis on which this evidence supports a causal-use claim. Accepts: observational | interventional | realized_counterfactual | identified_estimate | simulation_only (long forms also accepted). simulation-only caps R_eff at 0.5 per CC-B3.9 (evidence).",
+				},
+				"mode": map[string]any{"type": "string", "description": "tactical | standard | deep"},
 			},
 			"required": []any{"action"},
 		},
@@ -1233,16 +1238,17 @@ func (t *HaftDecisionTool) evidence(ctx context.Context, args map[string]any) (a
 	}
 
 	input := artifact.EvidenceInput{
-		CongruenceLevel: -1,
-		FormalityLevel:  -1,
-		ArtifactRef:     jsonStr(args, "artifact_ref"),
-		Content:         jsonStr(args, "evidence_content"),
-		Type:            jsonStr(args, "evidence_type"),
-		Verdict:         jsonStr(args, "evidence_verdict"),
-		CarrierRef:      jsonStr(args, "carrier_ref"),
-		ClaimRefs:       claimRefs,
-		ClaimScope:      claimScope,
-		ValidUntil:      jsonStr(args, "valid_until"),
+		CongruenceLevel:    -1,
+		FormalityLevel:     -1,
+		ArtifactRef:        jsonStr(args, "artifact_ref"),
+		Content:            jsonStr(args, "evidence_content"),
+		Type:               jsonStr(args, "evidence_type"),
+		Verdict:            jsonStr(args, "evidence_verdict"),
+		CarrierRef:         jsonStr(args, "carrier_ref"),
+		ClaimRefs:          claimRefs,
+		ClaimScope:         claimScope,
+		ValidUntil:         jsonStr(args, "valid_until"),
+		CausalSupportBasis: jsonStr(args, "causal_support_basis"),
 	}
 
 	if level, ok := args["congruence_level"].(float64); ok {
@@ -1263,6 +1269,10 @@ func (t *HaftDecisionTool) evidence(ctx context.Context, args map[string]any) (a
 		item.Verdict,
 		wlnk.Summary,
 	)
+
+	if warning := causalUseSoftWarning(input, item); warning != "" {
+		display += "\n\n" + warning
+	}
 
 	return agent.ToolResult{
 		DisplayText: display,
@@ -1957,4 +1967,44 @@ func jsonParityPlan(args map[string]any, key string) (*artifact.ParityPlan, bool
 // field shape, types, and missing_data_policy enum values.
 func parityPlanSchema(description string) map[string]any {
 	return artifact.ParityPlanJSONSchema(description)
+}
+
+// causalUseSoftWarning returns a non-empty advisory string when the evidence
+// content or its bound observable text plausibly carries a causal-use claim
+// (C.28) but no CausalSupportBasis was declared. The warning does not reject
+// the evidence — legacy ingest continues — but signals to the LLM caller that
+// per CC-B3.9 an undeclared basis cannot raise R for a causal-ladder climb.
+func causalUseSoftWarning(input artifact.EvidenceInput, item *artifact.EvidenceItem) string {
+	if item == nil {
+		return ""
+	}
+	if item.CausalSupportBasis != "" {
+		return ""
+	}
+	if !plausiblyCausalEvidence(input.Content) {
+		return ""
+	}
+	return "Warning (C.28): evidence content suggests a causal-use claim but causal_support_basis is not declared. " +
+		"Per CC-B3.9, undeclared basis cannot raise R for causal-ladder climbs. " +
+		"Consider re-attaching with causal_support_basis in {observational|interventional|realized_counterfactual|identified_estimate|simulation_only}."
+}
+
+func plausiblyCausalEvidence(content string) bool {
+	lower := strings.ToLower(content)
+	triggers := []string{
+		"causal",
+		"caused",
+		"intervention",
+		"counterfactual",
+		"uplift",
+		"treatment effect",
+		"causal effect",
+		" effect of ",
+	}
+	for _, trigger := range triggers {
+		if strings.Contains(lower, trigger) {
+			return true
+		}
+	}
+	return false
 }

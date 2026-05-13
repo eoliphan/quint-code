@@ -499,3 +499,35 @@ func TestHandleToolsList_QuerySchemaIncludesProjectionView(t *testing.T) {
 		t.Fatalf("unexpected view description: %q", description)
 	}
 }
+
+func TestHandleToolsList_DecisionSchemaExposesCausalSupportBasis(t *testing.T) {
+	decisionSchema := mustListToolProperties(t, "haft_decision")
+
+	basis, ok := decisionSchema["causal_support_basis"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("haft_decision schema must expose causal_support_basis: %#v", decisionSchema["causal_support_basis"])
+	}
+	if basis["type"] != "string" {
+		t.Fatalf("causal_support_basis type = %v, want string", basis["type"])
+	}
+	desc, _ := basis["description"].(string)
+	if !strings.Contains(desc, "C.28") || !strings.Contains(desc, "simulation_only") {
+		t.Fatalf("causal_support_basis description must cite C.28 and simulation_only: %q", desc)
+	}
+
+	predictions, ok := decisionSchema["predictions"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("predictions schema missing: %#v", decisionSchema["predictions"])
+	}
+	items, ok := predictions["items"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("predictions.items missing: %#v", predictions["items"])
+	}
+	props, ok := items["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("predictions.items.properties missing: %#v", items["properties"])
+	}
+	if _, ok := props["realizability"]; !ok {
+		t.Fatalf("predictions[].realizability missing from haft_decision schema")
+	}
+}
