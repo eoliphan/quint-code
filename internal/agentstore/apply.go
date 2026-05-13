@@ -21,6 +21,8 @@ func IsJournalEvent(kind agentproto.EventKind) bool {
 		agentproto.EventTurnStarted,
 		agentproto.EventTurnCompleted,
 		agentproto.EventTurnFailed,
+		agentproto.EventPartTextCompleted,
+		agentproto.EventPartReasoningCompleted,
 		agentproto.EventPartToolUseStarted,
 		agentproto.EventPartToolUseCompleted,
 		agentproto.EventPartFileRef,
@@ -73,6 +75,10 @@ func Apply(s agentcore.Session, ev agentproto.AgentEvent) (agentcore.Session, er
 		return agentcore.CompleteTurn(s, e.TurnID, e.At)
 	case agentproto.TurnFailedEvent:
 		return agentcore.FailTurn(s, e.TurnID, e.Verdict, e.Message, e.At)
+	case agentproto.PartTextCompletedEvent:
+		return agentcore.AppendPart(s, e.TurnID, agentcore.NewTextPart(e.PartID, e.At, e.Text), e.At)
+	case agentproto.PartReasoningCompletedEvent:
+		return agentcore.AppendPart(s, e.TurnID, agentcore.NewReasoningPart(e.PartID, e.At, e.Text), e.At)
 	case agentproto.PartToolUseStartedEvent:
 		return agentcore.AppendPart(s, e.TurnID, agentcore.NewToolUsePart(e.PartID, e.At, e.ToolCallID, e.ToolName, e.Args), e.At)
 	case agentproto.PartToolUseCompletedEvent:

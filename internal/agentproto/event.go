@@ -20,12 +20,14 @@ const (
 	EventTurnCompleted EventKind = "turn.completed"
 	EventTurnFailed    EventKind = "turn.failed"
 
-	EventPartTextDelta        EventKind = "part.text.delta"
-	EventPartReasoningDelta   EventKind = "part.reasoning.delta"
-	EventPartToolUseStarted   EventKind = "part.tool_use.started"
-	EventPartToolUseCompleted EventKind = "part.tool_use.completed"
-	EventPartFileRef          EventKind = "part.file_ref"
-	EventPartStepBoundary     EventKind = "part.step.boundary"
+	EventPartTextDelta          EventKind = "part.text.delta"
+	EventPartTextCompleted      EventKind = "part.text.completed"
+	EventPartReasoningDelta     EventKind = "part.reasoning.delta"
+	EventPartReasoningCompleted EventKind = "part.reasoning.completed"
+	EventPartToolUseStarted     EventKind = "part.tool_use.started"
+	EventPartToolUseCompleted   EventKind = "part.tool_use.completed"
+	EventPartFileRef            EventKind = "part.file_ref"
+	EventPartStepBoundary       EventKind = "part.step.boundary"
 
 	EventSubAgentSpawned   EventKind = "subagent.spawned"
 	EventSubAgentCompleted EventKind = "subagent.completed"
@@ -132,6 +134,18 @@ type PartTextDeltaEvent struct {
 
 func (PartTextDeltaEvent) Kind() EventKind { return EventPartTextDelta }
 
+// PartTextCompletedEvent: the assistant finished a streaming text part.
+// Carries the full materialized text so replay reconstructs the same
+// TextPart the driver appended; deltas alone are wire-only and would be
+// lost on reload.
+type PartTextCompletedEvent struct {
+	turnEventBase
+	PartID agentcore.PartID `json:"part_id"`
+	Text   string           `json:"text"`
+}
+
+func (PartTextCompletedEvent) Kind() EventKind { return EventPartTextCompleted }
+
 // PartReasoningDeltaEvent: hidden reasoning chunk (o1, thinking blocks).
 type PartReasoningDeltaEvent struct {
 	turnEventBase
@@ -140,6 +154,17 @@ type PartReasoningDeltaEvent struct {
 }
 
 func (PartReasoningDeltaEvent) Kind() EventKind { return EventPartReasoningDelta }
+
+// PartReasoningCompletedEvent: assistant finished a streaming reasoning
+// part. See PartTextCompletedEvent for rationale; reasoning is journaled
+// so replayed sessions match the in-memory value Drive returns.
+type PartReasoningCompletedEvent struct {
+	turnEventBase
+	PartID agentcore.PartID `json:"part_id"`
+	Text   string           `json:"text"`
+}
+
+func (PartReasoningCompletedEvent) Kind() EventKind { return EventPartReasoningCompleted }
 
 // PartToolUseStartedEvent: an assistant tool call has been emitted but not
 // yet executed. Args carries the JSON-encoded parameters as the LLM

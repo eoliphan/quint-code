@@ -37,7 +37,8 @@ func encodeEventBody(ev AgentEvent) (json.RawMessage, error) {
 	switch ev.Kind() {
 	case EventSessionCreated, EventSessionUpdated, EventSessionArchived,
 		EventTurnStarted, EventTurnCompleted, EventTurnFailed,
-		EventPartTextDelta, EventPartReasoningDelta,
+		EventPartTextDelta, EventPartTextCompleted,
+		EventPartReasoningDelta, EventPartReasoningCompleted,
 		EventPartToolUseStarted, EventPartToolUseCompleted,
 		EventPartFileRef, EventPartStepBoundary,
 		EventSubAgentSpawned, EventSubAgentCompleted,
@@ -64,8 +65,12 @@ func decodeEventBody(kind EventKind, body json.RawMessage) (AgentEvent, error) {
 		return unmarshalEvent[TurnFailedEvent](body)
 	case EventPartTextDelta:
 		return unmarshalEvent[PartTextDeltaEvent](body)
+	case EventPartTextCompleted:
+		return unmarshalEvent[PartTextCompletedEvent](body)
 	case EventPartReasoningDelta:
 		return unmarshalEvent[PartReasoningDeltaEvent](body)
+	case EventPartReasoningCompleted:
+		return unmarshalEvent[PartReasoningCompletedEvent](body)
 	case EventPartToolUseStarted:
 		return unmarshalEvent[PartToolUseStartedEvent](body)
 	case EventPartToolUseCompleted:

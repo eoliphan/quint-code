@@ -110,6 +110,7 @@ func TestDriver_TextOnlyTurn_EmitsExpectedEvents(t *testing.T) {
 		agentproto.EventTurnStarted,
 		agentproto.EventPartTextDelta,
 		agentproto.EventPartTextDelta,
+		agentproto.EventPartTextCompleted,
 		agentproto.EventTurnCompleted,
 	}
 	if len(sink.Events) != len(wantKinds) {
@@ -337,6 +338,62 @@ func TestDriver_ToolCall_RequiresPromptDenied(t *testing.T) {
 	}
 	if !foundDenied {
 		t.Fatal("denied tool result not emitted")
+	}
+}
+
+func TestDriver_ToolCall_CancelDuringPermissionWait_EmitsTurnFailed(t *testing.T) {
+	// If the operator cancels ctx while gatePermission is waiting on the
+	// PermissionGate, handleToolCall returns context.Canceled. The journal
+	// would replay to a Running turn — blocking the next submit — unless
+	// the driver routes that error through failTurn.
+	provider := &fakeProvider{events: []ProviderEvent{
+		ProviderToolCall{CallID: "tc1", Name: "bash", Args: []byte(`{}`)},
+		ProviderTurnDone{},
+	}}
+	tools := &fakeTools{
+		authorise: map[string]AuthorisationVerdict{"bash": AuthorisationRequiresPrompt},
+	}
+	sink := &CollectingSink{}
+	now, _ := newFixedClock()
+	gate := NewPermissionGate()
+
+	d := &Driver{
+		Provider:    provider,
+		Tools:       tools,
+		Sink:        sink,
+		Permissions: gate,
+		IDGen:       newCounterIDGen(),
+		Now:         now,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		// Wait until the gate has a pending entry, then cancel ctx (without
+		// resolving). The driver should fail the turn.
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			gate.mu.Lock()
+			n := len(gate.pending)
+			gate.mu.Unlock()
+			if n > 0 {
+				cancel()
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
+
+	_, err := d.Drive(ctx, freshSession(), "destructive")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if len(sink.Events) == 0 {
+		t.Fatal("no events emitted")
+	}
+	last := sink.Events[len(sink.Events)-1]
+	if last.Kind() != agentproto.EventTurnFailed {
+		t.Fatalf("last event must be turn.failed, got %s", last.Kind())
 	}
 }
 

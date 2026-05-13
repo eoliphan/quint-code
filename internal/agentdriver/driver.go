@@ -138,11 +138,11 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 				}
 				session, err = flushText(session)
 				if err != nil {
-					return session, err
+					return d.failTurn(session, turnID, fmt.Errorf("flush text: %w", err))
 				}
 				session, err = flushReasoning(session)
 				if err != nil {
-					return session, err
+					return d.failTurn(session, turnID, fmt.Errorf("flush reasoning: %w", err))
 				}
 				return d.completeTurn(session, turnID)
 			}
@@ -162,24 +162,31 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 			case ProviderToolCall:
 				session, err = flushText(session)
 				if err != nil {
-					return session, err
+					return d.failTurn(session, turnID, fmt.Errorf("flush text: %w", err))
 				}
 				session, err = flushReasoning(session)
 				if err != nil {
-					return session, err
+					return d.failTurn(session, turnID, fmt.Errorf("flush reasoning: %w", err))
 				}
 				session, err = d.handleToolCall(ctx, session, turnID, e)
 				if err != nil {
-					return session, err
+					// handleToolCall has already journaled events (tool_use.started,
+					// possibly permission.requested/resolved) and any error here
+					// leaves the turn in Running state. Route through failTurn so
+					// the journal gets a terminal event and replay does not block
+					// the next submit. A bare return here would drop the
+					// dispatcher's in-memory running entry while the journal still
+					// shows Running, requiring manual repair.
+					return d.failTurn(session, turnID, fmt.Errorf("tool call: %w", err))
 				}
 			case ProviderTurnDone:
 				session, err = flushText(session)
 				if err != nil {
-					return session, err
+					return d.failTurn(session, turnID, fmt.Errorf("flush text: %w", err))
 				}
 				session, err = flushReasoning(session)
 				if err != nil {
-					return session, err
+					return d.failTurn(session, turnID, fmt.Errorf("flush reasoning: %w", err))
 				}
 				return d.completeTurn(session, turnID)
 			case ProviderError:
@@ -339,18 +346,32 @@ func (d *Driver) emitToolPart(session agentcore.Session, turnID agentcore.TurnID
 	}
 	switch kind {
 	case agentcore.PartKindText:
-		// Text deltas are wire-only; the materialized TextPart is journaled
-		// via a synthetic event. We use the same EventPartToolUseCompleted
-		// shape for journaling text/reasoning would be misleading — the
-		// agentstore.Apply path actually has no event type for "text part
-		// finalized" right now. For M2b, we journal text via a private
-		// helper that updates the Session in memory; persistence of finalized
-		// text parts ships in M2c when we add the dedicated event variant.
-		// For now, append to the local Session value only, do NOT publish
-		// a journal event. The TUI sees text via the deltas.
+		// Journal the finalized text part BEFORE applying it locally so a
+		// crash between publish and AppendPart does not lose the assistant
+		// response: on reload, replay reconstructs the same Session value
+		// Drive would have returned. Deltas remain wire-only; the
+		// completed event is the canonical record.
+		ev := agentproto.PartTextCompletedEvent{}
+		ev.SessionID = session.ID
+		ev.At = now
+		ev.TurnID = turnID
+		ev.PartID = partID
+		ev.Text = content
+		if err := d.Sink.Publish(ev); err != nil {
+			return session, err
+		}
 		part := agentcore.NewTextPart(partID, now, content)
 		return agentcore.AppendPart(session, turnID, part, now)
 	case agentcore.PartKindReasoning:
+		ev := agentproto.PartReasoningCompletedEvent{}
+		ev.SessionID = session.ID
+		ev.At = now
+		ev.TurnID = turnID
+		ev.PartID = partID
+		ev.Text = content
+		if err := d.Sink.Publish(ev); err != nil {
+			return session, err
+		}
 		part := agentcore.NewReasoningPart(partID, now, content)
 		return agentcore.AppendPart(session, turnID, part, now)
 	}

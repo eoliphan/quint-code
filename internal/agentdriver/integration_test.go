@@ -243,11 +243,11 @@ collectLoop:
 	if loaded.History[0].State != agentcore.TurnStateCompleted {
 		t.Fatalf("turn not completed in store: %s", loaded.History[0].State)
 	}
-	// 1 user text + 1 tool_use + 1 tool_result = 3 parts.
-	// Note: assistant TEXT parts are not journaled in M2b — only deltas via
-	// SSE. M3 will materialise them. So 3, not 4.
-	if len(loaded.History[0].Parts) != 3 {
-		t.Fatalf("expected 3 journaled parts, got %d", len(loaded.History[0].Parts))
+	// 1 user text + 1 assistant text (flushed from deltas) + 1 tool_use +
+	// 1 tool_result = 4 parts. The assistant TextPart is journaled via
+	// part.text.completed so reload reproduces what Drive returned.
+	if len(loaded.History[0].Parts) != 4 {
+		t.Fatalf("expected 4 journaled parts, got %d", len(loaded.History[0].Parts))
 	}
 }
 
