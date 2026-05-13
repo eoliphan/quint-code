@@ -24,8 +24,9 @@ import (
 type Store struct {
 	root string
 
-	mu   sync.Mutex
-	open map[agentcore.SessionID]*Journal
+	mu       sync.Mutex
+	open     map[agentcore.SessionID]*Journal
+	sessLock map[agentcore.SessionID]*sync.Mutex
 }
 
 // SessionMeta is the lightweight summary used by List. It is NOT a
@@ -47,8 +48,9 @@ func NewStore(root string) (*Store, error) {
 		return nil, fmt.Errorf("create store root: %w", err)
 	}
 	return &Store{
-		root: root,
-		open: map[agentcore.SessionID]*Journal{},
+		root:     root,
+		open:     map[agentcore.SessionID]*Journal{},
+		sessLock: map[agentcore.SessionID]*sync.Mutex{},
 	}, nil
 }
 
@@ -73,6 +75,9 @@ func (s *Store) Create(id agentcore.SessionID, projectID, title string, model ag
 	if id == "" {
 		return agentcore.Session{}, errors.New("agentstore: session id required")
 	}
+	lock := s.sessionLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 	dir := s.sessionDir(id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return agentcore.Session{}, fmt.Errorf("create session dir: %w", err)
@@ -121,6 +126,11 @@ func (s *Store) Load(id agentcore.SessionID) (agentcore.Session, error) {
 // Append writes an event to the session's journal and updates meta.json.
 // The session must already exist (call Create first); appending a
 // SessionCreated event after creation returns an error.
+//
+// A per-session mutex is held across Load/Apply/Append so concurrent
+// callers cannot validate against a stale snapshot and then write
+// conflicting events (e.g. a `model.switched` admitted on top of a
+// turn-running state that a sibling goroutine created moments later).
 func (s *Store) Append(id agentcore.SessionID, ev agentproto.AgentEvent) error {
 	if ev.Kind() == agentproto.EventSessionCreated {
 		return fmt.Errorf("agentstore: session.created may only be emitted by Create()")
@@ -131,6 +141,10 @@ func (s *Store) Append(id agentcore.SessionID, ev agentproto.AgentEvent) error {
 	if ev.Session() != id {
 		return fmt.Errorf("agentstore: event session %s does not match journal %s", ev.Session(), id)
 	}
+
+	lock := s.sessionLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 
 	// Require an existing session. openJournal would otherwise materialize
 	// an empty events.jsonl under a freshly created directory, leaving an
@@ -207,6 +221,21 @@ const (
 
 func (s *Store) sessionDir(id agentcore.SessionID) string {
 	return filepath.Join(s.root, string(id))
+}
+
+// sessionLock returns the per-session mutex used to serialize the
+// Load/Apply/Append sequence in Create and Append. Without it two
+// concurrent appends on the same session could validate against the
+// same pre-snapshot and persist mutually-inconsistent events.
+func (s *Store) sessionLock(id agentcore.SessionID) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.sessLock[id]
+	if !ok {
+		m = &sync.Mutex{}
+		s.sessLock[id] = m
+	}
+	return m
 }
 
 func (s *Store) openJournal(id agentcore.SessionID) (*Journal, error) {
