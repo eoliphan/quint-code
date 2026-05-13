@@ -12,13 +12,21 @@ var ErrInadmissibleEvidence = errors.New("CL0 evidence cannot support")
 // Evidence is the minimal evidence shape needed for claim-scoped assurance
 // decomposition in the evidence engine.
 type Evidence struct {
-	ClaimRefs       []string
-	Type            string
-	Verdict         string
-	CongruenceLevel int
-	FormalityLevel  int
-	HasFormality    bool
-	ValidUntil      string
+	ClaimRefs          []string
+	Type               string
+	Verdict            string
+	CongruenceLevel    int
+	FormalityLevel     int
+	HasFormality       bool
+	ValidUntil         string
+	CausalSupportBasis string // C.28; canonical or alias form, empty = not asserted
+	// ClaimRealizability is the optional per-claim realizability verdict
+	// (C.28 CounterfactualSamplingRealizabilityProfile). Plumbing this
+	// through ComputeClaimAssurance is a TODO(post-7.1) — for the 7.1
+	// release the per-claim resolver is not in place, so this field exists
+	// for forward compatibility and is only consulted when the caller
+	// supplies it explicitly per evidence item.
+	ClaimRealizability string
 }
 
 // ClaimAssurance is the per-claim F/G/R decomposition defined in the evidence
@@ -111,7 +119,15 @@ func ComputeClaimAssurance(claimRef string, items []Evidence, now time.Time) (Cl
 
 		formality := DeriveFormality(item)
 		groundedness := GroundednessFromCL(item.CongruenceLevel)
-		reliability := ScoreTypedEvidence(item.Type, item.Verdict, item.CongruenceLevel, item.ValidUntil, now)
+		reliability := ScoreEvidenceWithCausalBasis(
+			item.Type,
+			item.Verdict,
+			item.CongruenceLevel,
+			item.CausalSupportBasis,
+			item.ClaimRealizability,
+			item.ValidUntil,
+			now,
+		)
 
 		result.FEff = minInt(result.FEff, formality)
 		result.GEff = minInt(result.GEff, groundedness)
