@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [8.0.0] — 2026-05-14
+
+Flagship release. New v8 agent TUI on Bun + @opentui/core + SolidJS, talking to the haft `agentserver` over HTTP+SSE on `127.0.0.1`. The v7-era React+Ink TUI is renamed to `tui-react/`, kept reachable behind `haft agent --legacy-tui` for the v8.0 cycle, and conditionally retired in v8.1 once interactive usage drops below 5%.
+
+### Added
+
+- **v8 backend backfill** — `agentcore` gains defensive-copy accessors (`Turns()`, `Parts(turnID)`, `PermissionsList()`, `SubAgentsList()`, `ModelChoice()`) so the TUI cannot mutate underlying maps/slices. `agentdriver` learns the `spawn_subagent` tool route + `SubAgentRunner` interface with the single-level invariant (nested spawns return a synthetic `isError` tool_use_completed instead of collapsing the turn). `agentserver` exposes `GET /auth/status` with a snake_case `AuthStatusPayload` + an injectable `AuthStatusProvider`. All M1+M2 invariants from v7.1.0 preserved.
+- **v8 TUI package (`tui/`)** — Bun 1.3.13 + `@opentui/core` 0.1.105 + `@opentui/solid` 0.1.105 + `solid-js` 1.9.10. Layered structure:
+  - `sdk/core/` — surface-agnostic transport (SSE reader with reconnect + exponential backoff 250ms → 8s cap, RPC poster with 5xx retry + 4xx no-retry, injected decoder + error mapper).
+  - `sdk/agent/` — typed wire mirror of `agentproto`: 20 `AgentEvent` variants, branded `SessionID` / `TurnID` / `PartID` / `PermissionID` / `SubAgentID`, `agentErrorMapper` translating HTTP status + body markers (turn_already_running, turn_mismatch, turn_not_running, permission_unknown, unsupported_command, session_not_found) into typed `RPCError`s.
+  - `sdk/harness/` — RESERVED namespace for v8.1+ harness panels. Not implemented; the empty slot is the load-bearing extensibility seam.
+  - `components/` — `border` / `spinner` / `key-hint` / `logo` primitives.
+  - `routes/agent/session/` — `part-text`, `part-reasoning` (collapsible), `part-tool-use`, `permission-prompt`, `subagent`, `turn` view (For-loop dispatch by part kind), top-level `SessionView` with title + model header + turn stream + subagent footer + active permission prompt + key-hint footer.
+  - `routes/harness/` — RESERVED for v8.1+.
+  - `themes/` — `dark` (default), `light`, `high-contrast`, all implementing a closed 17-token shape. `setTheme` / `cycleTheme` / `currentTheme` reactive store.
+  - `router.ts` — route registry with reactive `activeRoute()` accessor; ships with one route registered.
+  - `store.ts` — Solid `createStore` + `apply(AgentEvent)` reducer materializing every wire variant (session lifecycle, turn lifecycle, text / reasoning / tool_use part completion, subagent spawn/complete, permission requested/resolved, model switched) into the SessionView shape.
+  - `app.tsx` + `main.tsx` — SolidJS root, OpenTUI `render(App)`, reads `HAFT_AGENT_PORT` from env, AbortController-driven teardown on SIGINT / SIGTERM.
+  - `build.ts` — Bun build with `createSolidTransformPlugin()` producing single-file ESM at `dist/haft-tui.js` (~1.4MB).
+- **`haft agent --v8` opt-in cobra route** — spawns `agentserver` on `127.0.0.1:0`, captures the chosen port, spawns Bun against the TUI bundle with `HAFT_AGENT_PORT` in env, races SIGINT/SIGTERM/Bun-exit/server-fatal with a 2s grace window before SIGKILL fallback and a 5s graceful `agentserver` Shutdown.
+- **`haft v8 serve` smoke command** — runs the v8 backend standalone (StoreDispatcher only, no LLM) so the wire protocol can be exercised via `curl` before the v8 TUI is wired. Prints one JSON startup line `{port, addr, store_root, driver}`, handles SIGINT, end-to-end smoke test green.
+- **Bundle install pipeline** — `task install` copies `tui/dist/haft-tui.js` to `~/.haft/tui-v8/current/haft-tui.js`. `.goreleaser` archives ship both TUI bundles. `findV8TUIEntry` resolves installed → `tui/dist` → `tui/src/main.tsx` dev mode.
+
+### Changed
+
+- **`tui/` renamed to `tui-react/`** — the v7-era React + Ink + JSON-RPC TUI moves aside to free the `tui/` path for v8. Pure rename; git history preserved via rename detection. `internal/cli/tui_spawn.go`, `Taskfile.yaml`, `.goreleaser.yaml` updated to point at the new path.
+- **`haft agent` default route remains legacy** in the v8.0 cycle. The v8 stack is opt-in via `--v8`; the default will flip to v8 in a follow-up release once the provider-integration slice adapts `internal/provider` to `agentdriver.Provider`. `--legacy-tui` is reserved as the post-flip escape hatch.
+
+### Deprecated
+
+- **`tui-react/` (legacy React+Ink TUI)** — deprecation banner prints once per process lifetime to stderr on every `haft agent` invocation. Conditionally removed in v8.1 when telemetry / release-thread feedback confirms <5% interactive usage. Non-interactive `haft board` text dump survives indefinitely.
+
+### Fixed
+
+- (No fixes in this release — the v8 work is purely additive on top of the v7.1.0 foundation.)
+
 ## [7.1.0] — 2026-05-13
 
 Maintenance release on top of 7.0.0. Adds an explicit CLI completion path for externally-run WorkCommissions, lays the foundation of the v8 agent stack alongside (not replacing) the v7 production paths, fixes a silent-misroute defect on `haft_decision(measure|baseline|apply)` that corrupted the artifact graph under typical LLM-client usage, and refreshes the embedded FPF corpus.
