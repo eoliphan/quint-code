@@ -190,6 +190,20 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 				}
 				return d.completeTurn(session, turnID)
 			case ProviderError:
+				// Provider contract (provider.go: ProviderError) says the
+				// driver flushes pending text/reasoning before failing.
+				// Without flushing, partial output that operators already
+				// saw over SSE is dropped from the journal — replay and
+				// GET /session/{id} reconstruct a Session that disagrees
+				// with the live stream.
+				session, err = flushText(session)
+				if err != nil {
+					return d.failTurn(session, turnID, fmt.Errorf("flush text: %w", err))
+				}
+				session, err = flushReasoning(session)
+				if err != nil {
+					return d.failTurn(session, turnID, fmt.Errorf("flush reasoning: %w", err))
+				}
 				return d.failTurn(session, turnID, e.Err)
 			default:
 				return d.failTurn(session, turnID, fmt.Errorf("unknown provider event %T", ev))

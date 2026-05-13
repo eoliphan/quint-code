@@ -419,6 +419,17 @@ func TestDriver_ProviderError_FailsTurn(t *testing.T) {
 	if last.Kind() != agentproto.EventTurnFailed {
 		t.Fatalf("last event should be turn.failed, got %s", last.Kind())
 	}
+	// Pending text must be flushed before turn.failed so replay matches the
+	// stream operators saw over SSE — provider contract in provider.go.
+	var sawCompletedText bool
+	for _, ev := range sink.Events {
+		if ev.Kind() == agentproto.EventPartTextCompleted {
+			sawCompletedText = true
+		}
+	}
+	if !sawCompletedText {
+		t.Fatalf("ProviderError must flush pending text before failing; events=%v", sink.Events)
+	}
 }
 
 func TestDriver_ContextCancel_FailsTurnAsCanceled(t *testing.T) {

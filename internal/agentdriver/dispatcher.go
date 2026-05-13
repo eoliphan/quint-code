@@ -239,6 +239,24 @@ func (d *Dispatcher) handlePermissionRespond(c agentproto.PermissionRespondCmd) 
 }
 
 func (d *Dispatcher) handleModelSet(c agentproto.ModelSetCmd) (agentserver.DispatchResult, error) {
+	// Reject the switch while a turn is in flight. The running goroutine
+	// captured session.Model at submit time and keeps invoking the provider
+	// with that model; journaling model_switched in the middle would record
+	// the switch as preceding the still-running turn while the provider is
+	// actually called with the old model. Reject synchronously so the
+	// operator retries after the turn lands.
+	d.mu.Lock()
+	_, running := d.running[c.SessionID]
+	d.mu.Unlock()
+	if running {
+		return agentserver.DispatchResult{}, fmt.Errorf("%w: cannot switch model while a turn is running on session %s", agentcore.ErrTurnAlreadyRunning, c.SessionID)
+	}
+	// Also catch the post-restart case where d.running is empty but the
+	// journal still has a Running turn from a previous instance — same
+	// hazard, different cause.
+	if session, err := d.Store.Load(c.SessionID); err == nil && session.HasLiveTurn() {
+		return agentserver.DispatchResult{}, fmt.Errorf("%w: cannot switch model while a turn is running on session %s", agentcore.ErrTurnAlreadyRunning, c.SessionID)
+	}
 	now := d.Now()
 	switched := agentproto.ModelSwitchedEvent{}
 	switched.SessionID = c.SessionID

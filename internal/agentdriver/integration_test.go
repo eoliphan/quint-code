@@ -479,3 +479,58 @@ func TestDispatcher_TurnSubmit_RejectsReplayedRunningTurn(t *testing.T) {
 		t.Fatalf("expected nil response on rejection, got %+v", res.Response)
 	}
 }
+
+// TestDispatcher_ModelSet_RejectsDuringRunningTurn guards the race where a
+// model.set lands after handleTurnSubmit registered d.running but before the
+// goroutine's StartTurn flush. Without this check the model_switched event
+// is journaled while DriveTurn keeps invoking the provider with the old
+// model captured at submit time, leaving the journal disagreeing with what
+// the provider actually saw.
+func TestDispatcher_ModelSet_RejectsDuringRunningTurn(t *testing.T) {
+	store, err := agentstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	model := agentcore.ModelChoice{Provider: agentcore.ProviderCodex, Model: "gpt-5.4"}
+	if _, err := store.Create("s1", "proj1", "Race", model, now); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	hub := agentserver.NewHub()
+	gate := NewPermissionGate()
+	var counter atomic.Int64
+	driver := &Driver{
+		Provider: hangingProvider{},
+		Tools:    passthroughTools{},
+		IDGen: func(kind string) string {
+			return fmt.Sprintf("%s-%d", kind, counter.Add(1))
+		},
+		Now: func() time.Time { return now },
+	}
+	dispatcher := NewDispatcher(store, hub, driver, gate)
+
+	if _, err := dispatcher.Dispatch(context.Background(), agentproto.TurnSubmitCmd{SessionID: "s1", Text: "go"}); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	newModel := agentcore.ModelChoice{Provider: agentcore.ProviderCodex, Model: "gpt-5.5"}
+	res, err := dispatcher.Dispatch(context.Background(), agentproto.ModelSetCmd{SessionID: "s1", Model: newModel})
+	if err == nil {
+		t.Fatalf("expected ErrTurnAlreadyRunning, got result %+v", res)
+	}
+	if !errors.Is(err, agentcore.ErrTurnAlreadyRunning) {
+		t.Fatalf("expected ErrTurnAlreadyRunning, got %v", err)
+	}
+
+	// Confirm no model_switched event was journaled.
+	loaded, err := store.Load("s1")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Model != model {
+		t.Fatalf("model must not change while turn is running: got %+v want %+v", loaded.Model, model)
+	}
+}
