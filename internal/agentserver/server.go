@@ -281,6 +281,10 @@ func (s *Server) writeResult(w http.ResponseWriter, res DispatchResult, err erro
 			status = http.StatusNotFound
 		case errors.Is(err, agentcore.ErrTurnAlreadyRunning):
 			status = http.StatusConflict
+		case errors.Is(err, ErrTurnNotRunning):
+			status = http.StatusNotFound
+		case errors.Is(err, ErrTurnMismatch):
+			status = http.StatusConflict
 		case errors.Is(err, agentcore.ErrPermissionNotFound):
 			status = http.StatusNotFound
 		case errors.Is(err, agentcore.ErrPermissionDecision):

@@ -28,6 +28,19 @@ type StoreDispatcher struct {
 // envelope but cannot handle the operation themselves.
 var ErrUnsupportedCommand = errors.New("agentserver: dispatcher does not support this command")
 
+// ErrTurnNotRunning is returned by Dispatchers when a turn.cancel arrives
+// for a session that has no in-flight turn. Stale cancels (the turn
+// already completed, or a client retry after the cancel succeeded) are an
+// expected client-visible state, not a server fault — transport maps this
+// to 404.
+var ErrTurnNotRunning = errors.New("agentserver: no running turn on session")
+
+// ErrTurnMismatch is returned by Dispatchers when a turn.cancel names a
+// turn ID that is not the currently running turn on the session. The
+// session exists and a turn is running, but it's a different one — the
+// late cancel must not abort it. Mapped to 409.
+var ErrTurnMismatch = errors.New("agentserver: turn id does not match running turn")
+
 // Dispatch routes the typed command. Errors are returned as-is; the
 // transport maps them to HTTP status codes.
 func (d *StoreDispatcher) Dispatch(ctx context.Context, cmd agentproto.RPCCommand) (DispatchResult, error) {

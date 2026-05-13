@@ -227,7 +227,7 @@ func (d *Dispatcher) handleTurnCancel(c agentproto.TurnCancelCmd) (agentserver.D
 	rt, ok := d.running[c.SessionID]
 	d.mu.Unlock()
 	if !ok {
-		return agentserver.DispatchResult{}, fmt.Errorf("no running turn on session %s", c.SessionID)
+		return agentserver.DispatchResult{}, fmt.Errorf("%w: %s", agentserver.ErrTurnNotRunning, c.SessionID)
 	}
 	// If the cancel names a specific turn, only cancel when it matches the
 	// turn that is actually in flight. A late cancel for a turn that has
@@ -235,7 +235,7 @@ func (d *Dispatcher) handleTurnCancel(c agentproto.TurnCancelCmd) (agentserver.D
 	// An empty TurnID means "cancel whatever is running" — kept for
 	// pre-turn-id clients; deprecate in M2c.
 	if c.TurnID != "" && c.TurnID != rt.turnID {
-		return agentserver.DispatchResult{}, fmt.Errorf("turn %s is not the running turn on session %s (running=%s)", c.TurnID, c.SessionID, rt.turnID)
+		return agentserver.DispatchResult{}, fmt.Errorf("%w: turn %s on session %s (running=%s)", agentserver.ErrTurnMismatch, c.TurnID, c.SessionID, rt.turnID)
 	}
 	rt.cancel()
 	return agentserver.DispatchResult{SessionID: c.SessionID}, nil

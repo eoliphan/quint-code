@@ -180,6 +180,15 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 					return d.failTurn(session, turnID, fmt.Errorf("tool call: %w", err))
 				}
 			case ProviderTurnDone:
+				// Both ctx.Done() and a buffered ProviderTurnDone can be
+				// ready in the same select cycle (e.g. an operator cancels
+				// while handleToolCall was running and the provider had
+				// already queued its done event). If this branch wins the
+				// race we would journal turn.completed for a canceled
+				// turn. Mirror the closed-channel guard above.
+				if cerr := ctx.Err(); cerr != nil {
+					return d.failTurn(session, turnID, cerr)
+				}
 				session, err = flushText(session)
 				if err != nil {
 					return d.failTurn(session, turnID, fmt.Errorf("flush text: %w", err))
