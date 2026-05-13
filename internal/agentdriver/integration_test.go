@@ -90,6 +90,17 @@ func bootIntegrationServer(t *testing.T, provider Provider) (string, *agentstore
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
+		// Drain in-flight dispatcher goroutines before closing the store.
+		// srv.Shutdown waits for HTTP handlers but NOT for goroutines
+		// spawned inside them — handleTurnSubmit fires-and-forgets a
+		// DriveTurn goroutine that keeps writing journal events after
+		// the HTTP request returns. Without this drain, store.Close
+		// races the in-flight journal Append, surfacing as -race detector
+		// reports and TempDir cleanup "directory not empty" failures.
+		metas, _ := store.List("")
+		for _, meta := range metas {
+			drainRunningTurn(t, dispatcher, meta.ID)
+		}
 		_ = store.Close()
 		select {
 		case e := <-errCh:
@@ -527,6 +538,13 @@ func TestDispatcher_ModelSet_RejectsDuringRunningTurn(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
+	// Cancel + drain the running turn before store.Close / TempDir cleanup.
+	// hangingProvider never returns on its own; without this the dispatcher
+	// goroutine keeps a file handle on the journal and races TempDir cleanup
+	// on Linux runners under -race (test-only race fix; production code path
+	// always issues an explicit TurnCancel or runs the provider to completion).
+	defer drainRunningTurn(t, dispatcher, "s1")
+
 	newModel := agentcore.ModelChoice{Provider: agentcore.ProviderCodex, Model: "gpt-5.5"}
 	res, err := dispatcher.Dispatch(context.Background(), agentproto.ModelSetCmd{SessionID: "s1", Model: newModel})
 	if err == nil {
@@ -544,4 +562,25 @@ func TestDispatcher_ModelSet_RejectsDuringRunningTurn(t *testing.T) {
 	if loaded.Model != model {
 		t.Fatalf("model must not change while turn is running: got %+v want %+v", loaded.Model, model)
 	}
+}
+
+// drainRunningTurn cancels any in-flight turn on sessionID and polls
+// TurnCancel until the dispatcher reports the turn is no longer running.
+// Goroutine cleanup in the dispatcher's defer clears d.running AFTER the
+// driver returns, so seeing ErrTurnNotRunning is the synchronization point
+// guaranteeing the journal-write goroutine has fully unwound. Tests that
+// spawn hangingProvider-backed turns must call this before store.Close so
+// TempDir cleanup does not race with the goroutine's file handles.
+func drainRunningTurn(t *testing.T, dispatcher *Dispatcher, sessionID agentcore.SessionID) {
+	t.Helper()
+	_, _ = dispatcher.Dispatch(context.Background(), agentproto.TurnCancelCmd{SessionID: sessionID})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_, err := dispatcher.Dispatch(context.Background(), agentproto.TurnCancelCmd{SessionID: sessionID})
+		if errors.Is(err, agentserver.ErrTurnNotRunning) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Logf("warning: turn on session %s never drained within 2s", sessionID)
 }
