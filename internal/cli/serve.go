@@ -773,6 +773,9 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 	case "apply":
 		decisionRef, _ := args["decision_ref"].(string)
 		if decisionRef == "" {
+			decisionRef, _ = args["artifact_ref"].(string)
+		}
+		if decisionRef == "" {
 			decisions, _ := store.ListByKind(ctx, artifact.KindDecisionRecord, 1)
 			if len(decisions) > 0 {
 				decisionRef = decisions[0].Meta.ID
@@ -795,6 +798,11 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 		if v, ok := args["decision_ref"].(string); ok {
 			input.DecisionRef = v
 		}
+		if input.DecisionRef == "" {
+			if v, ok := args["artifact_ref"].(string); ok {
+				input.DecisionRef = v
+			}
+		}
 		if v, ok := args["findings"].(string); ok {
 			input.Findings = v
 		}
@@ -810,14 +818,9 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 		if input.Measurements, err = parseStrictStringArrayFromArgs(args, "measurements"); err != nil {
 			return "", "", err
 		}
-		// Auto-detect decision
 		if input.DecisionRef == "" {
-			decisions, _ := store.ListByKind(ctx, artifact.KindDecisionRecord, 1)
-			if len(decisions) > 0 {
-				input.DecisionRef = decisions[0].Meta.ID
-			} else {
-				return "No decision found.\n" + present.NavStrip(artifact.ComputeNavState(ctx, store, contextName)), "", nil
-			}
+			return "haft_decision(measure) requires decision_ref (or artifact_ref) — the DecisionRecord ID to record measurement against. Run haft_query(action=\"status\") to find the intended decision ID.\n" +
+				present.NavStrip(artifact.ComputeNavState(ctx, store, contextName)), "", nil
 		}
 
 		a, err := artifact.Measure(ctx, store, haftDir, input)
@@ -874,6 +877,9 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 		if v, ok := args["valid_until"].(string); ok {
 			input.ValidUntil = v
 		}
+		if v, ok := args["causal_support_basis"].(string); ok {
+			input.CausalSupportBasis = v
+		}
 		if cl, ok := args["congruence_level"].(float64); ok {
 			input.CongruenceLevel = int(cl)
 		}
@@ -894,9 +900,11 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 
 		wlnk := artifact.ComputeWLNKSummary(ctx, store, input.ArtifactRef)
 		navStrip := present.NavStrip(artifact.ComputeNavState(ctx, store, contextName))
-		return present.DecisionResponse("evidence", nil, "",
-			fmt.Sprintf("Evidence attached: %s [%s]\nVerdict: %s\nWLNK: %s\n", item.ID, item.Type, item.Verdict, wlnk.Summary),
-			navStrip), "", nil
+		extra := fmt.Sprintf("Evidence attached: %s [%s]\nVerdict: %s\nWLNK: %s\n", item.ID, item.Type, item.Verdict, wlnk.Summary)
+		if warning := evidenceCausalUseWarning(input, item); warning != "" {
+			extra += "\n" + warning + "\n"
+		}
+		return present.DecisionResponse("evidence", nil, "", extra, navStrip), "", nil
 
 	case "baseline":
 		input := artifact.BaselineInput{}
@@ -904,11 +912,13 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 			input.DecisionRef = v
 		}
 		if input.DecisionRef == "" {
-			// Auto-detect: use the most recent decision
-			decisions, _ := store.ListByKind(ctx, artifact.KindDecisionRecord, 1)
-			if len(decisions) > 0 {
-				input.DecisionRef = decisions[0].Meta.ID
+			if v, ok := args["artifact_ref"].(string); ok {
+				input.DecisionRef = v
 			}
+		}
+		if input.DecisionRef == "" {
+			return "haft_decision(baseline) requires decision_ref (or artifact_ref) — the DecisionRecord ID to snapshot files for. Run haft_query(action=\"status\") to find the intended decision ID.\n" +
+				present.NavStrip(artifact.ComputeNavState(ctx, store, contextName)), "", nil
 		}
 		input.AffectedFiles = parseStringArrayFromArgs(args, "affected_files")
 
@@ -1370,6 +1380,35 @@ func parseStrictParityPlanFromArgs(args map[string]any, key string) (*artifact.P
 	}
 
 	return &value, nil
+}
+
+// evidenceCausalUseWarning surfaces the C.28 / CC-B3.9 advisory when the
+// attached evidence content reads like a causal-use claim but the caller did
+// not declare a CausalSupportBasis. Warning, not reject — legacy ingest
+// continues unchanged.
+func evidenceCausalUseWarning(input artifact.EvidenceInput, item *artifact.EvidenceItem) string {
+	if item == nil || item.CausalSupportBasis != "" {
+		return ""
+	}
+	lower := strings.ToLower(input.Content)
+	triggers := []string{
+		"causal",
+		"caused",
+		"intervention",
+		"counterfactual",
+		"uplift",
+		"treatment effect",
+		"causal effect",
+		" effect of ",
+	}
+	for _, trigger := range triggers {
+		if strings.Contains(lower, trigger) {
+			return "Warning (C.28): evidence content suggests a causal-use claim but causal_support_basis is not declared. " +
+				"Per CC-B3.9, undeclared basis cannot raise R for causal-ladder climbs. " +
+				"Consider re-attaching with causal_support_basis in {observational|interventional|realized_counterfactual|identified_estimate|simulation_only}."
+		}
+	}
+	return ""
 }
 
 func parsePredictionInputsFromArgs(args map[string]any, key string) ([]artifact.PredictionInput, error) {

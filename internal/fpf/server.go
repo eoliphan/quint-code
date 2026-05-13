@@ -520,9 +520,11 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 						"items": map[string]interface{}{
 							"type": "object",
 							"properties": map[string]interface{}{
-								"claim":      map[string]string{"type": "string"},
-								"observable": map[string]string{"type": "string"},
-								"threshold":  map[string]string{"type": "string"},
+								"claim":         map[string]string{"type": "string"},
+								"observable":    map[string]string{"type": "string"},
+								"threshold":     map[string]string{"type": "string"},
+								"verify_after":  map[string]string{"type": "string", "description": "When to check (RFC3339 or YYYY-MM-DD) — for async claims"},
+								"realizability": map[string]string{"type": "string", "description": "C.28 verdict: realizable|nonrealizable|unknown; nonrealizable caps R_eff at 0.5 per CC-B3.9"},
 							},
 							"required": []string{"claim", "observable", "threshold"},
 						},
@@ -605,6 +607,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 						"type":        "array",
 						"items":       map[string]string{"type": "string"},
 						"description": "(evidence) Fallback claim scope labels for older artifacts or non-claim evidence",
+					},
+					"causal_support_basis": map[string]string{
+						"type":        "string",
+						"description": "(evidence) C.28 basis for causal-use claim support. Accepts: observational | interventional | realized_counterfactual | identified_estimate | simulation_only (long FPF forms also accepted). simulation-only caps R_eff at 0.5 per CC-B3.9.",
 					},
 					"context": map[string]string{"type": "string", "description": "Optional context name"},
 					"mode":    map[string]string{"type": "string", "description": "(decide) tactical, standard (default), deep"},

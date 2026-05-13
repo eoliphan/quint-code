@@ -61,12 +61,14 @@ func newDecisionClaims(inputs []PredictionInput) []DecisionClaim {
 	claims := make([]DecisionClaim, 0, len(inputs))
 
 	for _, input := range inputs {
+		realizability, _ := ParseRealizabilityVerdict(input.Realizability)
 		claim := DecisionClaim{
-			Claim:       strings.TrimSpace(input.Claim),
-			Observable:  strings.TrimSpace(input.Observable),
-			Threshold:   strings.TrimSpace(input.Threshold),
-			Status:      ClaimStatusUnverified,
-			VerifyAfter: strings.TrimSpace(input.VerifyAfter),
+			Claim:         strings.TrimSpace(input.Claim),
+			Observable:    strings.TrimSpace(input.Observable),
+			Threshold:     strings.TrimSpace(input.Threshold),
+			Status:        ClaimStatusUnverified,
+			VerifyAfter:   strings.TrimSpace(input.VerifyAfter),
+			Realizability: realizability,
 		}
 		if claim.Claim == "" && claim.Observable == "" && claim.Threshold == "" {
 			continue
@@ -82,12 +84,14 @@ func decisionClaimsFromPredictions(values []DecisionPrediction) []DecisionClaim 
 	claims := make([]DecisionClaim, 0, len(values))
 
 	for _, value := range values {
+		realizability, _ := ParseRealizabilityVerdict(string(value.Realizability))
 		claim := DecisionClaim{
-			Claim:       strings.TrimSpace(value.Claim),
-			Observable:  strings.TrimSpace(value.Observable),
-			Threshold:   strings.TrimSpace(value.Threshold),
-			Status:      normalizeClaimStatus(value.Status),
-			VerifyAfter: strings.TrimSpace(value.VerifyAfter),
+			Claim:         strings.TrimSpace(value.Claim),
+			Observable:    strings.TrimSpace(value.Observable),
+			Threshold:     strings.TrimSpace(value.Threshold),
+			Status:        normalizeClaimStatus(value.Status),
+			VerifyAfter:   strings.TrimSpace(value.VerifyAfter),
+			Realizability: realizability,
 		}
 		if claim.Claim == "" && claim.Observable == "" && claim.Threshold == "" {
 			continue
@@ -104,13 +108,15 @@ func normalizeDecisionClaims(values []DecisionClaim) []DecisionClaim {
 	seenIDs := make(map[string]struct{}, len(values))
 
 	for _, value := range values {
+		realizability, _ := ParseRealizabilityVerdict(string(value.Realizability))
 		claim := DecisionClaim{
-			ID:          strings.TrimSpace(value.ID),
-			Claim:       strings.TrimSpace(value.Claim),
-			Observable:  strings.TrimSpace(value.Observable),
-			Threshold:   strings.TrimSpace(value.Threshold),
-			Status:      normalizeClaimStatus(value.Status),
-			VerifyAfter: strings.TrimSpace(value.VerifyAfter),
+			ID:            strings.TrimSpace(value.ID),
+			Claim:         strings.TrimSpace(value.Claim),
+			Observable:    strings.TrimSpace(value.Observable),
+			Threshold:     strings.TrimSpace(value.Threshold),
+			Status:        normalizeClaimStatus(value.Status),
+			VerifyAfter:   strings.TrimSpace(value.VerifyAfter),
+			Realizability: realizability,
 		}
 		if claim.Claim == "" && claim.Observable == "" && claim.Threshold == "" {
 			continue
@@ -157,11 +163,12 @@ func decisionPredictionsFromClaims(values []DecisionClaim) []DecisionPrediction 
 
 	for _, claim := range claims {
 		predictions = append(predictions, DecisionPrediction{
-			Claim:       claim.Claim,
-			Observable:  claim.Observable,
-			Threshold:   claim.Threshold,
-			Status:      claim.Status,
-			VerifyAfter: claim.VerifyAfter,
+			Claim:         claim.Claim,
+			Observable:    claim.Observable,
+			Threshold:     claim.Threshold,
+			Status:        claim.Status,
+			VerifyAfter:   claim.VerifyAfter,
+			Realizability: claim.Realizability,
 		})
 	}
 

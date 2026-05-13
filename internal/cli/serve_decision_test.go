@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -189,6 +190,140 @@ func TestHandleQuintDecision_NonDecideActionsReturnEmptyRef(t *testing.T) {
 	}
 	if ref != "" {
 		t.Fatalf("apply returned createdRef %q; expected empty for non-creating action", ref)
+	}
+}
+
+// TestHandleQuintDecision_BaselineAcceptsArtifactRef regression-tests issue #77:
+// LLM clients naturally pass artifact_ref (the universal key in haft_refresh and
+// the only documented ref for evidence). Before the fix, baseline/measure silently
+// ignored artifact_ref and fell through to ListByKind auto-detect, landing on the
+// wrong decision. Now both keys are accepted and the auto-detect is gone.
+func TestHandleQuintDecision_BaselineAcceptsArtifactRef(t *testing.T) {
+	store := setupCLIArtifactStore(t)
+	ctx := context.Background()
+	haftDir := t.TempDir()
+
+	older, _, err := artifact.Decide(ctx, store, haftDir, artifact.DecideInput{
+		SelectedTitle:   "Older decision — the intended target",
+		WhySelected:     "This is the decision we want to baseline by passing artifact_ref.",
+		SelectionPolicy: "Prefer explicit identification over implicit recency.",
+		CounterArgument: "Auto-detect may seem convenient but corrupts the artifact graph.",
+		WhyNotOthers:    []artifact.RejectionReason{{Variant: "auto-detect", Reason: "silent misrouting"}},
+		WeakestLink:     "LLM clients may still confuse parameter names — schema docs must be clear.",
+		Rollback:        &artifact.RollbackSpec{Triggers: []string{"regressions"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Newer decision exists after — this is what ListByKind(...,1) would pick.
+	_, _, err = artifact.Decide(ctx, store, haftDir, artifact.DecideInput{
+		SelectedTitle:   "Newer decision — should NOT be picked",
+		WhySelected:     "If auto-detect leaks, this newer decision would steal the baseline.",
+		SelectionPolicy: "Most-recent default is the trap we're closing.",
+		CounterArgument: "None.",
+		WhyNotOthers:    []artifact.RejectionReason{{Variant: "older decision", Reason: "test fixture"}},
+		WeakestLink:     "None.",
+		Rollback:        &artifact.RollbackSpec{Triggers: []string{"regressions"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Touch a file so baseline has something to hash.
+	tmpFile := t.TempDir() + "/sample.go"
+	if werr := os.WriteFile(tmpFile, []byte("package sample\n"), 0o644); werr != nil {
+		t.Fatal(werr)
+	}
+
+	out, _, err := handleQuintDecision(ctx, store, haftDir, map[string]any{
+		"action":         "baseline",
+		"artifact_ref":   older.Meta.ID,
+		"affected_files": []any{tmpFile},
+	})
+	if err != nil {
+		t.Fatalf("baseline with artifact_ref: %v", err)
+	}
+	if !strings.Contains(out, older.Meta.ID) {
+		t.Fatalf("baseline response %q does not mention intended target %q", out, older.Meta.ID)
+	}
+}
+
+// TestHandleQuintDecision_BaselineRequiresRef verifies that the silent auto-detect
+// fall-through (issue #77) is gone — calling baseline without any ref errors loudly
+// instead of picking the most-recent decision.
+func TestHandleQuintDecision_BaselineRequiresRef(t *testing.T) {
+	store := setupCLIArtifactStore(t)
+	ctx := context.Background()
+	haftDir := t.TempDir()
+
+	_, _, err := artifact.Decide(ctx, store, haftDir, artifact.DecideInput{
+		SelectedTitle:   "Some decision",
+		WhySelected:     "Exists so the bug-prone auto-detect would have something to grab.",
+		SelectionPolicy: "Explicit refs only.",
+		CounterArgument: "None.",
+		WhyNotOthers:    []artifact.RejectionReason{{Variant: "implicit", Reason: "unsafe"}},
+		WeakestLink:     "None.",
+		Rollback:        &artifact.RollbackSpec{Triggers: []string{"regressions"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := handleQuintDecision(ctx, store, haftDir, map[string]any{
+		"action": "baseline",
+	})
+	if err != nil {
+		t.Fatalf("baseline without ref should return guidance, not error: %v", err)
+	}
+	if !strings.Contains(out, "requires decision_ref") {
+		t.Fatalf("baseline without ref should ask for decision_ref; got: %q", out)
+	}
+}
+
+// TestHandleQuintDecision_MeasureAcceptsArtifactRef — same fix on the measure side.
+func TestHandleQuintDecision_MeasureAcceptsArtifactRef(t *testing.T) {
+	store := setupCLIArtifactStore(t)
+	ctx := context.Background()
+	haftDir := t.TempDir()
+
+	older, _, err := artifact.Decide(ctx, store, haftDir, artifact.DecideInput{
+		SelectedTitle:   "Older decision — measure target",
+		WhySelected:     "We want measure() to land here when artifact_ref names it.",
+		SelectionPolicy: "Explicit refs only.",
+		CounterArgument: "None.",
+		WhyNotOthers:    []artifact.RejectionReason{{Variant: "auto-detect", Reason: "corrupts graph"}},
+		WeakestLink:     "None.",
+		Rollback:        &artifact.RollbackSpec{Triggers: []string{"regressions"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = artifact.Decide(ctx, store, haftDir, artifact.DecideInput{
+		SelectedTitle:   "Newer decision — must not be picked",
+		WhySelected:     "Sanity guard for the regression test.",
+		SelectionPolicy: "Explicit refs only.",
+		CounterArgument: "None.",
+		WhyNotOthers:    []artifact.RejectionReason{{Variant: "older", Reason: "fixture"}},
+		WeakestLink:     "None.",
+		Rollback:        &artifact.RollbackSpec{Triggers: []string{"regressions"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := handleQuintDecision(ctx, store, haftDir, map[string]any{
+		"action":       "measure",
+		"artifact_ref": older.Meta.ID,
+		"findings":     "evidence landed on the intended decision",
+		"verdict":      "accepted",
+	})
+	if err != nil {
+		t.Fatalf("measure with artifact_ref: %v", err)
+	}
+	if !strings.Contains(out, older.Meta.ID) {
+		t.Fatalf("measure response %q does not reference intended target %q", out, older.Meta.ID)
 	}
 }
 

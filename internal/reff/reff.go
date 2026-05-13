@@ -40,6 +40,60 @@ func ScoreTypedEvidence(evidenceType string, verdict string, cl int, validUntil 
 	return math.Round(score*100) / 100
 }
 
+// ScoreEvidenceWithCausalBasis extends ScoreTypedEvidence with the C.28
+// causal-support-basis cap per CC-B3.9: when the basis is simulation-only OR
+// the linked claim's realizability verdict is "nonrealizable", the resulting
+// R is capped at 0.5 regardless of verdict, evidence type, or CL. "unknown"
+// realizability does NOT cap — bounded use under C.28 may still be admissible;
+// the cap is reserved for explicitly unsupported causal-ladder climbs.
+//
+// Expired evidence remains at 0.1 — the cap floors at 0.5, it does not raise
+// a weak score. Empty basis and empty realizability fall through to the
+// underlying ScoreTypedEvidence behavior unchanged (legacy semantics).
+func ScoreEvidenceWithCausalBasis(
+	evidenceType string,
+	verdict string,
+	cl int,
+	basis string,
+	realizability string,
+	validUntil string,
+	now time.Time,
+) float64 {
+	base := ScoreTypedEvidence(evidenceType, verdict, cl, validUntil, now)
+	if base <= 0.5 {
+		return base
+	}
+	if causalBasisCaps(basis) || realizabilityCaps(realizability) {
+		return 0.5
+	}
+	return base
+}
+
+func causalBasisCaps(raw string) bool {
+	key := normalizeCausalReffKey(raw)
+	switch key {
+	case "simulationonlycounterfactualoutputbasis",
+		"simulationonlycounterfactualoutput",
+		"simulationonly",
+		"simulation":
+		return true
+	}
+	return false
+}
+
+func realizabilityCaps(raw string) bool {
+	key := normalizeCausalReffKey(raw)
+	return key == "nonrealizable" || key == "notrealizable" || key == "unrealizable"
+}
+
+func normalizeCausalReffKey(raw string) string {
+	key := strings.ToLower(strings.TrimSpace(raw))
+	key = strings.ReplaceAll(key, "_", "")
+	key = strings.ReplaceAll(key, "-", "")
+	key = strings.ReplaceAll(key, " ", "")
+	return key
+}
+
 // VerdictToScore maps evidence verdict to base reliability score.
 func VerdictToScore(verdict string) float64 {
 	switch strings.ToLower(strings.TrimSpace(verdict)) {
