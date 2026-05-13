@@ -33,13 +33,13 @@ type Store struct {
 // substitute for a Session value; consumers wanting state must call Load
 // to replay the journal.
 type SessionMeta struct {
-	ID         agentcore.SessionID
-	ProjectID  string
-	Title      string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	Archived   bool
-	EventCount int
+	ID         agentcore.SessionID `json:"id"`
+	ProjectID  string              `json:"project_id"`
+	Title      string              `json:"title"`
+	CreatedAt  time.Time           `json:"created_at"`
+	UpdatedAt  time.Time           `json:"updated_at"`
+	Archived   bool                `json:"archived"`
+	EventCount int                 `json:"event_count"`
 }
 
 // NewStore opens (or creates) a Store rooted at the given directory.

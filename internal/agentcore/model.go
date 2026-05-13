@@ -21,10 +21,10 @@ const (
 // event and the next Turn binding to a new ModelChoice; the current Turn
 // keeps the choice it started with.
 type ModelChoice struct {
-	Provider ProviderKind
-	Model    string // provider-native model id (e.g. "gpt-5.4", "claude-sonnet-4-6")
+	Provider ProviderKind `json:"provider"`
+	Model    string       `json:"model"` // provider-native model id (e.g. "gpt-5.4", "claude-sonnet-4-6")
 	// CredentialKey identifies which stored credential to use without
 	// embedding the secret value here. The G1 provider layer dereferences
 	// the key against the credential store at call time.
-	CredentialKey string
+	CredentialKey string `json:"credential_key,omitempty"`
 }
