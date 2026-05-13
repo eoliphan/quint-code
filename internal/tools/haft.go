@@ -973,13 +973,13 @@ Actions:
 				"context":          map[string]any{"type": "string", "description": "Optional context name (decide)"},
 				"task_context":     map[string]any{"type": "string", "description": "Optional task/context text sanitized into the DecisionRecord ID filename (decide)"},
 				"search_keywords":  map[string]any{"type": "string", "description": "Space-separated synonyms and related terms for search enrichment (decide)"},
-				"decision_ref":     map[string]any{"type": "string", "description": "Decision ID (measure)"},
+				"decision_ref":     map[string]any{"type": "string", "description": "DecisionRecord ID (apply, measure, baseline). For these actions you may also pass it as artifact_ref."},
 				"findings":         map[string]any{"type": "string", "description": "What was observed (measure)"},
 				"criteria_met":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Passing criteria (measure)"},
 				"criteria_not_met": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Failing criteria (measure)"},
 				"measurements":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concrete measured values recorded during verification (measure)"},
 				"verdict":          map[string]any{"type": "string", "enum": []string{"accepted", "partial", "failed"}, "description": "Verdict (measure)"},
-				"artifact_ref":     map[string]any{"type": "string", "description": "Artifact ID to attach evidence to (evidence)"},
+				"artifact_ref":     map[string]any{"type": "string", "description": "Artifact ID to attach evidence to (evidence). Also accepted as an alias for decision_ref in apply/measure/baseline."},
 				"evidence_content": map[string]any{"type": "string", "description": "The evidence itself (evidence)"},
 				"evidence_type":    map[string]any{"type": "string", "description": "measurement | test | research | benchmark | audit (evidence)"},
 				"evidence_verdict": map[string]any{"type": "string", "enum": []string{"supports", "weakens", "refutes"}, "description": "How the evidence bears on the artifact (evidence)"},
@@ -1313,6 +1313,12 @@ func formatCoverageWarnings(gaps []codebase.ModuleGovernanceGap) []string {
 
 func (t *HaftDecisionTool) baseline(ctx context.Context, args map[string]any) (agent.ToolResult, error) {
 	decisionRef := jsonStr(args, "decision_ref")
+	if decisionRef == "" {
+		decisionRef = jsonStr(args, "artifact_ref")
+	}
+	if decisionRef == "" {
+		return agent.PlainResult("haft_decision(baseline) requires decision_ref (or artifact_ref) — the DecisionRecord ID to snapshot files for."), nil
+	}
 	files, err := artifact.Baseline(ctx, t.store, t.projectRoot, artifact.BaselineInput{
 		DecisionRef:   decisionRef,
 		AffectedFiles: jsonStrArray(args, "affected_files"),
@@ -1330,9 +1336,12 @@ func (t *HaftDecisionTool) baseline(ctx context.Context, args map[string]any) (a
 
 func (t *HaftDecisionTool) measure(ctx context.Context, args map[string]any) (agent.ToolResult, error) {
 	decisionRef := jsonStr(args, "decision_ref")
+	if decisionRef == "" {
+		decisionRef = jsonStr(args, "artifact_ref")
+	}
 
 	if decisionRef == "" {
-		return agent.PlainResult("No decision_ref provided. In tactical mode (no formal decision recorded), " +
+		return agent.PlainResult("No decision_ref (or artifact_ref) provided. In tactical mode (no formal decision recorded), " +
 			"report your findings as text in your response instead of calling this tool. " +
 			"Only use haft_decision(measure) after haft_decision(decide) has been called."), nil
 	}

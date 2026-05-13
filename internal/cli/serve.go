@@ -773,6 +773,9 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 	case "apply":
 		decisionRef, _ := args["decision_ref"].(string)
 		if decisionRef == "" {
+			decisionRef, _ = args["artifact_ref"].(string)
+		}
+		if decisionRef == "" {
 			decisions, _ := store.ListByKind(ctx, artifact.KindDecisionRecord, 1)
 			if len(decisions) > 0 {
 				decisionRef = decisions[0].Meta.ID
@@ -795,6 +798,11 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 		if v, ok := args["decision_ref"].(string); ok {
 			input.DecisionRef = v
 		}
+		if input.DecisionRef == "" {
+			if v, ok := args["artifact_ref"].(string); ok {
+				input.DecisionRef = v
+			}
+		}
 		if v, ok := args["findings"].(string); ok {
 			input.Findings = v
 		}
@@ -810,14 +818,9 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 		if input.Measurements, err = parseStrictStringArrayFromArgs(args, "measurements"); err != nil {
 			return "", "", err
 		}
-		// Auto-detect decision
 		if input.DecisionRef == "" {
-			decisions, _ := store.ListByKind(ctx, artifact.KindDecisionRecord, 1)
-			if len(decisions) > 0 {
-				input.DecisionRef = decisions[0].Meta.ID
-			} else {
-				return "No decision found.\n" + present.NavStrip(artifact.ComputeNavState(ctx, store, contextName)), "", nil
-			}
+			return "haft_decision(measure) requires decision_ref (or artifact_ref) — the DecisionRecord ID to record measurement against. Run haft_query(action=\"status\") to find the intended decision ID.\n" +
+				present.NavStrip(artifact.ComputeNavState(ctx, store, contextName)), "", nil
 		}
 
 		a, err := artifact.Measure(ctx, store, haftDir, input)
@@ -904,11 +907,13 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 			input.DecisionRef = v
 		}
 		if input.DecisionRef == "" {
-			// Auto-detect: use the most recent decision
-			decisions, _ := store.ListByKind(ctx, artifact.KindDecisionRecord, 1)
-			if len(decisions) > 0 {
-				input.DecisionRef = decisions[0].Meta.ID
+			if v, ok := args["artifact_ref"].(string); ok {
+				input.DecisionRef = v
 			}
+		}
+		if input.DecisionRef == "" {
+			return "haft_decision(baseline) requires decision_ref (or artifact_ref) — the DecisionRecord ID to snapshot files for. Run haft_query(action=\"status\") to find the intended decision ID.\n" +
+				present.NavStrip(artifact.ComputeNavState(ctx, store, contextName)), "", nil
 		}
 		input.AffectedFiles = parseStringArrayFromArgs(args, "affected_files")
 
