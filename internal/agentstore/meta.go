@@ -41,11 +41,26 @@ func (s *Store) writeMeta(id agentcore.SessionID, session agentcore.Session, pro
 	if err != nil {
 		return fmt.Errorf("marshal meta: %w", err)
 	}
-	tmp := filepath.Join(dir, metaFile+".tmp")
-	if err := os.WriteFile(tmp, bytes, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, metaFile+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create meta tmp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(bytes); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("write meta: %w", err)
 	}
-	if err := os.Rename(tmp, filepath.Join(dir, metaFile)); err != nil {
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close meta tmp: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("chmod meta tmp: %w", err)
+	}
+	if err := os.Rename(tmpPath, filepath.Join(dir, metaFile)); err != nil {
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("commit meta: %w", err)
 	}
 	return nil

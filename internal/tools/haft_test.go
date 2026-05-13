@@ -1448,6 +1448,83 @@ func TestHaftDecisionTool_MeasureRejectsForeignDecisionRef(t *testing.T) {
 	}
 }
 
+// TestHaftDecisionTool_MeasureRejectsForeignArtifactRefAlias guards against the
+// bindDecisionRef alias gap: when only artifact_ref is supplied for a decision
+// outside the active cycle, the guardrail must fire instead of silently swapping
+// in the active-cycle decision.
+func TestHaftDecisionTool_MeasureRejectsForeignArtifactRef(t *testing.T) {
+	fixture := setupDecisionToolFixture(t)
+
+	activeDecision, _, err := artifact.Decide(fixture.ctx, fixture.store, fixture.haftDir, artifact.DecideInput{
+		ProblemRef:      fixture.problem.Meta.ID,
+		PortfolioRef:    fixture.comparedPortfolio.Meta.ID,
+		SelectedTitle:   "gRPC",
+		WhySelected:     "Latency wins inside the active compared portfolio.",
+		SelectionPolicy: "Minimize latency within budget.",
+		CounterArgument: "Operational cost could outweigh the latency benefit.",
+		WeakestLink:     "Production evidence is still limited.",
+		WhyNotOthers:    []artifact.RejectionReason{{Variant: "REST", Reason: "Higher latency with no compensating advantage for the current scope."}},
+		Rollback:        &artifact.RollbackSpec{Triggers: []string{"Latency regressions after rollout"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	foreignProblem, _, err := artifact.FrameProblem(fixture.ctx, fixture.store, fixture.haftDir, artifact.ProblemFrameInput{
+		Title:      "Streaming fallback transport",
+		Signal:     "Current transport cannot survive mobile reconnect churn.",
+		Acceptance: "Select a transport that keeps reconnect latency predictable.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	foreignPortfolio, _, err := artifact.ExploreSolutions(fixture.ctx, fixture.store, fixture.haftDir, artifact.ExploreInput{
+		ProblemRef: foreignProblem.Meta.ID,
+		Variants: []artifact.Variant{
+			{ID: "Y1", Title: "WebSocket", WeakestLink: "connection lifecycle complexity", NoveltyMarker: "Keep long-lived duplex sessions"},
+			{ID: "Y2", Title: "SSE", WeakestLink: "server-to-client only", NoveltyMarker: "Use unidirectional event streams"},
+		},
+		NoSteppingStoneRationale: "Both variants are valid responses to the separate reconnect problem.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	foreignDecision, _, err := artifact.Decide(fixture.ctx, fixture.store, fixture.haftDir, artifact.DecideInput{
+		ProblemRef:      foreignProblem.Meta.ID,
+		PortfolioRef:    foreignPortfolio.Meta.ID,
+		SelectedTitle:   "WebSocket",
+		WhySelected:     "The foreign portfolio keeps duplex connections available.",
+		SelectionPolicy: "Prioritize persistent duplex transport.",
+		CounterArgument: "Connection lifecycle complexity may be unjustified for the current workload.",
+		WeakestLink:     "Stateful connections raise operational complexity.",
+		WhyNotOthers:    []artifact.RejectionReason{{Variant: "SSE", Reason: "It cannot satisfy the duplex requirement."}},
+		Rollback:        &artifact.RollbackSpec{Triggers: []string{"Connection churn exceeds the operating budget"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.activeCycle.DecisionRef = activeDecision.Meta.ID
+
+	result, err := fixture.tool.Execute(fixture.ctx, mustJSON(t, map[string]any{
+		"action":       "measure",
+		"artifact_ref": foreignDecision.Meta.ID,
+		"findings":     "Measured the wrong decision via the artifact_ref alias.",
+		"verdict":      "accepted",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Meta != nil {
+		t.Fatal("expected guardrail result, not measurement metadata")
+	}
+	if !strings.Contains(result.DisplayText, "active decision") {
+		t.Fatalf("guardrail must reject foreign artifact_ref instead of measuring against the active cycle; got: %s", result.DisplayText)
+	}
+}
+
 func TestHaftDecisionTool_DecideAcceptsLegacyComparedPortfolioSelection(t *testing.T) {
 	store := setupHaftToolStore(t)
 	ctx := context.Background()

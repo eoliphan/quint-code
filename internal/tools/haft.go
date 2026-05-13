@@ -734,6 +734,9 @@ func bindDecisionRef(args map[string]any, cycle *agent.Cycle, toolName string) e
 
 	requestedDecisionRef := strings.TrimSpace(jsonStr(args, "decision_ref"))
 	if requestedDecisionRef == "" {
+		requestedDecisionRef = strings.TrimSpace(jsonStr(args, "artifact_ref"))
+	}
+	if requestedDecisionRef == "" {
 		args["decision_ref"] = activeDecisionRef
 		return nil
 	}
