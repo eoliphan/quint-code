@@ -2,7 +2,6 @@ package agentdriver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 
@@ -40,19 +39,21 @@ func NewPermissionGate() *PermissionGate {
 
 // ErrUnknownPermission is returned by Resolve when the gate has no record
 // of the given permission ID. Indicates a programmer error or a stale
-// request from the operator.
-var ErrUnknownPermission = errors.New("agentdriver: unknown permission id")
+// request from the operator. Wraps agentcore.ErrPermissionNotFound so the
+// HTTP layer can map both to 404 without importing this package.
+var ErrUnknownPermission = fmt.Errorf("agentdriver: unknown permission id: %w", agentcore.ErrPermissionNotFound)
 
 // ErrAlreadyResolved is returned by Resolve when the permission has
 // already been decided. Idempotent rejection — the original decision is
 // not overwritten.
-var ErrAlreadyResolved = errors.New("agentdriver: permission already resolved")
+var ErrAlreadyResolved = fmt.Errorf("agentdriver: permission already resolved: %w", agentcore.ErrPermissionResolved)
 
 // ErrInvalidDecision is returned by Resolve when the decision is not one
 // of the known values (approved/denied). Guards the driver against
 // client typos or malicious payloads — defense in depth on top of the
-// driver's own approved-only check.
-var ErrInvalidDecision = errors.New("agentdriver: invalid permission decision")
+// driver's own approved-only check. Wraps agentcore.ErrPermissionDecision
+// so HTTP transport can surface it as 400.
+var ErrInvalidDecision = fmt.Errorf("agentdriver: invalid permission decision: %w", agentcore.ErrPermissionDecision)
 
 // Open registers a permission request and returns a channel the driver
 // blocks on until Resolve is called. Buffered with size 1 so Resolve never

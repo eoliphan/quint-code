@@ -17,6 +17,7 @@ var (
 	ErrTurnAlreadyRunning  = errors.New("agentcore: another turn is already running")
 	ErrPermissionNotFound  = errors.New("agentcore: permission not found")
 	ErrPermissionResolved  = errors.New("agentcore: permission already resolved")
+	ErrPermissionDecision  = errors.New("agentcore: invalid permission decision")
 	ErrSubAgentNotFound    = errors.New("agentcore: subagent not found")
 	ErrSubAgentResolved    = errors.New("agentcore: subagent already resolved")
 )
