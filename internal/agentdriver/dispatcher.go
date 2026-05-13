@@ -151,11 +151,27 @@ func (d *Dispatcher) handleSessionRename(c agentproto.SessionRenameCmd) (agentse
 }
 
 func (d *Dispatcher) handleTurnSubmit(ctx context.Context, c agentproto.TurnSubmitCmd) (agentserver.DispatchResult, error) {
+	// Pre-allocate the turn ID so turn.cancel can target this exact turn.
+	// Generating it lazily inside Drive would mean an in-flight cancel
+	// would have to address the session — which then fires against
+	// whichever turn happens to be running, including a later one if the
+	// first finished between submit and cancel.
+	turnID := agentcore.TurnID(d.Driver.IDGen("turn"))
+	turnCtx, cancel := context.WithCancel(context.Background())
+
+	// Load the session and register the running entry under the same lock
+	// that handleModelSet holds across its model.switched append. Without
+	// this, a model.set that passed its running-empty check could append
+	// model_switched between a submit's Load (old model captured) and the
+	// running registration — leaving the goroutine driving the provider
+	// with the old model while the journal already shows the switch.
+	d.mu.Lock()
 	session, err := d.Store.Load(c.SessionID)
 	if err != nil {
+		d.mu.Unlock()
+		cancel()
 		return agentserver.DispatchResult{}, err
 	}
-
 	// Reject synchronously when the loaded session already shows a live
 	// turn. This happens after a process restart: d.running is empty, but
 	// the journal still has a Running turn from the previous instance.
@@ -164,17 +180,10 @@ func (d *Dispatcher) handleTurnSubmit(ctx context.Context, c agentproto.TurnSubm
 	// ErrTurnAlreadyRunning and drops the error — leaving the client
 	// waiting for events that will never arrive.
 	if session.HasLiveTurn() {
+		d.mu.Unlock()
+		cancel()
 		return agentserver.DispatchResult{}, fmt.Errorf("%w: session %s", agentcore.ErrTurnAlreadyRunning, c.SessionID)
 	}
-
-	// Pre-allocate the turn ID so turn.cancel can target this exact turn.
-	// Generating it lazily inside Drive would mean an in-flight cancel
-	// would have to address the session — which then fires against
-	// whichever turn happens to be running, including a later one if the
-	// first finished between submit and cancel.
-	turnID := agentcore.TurnID(d.Driver.IDGen("turn"))
-	turnCtx, cancel := context.WithCancel(context.Background())
-	d.mu.Lock()
 	if _, ok := d.running[c.SessionID]; ok {
 		// A turn is already in flight. Reject rather than replace: the
 		// previous goroutine still owns the journal until it appends a
@@ -243,12 +252,13 @@ func (d *Dispatcher) handleModelSet(c agentproto.ModelSetCmd) (agentserver.Dispa
 	// captured session.Model at submit time and keeps invoking the provider
 	// with that model; journaling model_switched in the middle would record
 	// the switch as preceding the still-running turn while the provider is
-	// actually called with the old model. Reject synchronously so the
-	// operator retries after the turn lands.
+	// actually called with the old model. Hold d.mu across the running
+	// check AND the Store.Append so a concurrent handleTurnSubmit (which
+	// now Loads the session under the same lock) cannot capture the old
+	// session.Model between our check and our append.
 	d.mu.Lock()
-	_, running := d.running[c.SessionID]
-	d.mu.Unlock()
-	if running {
+	defer d.mu.Unlock()
+	if _, running := d.running[c.SessionID]; running {
 		return agentserver.DispatchResult{}, fmt.Errorf("%w: cannot switch model while a turn is running on session %s", agentcore.ErrTurnAlreadyRunning, c.SessionID)
 	}
 	// Also catch the post-restart case where d.running is empty but the
