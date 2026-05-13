@@ -36,7 +36,7 @@ func newTestServer(t *testing.T) (*Server, string, *agentstore.Store) {
 		Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
 	}
 
-	srv := NewServer("127.0.0.1:0", store, dispatcher)
+	srv := NewServer("127.0.0.1:0", store, dispatcher, nil)
 	addr, errCh, err := srv.Start()
 	if err != nil {
 		t.Fatalf("Start: %v", err)

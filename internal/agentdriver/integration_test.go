@@ -80,8 +80,7 @@ func bootIntegrationServer(t *testing.T, provider Provider) (string, *agentstore
 	}
 	dispatcher.Now = time.Now
 
-	srv := agentserver.NewServer("127.0.0.1:0", store, dispatcher)
-	srv.Hub = hub
+	srv := agentserver.NewServer("127.0.0.1:0", store, dispatcher, hub)
 	addr, errCh, err := srv.Start()
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -270,12 +269,18 @@ func TestIntegration_TurnCancel(t *testing.T) {
 
 	turnBody, _ := json.Marshal(map[string]any{"text": "hang"})
 	turnResp, _ := http.Post(base+"/session/"+string(sessionID)+"/turn", "application/json", bytes.NewReader(turnBody))
+	var submitted map[string]any
+	_ = json.NewDecoder(turnResp.Body).Decode(&submitted)
 	_ = turnResp.Body.Close()
+	turnID, _ := submitted["turn_id"].(string)
+	if turnID == "" {
+		t.Fatalf("turn submit response missing turn_id: %v", submitted)
+	}
 
 	// Give the driver a moment to hit the hang.
 	time.Sleep(20 * time.Millisecond)
 
-	cancelBody, _ := json.Marshal(map[string]any{"turn_id": "turn-1"})
+	cancelBody, _ := json.Marshal(map[string]any{"turn_id": turnID})
 	cancelResp, err := http.Post(base+"/session/"+string(sessionID)+"/cancel", "application/json", bytes.NewReader(cancelBody))
 	if err != nil {
 		t.Fatalf("POST cancel: %v", err)
@@ -320,8 +325,7 @@ func TestIntegration_PermissionRoundTrip(t *testing.T) {
 		return agentcore.SessionID(fmt.Sprintf("s-%d", counter.Add(1)))
 	}
 
-	srv := agentserver.NewServer("127.0.0.1:0", store, dispatcher)
-	srv.Hub = hub
+	srv := agentserver.NewServer("127.0.0.1:0", store, dispatcher, hub)
 	addr, errCh, err := srv.Start()
 	if err != nil {
 		t.Fatal(err)

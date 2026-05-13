@@ -3,6 +3,7 @@ package agentdriver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/m0n0x41d/haft/internal/agentcore"
@@ -47,6 +48,12 @@ var ErrUnknownPermission = errors.New("agentdriver: unknown permission id")
 // not overwritten.
 var ErrAlreadyResolved = errors.New("agentdriver: permission already resolved")
 
+// ErrInvalidDecision is returned by Resolve when the decision is not one
+// of the known values (approved/denied). Guards the driver against
+// client typos or malicious payloads — defense in depth on top of the
+// driver's own approved-only check.
+var ErrInvalidDecision = errors.New("agentdriver: invalid permission decision")
+
 // Open registers a permission request and returns a channel the driver
 // blocks on until Resolve is called. Buffered with size 1 so Resolve never
 // blocks even if the driver hasn't started reading yet.
@@ -62,6 +69,11 @@ func (g *PermissionGate) Open(id agentcore.PermissionID) <-chan permissionResolu
 // Idempotent failure: a second Resolve for the same ID returns
 // ErrAlreadyResolved without disturbing the first decision.
 func (g *PermissionGate) Resolve(id agentcore.PermissionID, decision agentcore.PermissionDecision, reason string) error {
+	switch decision {
+	case agentcore.PermissionApproved, agentcore.PermissionDenied:
+	default:
+		return fmt.Errorf("%w: %q", ErrInvalidDecision, string(decision))
+	}
 	g.mu.Lock()
 	ch, ok := g.pending[id]
 	if !ok {

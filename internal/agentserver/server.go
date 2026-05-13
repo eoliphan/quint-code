@@ -33,13 +33,18 @@ type Server struct {
 }
 
 // NewServer builds an unstarted Server. Dispatcher and Store must be
-// non-nil; Hub is created if absent.
-func NewServer(addr string, store *agentstore.Store, dispatcher Dispatcher) *Server {
+// non-nil. If hub is nil a fresh Hub is created; pass an explicit Hub when
+// the Dispatcher publishes events through one (otherwise the dispatcher
+// broadcasts to a hub no SSE subscriber is listening on).
+func NewServer(addr string, store *agentstore.Store, dispatcher Dispatcher, hub *Hub) *Server {
+	if hub == nil {
+		hub = NewHub()
+	}
 	return &Server{
 		Addr:       addr,
 		Store:      store,
 		Dispatcher: dispatcher,
-		Hub:        NewHub(),
+		Hub:        hub,
 	}
 }
 

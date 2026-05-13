@@ -33,7 +33,17 @@ type Dispatcher struct {
 	Now   func() time.Time
 
 	mu      sync.Mutex
-	running map[agentcore.SessionID]context.CancelFunc
+	running map[agentcore.SessionID]runningTurn
+}
+
+// runningTurn pairs the active turn's ID with its cancel function so that
+// turn.cancel requests can be matched to the exact turn the operator
+// intended to stop. Without the ID, a delayed cancel for a turn that has
+// already completed could abort a newer turn that started on the same
+// session.
+type runningTurn struct {
+	turnID agentcore.TurnID
+	cancel context.CancelFunc
 }
 
 // NewDispatcher constructs a Dispatcher with the given dependencies.
@@ -47,7 +57,7 @@ func NewDispatcher(store *agentstore.Store, hub *agentserver.Hub, driver *Driver
 		Permissions: perms,
 		IDGen:       func() agentcore.SessionID { return "" },
 		Now:         time.Now,
-		running:     map[agentcore.SessionID]context.CancelFunc{},
+		running:     map[agentcore.SessionID]runningTurn{},
 	}
 	d.Driver.Sink = &CombinedSink{
 		Store: store,
@@ -146,6 +156,12 @@ func (d *Dispatcher) handleTurnSubmit(ctx context.Context, c agentproto.TurnSubm
 		return agentserver.DispatchResult{}, err
 	}
 
+	// Pre-allocate the turn ID so turn.cancel can target this exact turn.
+	// Generating it lazily inside Drive would mean an in-flight cancel
+	// would have to address the session — which then fires against
+	// whichever turn happens to be running, including a later one if the
+	// first finished between submit and cancel.
+	turnID := agentcore.TurnID(d.Driver.IDGen("turn"))
 	turnCtx, cancel := context.WithCancel(context.Background())
 	d.mu.Lock()
 	if _, ok := d.running[c.SessionID]; ok {
@@ -159,7 +175,7 @@ func (d *Dispatcher) handleTurnSubmit(ctx context.Context, c agentproto.TurnSubm
 		cancel()
 		return agentserver.DispatchResult{}, fmt.Errorf("%w: session %s", agentcore.ErrTurnAlreadyRunning, c.SessionID)
 	}
-	d.running[c.SessionID] = cancel
+	d.running[c.SessionID] = runningTurn{turnID: turnID, cancel: cancel}
 	d.mu.Unlock()
 
 	go func() {
@@ -169,13 +185,14 @@ func (d *Dispatcher) handleTurnSubmit(ctx context.Context, c agentproto.TurnSubm
 			d.mu.Unlock()
 			cancel()
 		}()
-		_, _ = d.Driver.Drive(turnCtx, session, c.Text)
+		_, _ = d.Driver.DriveTurn(turnCtx, session, turnID, c.Text)
 	}()
 
 	return agentserver.DispatchResult{
 		SessionID: c.SessionID,
 		Response: map[string]any{
 			"session_id": c.SessionID,
+			"turn_id":    turnID,
 			"accepted":   true,
 		},
 	}, nil
@@ -183,12 +200,20 @@ func (d *Dispatcher) handleTurnSubmit(ctx context.Context, c agentproto.TurnSubm
 
 func (d *Dispatcher) handleTurnCancel(c agentproto.TurnCancelCmd) (agentserver.DispatchResult, error) {
 	d.mu.Lock()
-	cancel, ok := d.running[c.SessionID]
+	rt, ok := d.running[c.SessionID]
 	d.mu.Unlock()
 	if !ok {
 		return agentserver.DispatchResult{}, fmt.Errorf("no running turn on session %s", c.SessionID)
 	}
-	cancel()
+	// If the cancel names a specific turn, only cancel when it matches the
+	// turn that is actually in flight. A late cancel for a turn that has
+	// already completed must NOT abort a newer turn that started since.
+	// An empty TurnID means "cancel whatever is running" — kept for
+	// pre-turn-id clients; deprecate in M2c.
+	if c.TurnID != "" && c.TurnID != rt.turnID {
+		return agentserver.DispatchResult{}, fmt.Errorf("turn %s is not the running turn on session %s (running=%s)", c.TurnID, c.SessionID, rt.turnID)
+	}
+	rt.cancel()
 	return agentserver.DispatchResult{SessionID: c.SessionID}, nil
 }
 

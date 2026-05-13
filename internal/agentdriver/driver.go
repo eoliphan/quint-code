@@ -47,8 +47,18 @@ func (d *Driver) Drive(ctx context.Context, session agentcore.Session, userText 
 	if err := d.validate(); err != nil {
 		return session, err
 	}
+	return d.DriveTurn(ctx, session, agentcore.TurnID(d.IDGen("turn")), userText)
+}
 
-	turnID := agentcore.TurnID(d.IDGen("turn"))
+// DriveTurn is Drive with a caller-supplied turn ID. Used by callers that
+// need to know the turn ID before the goroutine starts (e.g. to match
+// turn.cancel requests against the active turn). The caller is responsible
+// for ensuring turnID is unique; passing a duplicate yields an
+// ErrTurnAlreadyRunning from agentcore.StartTurn.
+func (d *Driver) DriveTurn(ctx context.Context, session agentcore.Session, turnID agentcore.TurnID, userText string) (agentcore.Session, error) {
+	if err := d.validate(); err != nil {
+		return session, err
+	}
 	now := d.Now()
 
 	// 1. Open the turn with the user's text as the first part.
@@ -193,7 +203,14 @@ func (d *Driver) handleToolCall(ctx context.Context, session agentcore.Session, 
 		if err != nil {
 			return session, err
 		}
-		if decision == agentcore.PermissionDenied {
+		// Only the exact "approved" decision authorizes execution. A typo,
+		// malformed body, or new-but-unknown value MUST be treated as denial
+		// — otherwise a client posting `decision: "approve"` (or any other
+		// non-"denied" string) would silently bypass the gate.
+		if decision != agentcore.PermissionApproved {
+			if reason == "" {
+				reason = "permission not approved"
+			}
 			return d.appendDeniedToolResult(session, turnID, call, reason)
 		}
 	case AuthorisationDenied:
