@@ -103,10 +103,10 @@ type reasoningBody struct {
 }
 
 type toolUseBody struct {
-	At         timeStamp `json:"at"`
-	ToolCallID string    `json:"tool_call_id"`
-	ToolName   string    `json:"tool_name"`
-	Args       []byte    `json:"args"`
+	At         timeStamp       `json:"at"`
+	ToolCallID string          `json:"tool_call_id"`
+	ToolName   string          `json:"tool_name"`
+	Args       json.RawMessage `json:"args"`
 }
 
 type toolResultBody struct {

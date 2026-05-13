@@ -1,6 +1,7 @@
 package agentproto
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/m0n0x41d/haft/internal/agentcore"
@@ -168,13 +169,14 @@ func (PartReasoningCompletedEvent) Kind() EventKind { return EventPartReasoningC
 
 // PartToolUseStartedEvent: an assistant tool call has been emitted but not
 // yet executed. Args carries the JSON-encoded parameters as the LLM
-// produced them.
+// produced them; json.RawMessage preserves the JSON shape on the wire
+// instead of base64-encoding the bytes.
 type PartToolUseStartedEvent struct {
 	turnEventBase
 	PartID     agentcore.PartID `json:"part_id"`
 	ToolCallID string           `json:"tool_call_id"`
 	ToolName   string           `json:"tool_name"`
-	Args       []byte           `json:"args"`
+	Args       json.RawMessage  `json:"args"`
 }
 
 func (PartToolUseStartedEvent) Kind() EventKind { return EventPartToolUseStarted }
@@ -236,12 +238,14 @@ type SubAgentCompletedEvent struct {
 func (SubAgentCompletedEvent) Kind() EventKind { return EventSubAgentCompleted }
 
 // PermissionRequestedEvent: agent needs operator approval to run a tool.
+// Args is json.RawMessage so the operator UI sees the actual tool
+// arguments rather than a base64 blob.
 type PermissionRequestedEvent struct {
 	turnEventBase
 	PermissionID agentcore.PermissionID `json:"permission_id"`
 	ToolCallID   string                 `json:"tool_call_id"`
 	ToolName     string                 `json:"tool_name"`
-	Args         []byte                 `json:"args"`
+	Args         json.RawMessage        `json:"args"`
 }
 
 func (PermissionRequestedEvent) Kind() EventKind { return EventPermissionRequested }
