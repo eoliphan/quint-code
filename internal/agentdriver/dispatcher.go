@@ -156,6 +156,17 @@ func (d *Dispatcher) handleTurnSubmit(ctx context.Context, c agentproto.TurnSubm
 		return agentserver.DispatchResult{}, err
 	}
 
+	// Reject synchronously when the loaded session already shows a live
+	// turn. This happens after a process restart: d.running is empty, but
+	// the journal still has a Running turn from the previous instance.
+	// Without this check the submit returns accepted=true with a brand-new
+	// turn_id, and the background goroutine then fails StartTurn with
+	// ErrTurnAlreadyRunning and drops the error — leaving the client
+	// waiting for events that will never arrive.
+	if session.HasLiveTurn() {
+		return agentserver.DispatchResult{}, fmt.Errorf("%w: session %s", agentcore.ErrTurnAlreadyRunning, c.SessionID)
+	}
+
 	// Pre-allocate the turn ID so turn.cancel can target this exact turn.
 	// Generating it lazily inside Drive would mean an in-flight cancel
 	// would have to address the session — which then fires against

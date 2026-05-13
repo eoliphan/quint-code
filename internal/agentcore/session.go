@@ -48,6 +48,15 @@ func (s Session) liveTurn() int {
 	return -1
 }
 
+// HasLiveTurn reports whether the Session currently has a Running turn.
+// Callers outside agentcore use this to reject submits synchronously when
+// the journal already shows a turn in flight — e.g. after a process restart
+// where the in-memory dispatcher map is empty but the persisted history is
+// not.
+func (s Session) HasLiveTurn() bool {
+	return s.liveTurn() != -1
+}
+
 // FindTurn returns the Turn with the given ID and whether it was found.
 // Lookup is linear — Sessions are short enough in practice that a map
 // would only add allocation overhead.

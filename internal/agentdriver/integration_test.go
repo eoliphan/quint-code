@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -419,5 +420,62 @@ func TestIntegration_PermissionRoundTrip(t *testing.T) {
 	}
 	if len(tools.calls) == 0 {
 		t.Fatal("tool was not invoked after approval")
+	}
+}
+
+// TestDispatcher_TurnSubmit_RejectsReplayedRunningTurn covers the post-restart
+// case: the in-memory running map is empty, but the journal still records a
+// turn as Running from the previous process. handleTurnSubmit must reject
+// synchronously instead of accepting the submit, spawning a goroutine, and
+// silently dropping the ErrTurnAlreadyRunning that StartTurn would raise.
+func TestDispatcher_TurnSubmit_RejectsReplayedRunningTurn(t *testing.T) {
+	store, err := agentstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	model := agentcore.ModelChoice{Provider: agentcore.ProviderCodex, Model: "gpt-5.4"}
+	if _, err := store.Create("s1", "proj1", "Replay", model, now); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	userPart := agentcore.NewTextPart("p1", now.Add(time.Second), "hello")
+	firstPayload, err := agentproto.EncodePart(userPart)
+	if err != nil {
+		t.Fatalf("encode part: %v", err)
+	}
+	started := agentproto.TurnStartedEvent{}
+	started.SessionID = "s1"
+	started.At = now.Add(time.Second)
+	started.TurnID = "t1"
+	started.Role = agentcore.TurnRoleUser
+	started.FirstPart = firstPayload
+	if err := store.Append("s1", started); err != nil {
+		t.Fatalf("Append turn.started: %v", err)
+	}
+
+	hub := agentserver.NewHub()
+	gate := NewPermissionGate()
+	var counter atomic.Int64
+	driver := &Driver{
+		Provider: hangingProvider{},
+		Tools:    passthroughTools{},
+		IDGen: func(kind string) string {
+			return fmt.Sprintf("%s-%d", kind, counter.Add(1))
+		},
+		Now: time.Now,
+	}
+	dispatcher := NewDispatcher(store, hub, driver, gate)
+
+	res, err := dispatcher.Dispatch(context.Background(), agentproto.TurnSubmitCmd{SessionID: "s1", Text: "next"})
+	if err == nil {
+		t.Fatalf("expected error, got result %+v", res)
+	}
+	if !errors.Is(err, agentcore.ErrTurnAlreadyRunning) {
+		t.Fatalf("expected ErrTurnAlreadyRunning, got %v", err)
+	}
+	if res.Response != nil {
+		t.Fatalf("expected nil response on rejection, got %+v", res.Response)
 	}
 }
