@@ -279,6 +279,8 @@ func (s *Server) writeResult(w http.ResponseWriter, res DispatchResult, err erro
 			status = http.StatusNotImplemented
 		case errors.Is(err, agentstore.ErrSessionNotFound):
 			status = http.StatusNotFound
+		case errors.Is(err, agentcore.ErrTurnAlreadyRunning):
+			status = http.StatusConflict
 		case strings.Contains(err.Error(), "decode") || strings.Contains(err.Error(), "missing"):
 			status = http.StatusBadRequest
 		}
