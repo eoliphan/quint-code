@@ -132,7 +132,11 @@ func (d *Dispatcher) handleSessionResume(c agentproto.SessionResumeCmd) (agentse
 	if err != nil {
 		return agentserver.DispatchResult{}, err
 	}
-	return agentserver.DispatchResult{Response: session, SessionID: c.SessionID}, nil
+	payload, err := agentproto.EncodeSession(session)
+	if err != nil {
+		return agentserver.DispatchResult{}, err
+	}
+	return agentserver.DispatchResult{Response: payload, SessionID: c.SessionID}, nil
 }
 
 func (d *Dispatcher) handleSessionRename(c agentproto.SessionRenameCmd) (agentserver.DispatchResult, error) {

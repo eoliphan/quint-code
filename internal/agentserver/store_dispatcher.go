@@ -84,7 +84,11 @@ func (d *StoreDispatcher) handleSessionResume(c agentproto.SessionResumeCmd) (Di
 	if err != nil {
 		return DispatchResult{}, err
 	}
-	return DispatchResult{Response: session, SessionID: c.SessionID}, nil
+	payload, err := agentproto.EncodeSession(session)
+	if err != nil {
+		return DispatchResult{}, err
+	}
+	return DispatchResult{Response: payload, SessionID: c.SessionID}, nil
 }
 
 func (d *StoreDispatcher) handleSessionRename(c agentproto.SessionRenameCmd) (DispatchResult, error) {

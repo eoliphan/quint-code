@@ -295,12 +295,12 @@ func TestStoreDispatcher_ResumeReturnsSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, ok := res.Response.(agentcore.Session)
+	payload, ok := res.Response.(agentproto.SessionPayload)
 	if !ok {
 		t.Fatalf("unexpected response type %T", res.Response)
 	}
-	if session.ID != "s1" {
-		t.Fatalf("session id drift: %s", session.ID)
+	if payload.ID != "s1" {
+		t.Fatalf("session id drift: %s", payload.ID)
 	}
 }
 

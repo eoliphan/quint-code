@@ -1,6 +1,8 @@
 package agentproto
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -162,6 +164,58 @@ func TestPartPayload_RejectsUnknownKind(t *testing.T) {
 	_, err := DecodePart(payload)
 	if err == nil {
 		t.Fatal("decode of unknown part kind should error")
+	}
+}
+
+func TestSessionPayload_WireSafeShape(t *testing.T) {
+	at := fixedTime()
+	textPart := agentcore.NewTextPart("p1", at, "hello")
+	toolUsePart := agentcore.NewToolUsePart("p2", at, "tc1", "bash", []byte(`{"cmd":"ls"}`))
+	session := agentcore.Session{
+		ID:        "s1",
+		ProjectID: "proj1",
+		Title:     "Demo",
+		Model:     agentcore.ModelChoice{Provider: agentcore.ProviderCodex, Model: "gpt-5.4", CredentialKey: "codex"},
+		History: []agentcore.Turn{
+			{
+				ID:        "t1",
+				Role:      agentcore.TurnRoleUser,
+				State:     agentcore.TurnStateCompleted,
+				Verdict:   agentcore.VerdictPass,
+				Parts:     []agentcore.Part{textPart, toolUsePart},
+				StartedAt: at,
+				EndedAt:   at,
+			},
+		},
+		CreatedAt: at,
+		UpdatedAt: at,
+	}
+	payload, err := EncodeSession(session)
+	if err != nil {
+		t.Fatalf("encode session: %v", err)
+	}
+	if payload.ID != "s1" || len(payload.History) != 1 || len(payload.History[0].Parts) != 2 {
+		t.Fatalf("payload shape drift: %+v", payload)
+	}
+	if payload.History[0].Parts[0].Kind != agentcore.PartKindText {
+		t.Fatalf("first part kind drift: %s", payload.History[0].Parts[0].Kind)
+	}
+	if payload.History[0].Parts[0].ID != "p1" {
+		t.Fatalf("first part id drift: %s", payload.History[0].Parts[0].ID)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	// The bug Codex caught was that raw agentcore.Session serialized parts
+	// as {"Text":"hello"} — no kind discriminator and no part id, because
+	// partBase fields are unexported. Assert that the wire bytes carry the
+	// envelope shape (kind + id) so clients can reconstruct.
+	if !bytes.Contains(encoded, []byte(`"kind":"text"`)) {
+		t.Fatalf("missing kind discriminator in wire bytes: %s", encoded)
+	}
+	if !bytes.Contains(encoded, []byte(`"id":"p1"`)) {
+		t.Fatalf("missing part id in wire bytes: %s", encoded)
 	}
 }
 
