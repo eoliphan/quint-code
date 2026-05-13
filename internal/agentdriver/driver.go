@@ -314,6 +314,23 @@ func (d *Driver) gatePermission(ctx context.Context, sessionID agentcore.Session
 	}
 	decision, reason, err := d.Permissions.Wait(ctx, id, ch)
 	if err != nil {
+		// Wait removed the in-memory gate entry already, but the durable
+		// journal still has permission.requested without a matching
+		// permission.resolved. On reload the session would replay with the
+		// permission stuck Pending while any late POST /permission/{id}
+		// would 404 against the empty gate. Journal a denial so replay
+		// and the live gate agree: the permission is decided, just not by
+		// the operator. Best effort — the original cancel/error is still
+		// the cause we propagate. PermissionPending is rejected by
+		// ResolvePermission, so use PermissionDenied.
+		canceled := agentproto.PermissionResolvedEvent{}
+		canceled.SessionID = sessionID
+		canceled.At = d.Now()
+		canceled.TurnID = turnID
+		canceled.PermissionID = id
+		canceled.Decision = agentcore.PermissionDenied
+		canceled.Reason = "turn canceled before operator responded: " + err.Error()
+		_ = d.Sink.Publish(canceled)
 		return "", "", err
 	}
 	resolved := agentproto.PermissionResolvedEvent{}
@@ -445,10 +462,19 @@ func (d *Driver) failTurn(session agentcore.Session, turnID agentcore.TurnID, ca
 	ev.TurnID = turnID
 	ev.Verdict = verdict
 	ev.Message = cause.Error()
-	_ = d.Sink.Publish(ev)
+	// If Publish fails (journal write/fsync error, meta update error, etc.)
+	// the durable journal still shows the turn Running. The dispatcher's
+	// pre-submit HasLiveTurn check then blocks every future submit until
+	// the journal is repaired by hand. Surface the publish failure rather
+	// than silently overwriting it with the original cause — the cause is
+	// still wrapped so callers can errors.Is it.
+	perr := d.Sink.Publish(ev)
 	failed, ferr := agentcore.FailTurn(session, turnID, verdict, cause.Error(), now)
 	if ferr != nil {
 		return session, fmt.Errorf("FailTurn (cause=%w): %v", cause, ferr)
+	}
+	if perr != nil {
+		return failed, fmt.Errorf("publish turn.failed (cause=%w): %v", cause, perr)
 	}
 	return failed, cause
 }
