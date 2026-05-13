@@ -377,6 +377,75 @@ func (hangingProvider) Generate(ctx context.Context, model agentcore.ModelChoice
 	return ch, nil
 }
 
+// closedProvider returns an already-closed channel and tracks whether
+// ctx was canceled before Generate ran. Used to assert that the driver
+// classifies a closed stream as canceled (not completed) when ctx is
+// already done.
+type closedProvider struct{}
+
+func (closedProvider) Generate(ctx context.Context, model agentcore.ModelChoice, history []agentcore.Turn, userInput string) (<-chan ProviderEvent, error) {
+	ch := make(chan ProviderEvent)
+	close(ch)
+	return ch, nil
+}
+
+func TestDriver_ClosedStreamWithCanceledCtx_ReportsCanceled(t *testing.T) {
+	// Reproduces the select-race: when the provider closes its stream as a
+	// reaction to ctx cancellation, both ctx.Done() and the !open receive
+	// can be ready. If the !open branch wins we used to journal
+	// turn.completed for a turn that was actually canceled.
+	d := &Driver{
+		Provider: closedProvider{},
+		Tools:    &fakeTools{},
+		Sink:     &CollectingSink{},
+		IDGen:    newCounterIDGen(),
+		Now:      func() time.Time { return time.Now() },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := d.Drive(ctx, freshSession(), "x")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled, got %v", err)
+	}
+	sink := d.Sink.(*CollectingSink)
+	last := sink.Events[len(sink.Events)-1]
+	if last.Kind() != agentproto.EventTurnFailed {
+		t.Fatalf("expected last event turn.failed, got %s", last.Kind())
+	}
+}
+
+func TestDriver_RejectsSubmitWithLiveTurn_DoesNotEmitTurnStarted(t *testing.T) {
+	// If a session loaded from the journal already has a Running turn
+	// (e.g. after a server restart while the dispatcher's in-memory
+	// running map is empty), Drive must reject the new submit BEFORE
+	// publishing turn.started — otherwise the journal grows a second
+	// turn.started for an already-live turn and replay breaks.
+	clock, _ := newFixedClock()
+	session := freshSession()
+	first := agentcore.NewTextPart("p-first", clock(), "earlier")
+	live, err := agentcore.StartTurn(session, "t-live", agentcore.TurnRoleUser, first, clock())
+	if err != nil {
+		t.Fatalf("seed StartTurn: %v", err)
+	}
+	sink := &CollectingSink{}
+	d := &Driver{
+		Provider: &fakeProvider{events: []ProviderEvent{ProviderTurnDone{}}},
+		Tools:    &fakeTools{},
+		Sink:     sink,
+		IDGen:    newCounterIDGen(),
+		Now:      clock,
+	}
+	_, err = d.Drive(context.Background(), live, "second submit")
+	if err == nil {
+		t.Fatal("expected error when submitting on a session with a live turn")
+	}
+	for _, ev := range sink.Events {
+		if ev.Kind() == agentproto.EventTurnStarted {
+			t.Fatalf("Drive must not publish turn.started before validating; got events %v", eventKinds(sink.Events))
+		}
+	}
+}
+
 func TestDriver_ValidateMissingDeps(t *testing.T) {
 	d := &Driver{}
 	_, err := d.Drive(context.Background(), freshSession(), "x")

@@ -52,13 +52,17 @@ func (d *Driver) Drive(ctx context.Context, session agentcore.Session, userText 
 	now := d.Now()
 
 	// 1. Open the turn with the user's text as the first part.
+	// Validate the in-memory transition BEFORE journaling turn.started so a
+	// session that already replays to a Running turn (e.g. after a server
+	// restart while the in-memory dispatcher map is empty) rejects the new
+	// submit without writing an unreplayable second turn.started event.
 	userPart := agentcore.NewTextPart(agentcore.PartID(d.IDGen("part")), now, userText)
-	if err := d.emitTurnStarted(session.ID, turnID, userPart, now); err != nil {
-		return session, err
-	}
 	updated, err := agentcore.StartTurn(session, turnID, agentcore.TurnRoleUser, userPart, now)
 	if err != nil {
 		return session, fmt.Errorf("StartTurn: %w", err)
+	}
+	if err := d.emitTurnStarted(session.ID, turnID, userPart, now); err != nil {
+		return session, err
 	}
 
 	// 2. Stream the provider until we see done or error.
@@ -103,6 +107,15 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 			return d.failTurn(session, turnID, ctx.Err())
 		case ev, open := <-events:
 			if !open {
+				// A provider following the documented cancellation contract
+				// closes its event channel when ctx is canceled. Both
+				// ctx.Done() and this !open receive can be ready at the same
+				// time; Go's select picks one at random. If the close branch
+				// wins we would emit turn.completed for a turn that was
+				// actually canceled. Check ctx.Err() first.
+				if cerr := ctx.Err(); cerr != nil {
+					return d.failTurn(session, turnID, cerr)
+				}
 				session, err = flushText(session)
 				if err != nil {
 					return session, err
