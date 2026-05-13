@@ -410,15 +410,26 @@ func TestIntegration_PermissionRoundTrip(t *testing.T) {
 		t.Fatalf("approve status %d: %s", approveResp.StatusCode, dump)
 	}
 
-	// Wait for the tool to actually run by checking dispatcher's tools record.
+	// Drain SSE until turn.completed so the dispatcher goroutine has
+	// finished writing to the store before the deferred cleanup runs.
+	// Reading tools.Calls() alone races with the still-running goroutine
+	// that journals the turn — surfaces as a TempDir cleanup failure.
 	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(tools.calls) > 0 {
-			break
+	turnDone := false
+	for time.Now().Before(deadline) && !turnDone {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read SSE: %v", err)
 		}
-		time.Sleep(5 * time.Millisecond)
+		line = strings.TrimRight(line, "\n")
+		if strings.HasPrefix(line, "data: ") && strings.Contains(line, string(agentproto.EventTurnCompleted)) {
+			turnDone = true
+		}
 	}
-	if len(tools.calls) == 0 {
+	if !turnDone {
+		t.Fatal("turn.completed never observed")
+	}
+	if len(tools.Calls()) == 0 {
 		t.Fatal("tool was not invoked after approval")
 	}
 }

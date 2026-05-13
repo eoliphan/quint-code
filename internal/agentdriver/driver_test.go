@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,7 +39,9 @@ type fakeTools struct {
 	authorise map[string]AuthorisationVerdict
 	results   map[string]string
 	runErr    error
-	calls     []ProviderToolCall
+
+	mu    sync.Mutex
+	calls []ProviderToolCall
 }
 
 func (t *fakeTools) Authorize(ctx context.Context, name string, args []byte) AuthorisationVerdict {
@@ -49,7 +52,9 @@ func (t *fakeTools) Authorize(ctx context.Context, name string, args []byte) Aut
 }
 
 func (t *fakeTools) Run(ctx context.Context, name string, args []byte) (string, bool, error) {
+	t.mu.Lock()
 	t.calls = append(t.calls, ProviderToolCall{Name: name, Args: args})
+	t.mu.Unlock()
 	if t.runErr != nil {
 		return "", true, t.runErr
 	}
@@ -57,6 +62,16 @@ func (t *fakeTools) Run(ctx context.Context, name string, args []byte) (string, 
 		return r, false, nil
 	}
 	return "ok", false, nil
+}
+
+// Calls returns a snapshot of recorded tool invocations. Safe to call
+// while the driver runs in another goroutine (integration tests).
+func (t *fakeTools) Calls() []ProviderToolCall {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]ProviderToolCall, len(t.calls))
+	copy(out, t.calls)
+	return out
 }
 
 func newFixedClock() (func() time.Time, *time.Time) {
