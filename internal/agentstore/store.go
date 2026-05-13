@@ -26,7 +26,7 @@ type Store struct {
 
 	mu       sync.Mutex
 	open     map[agentcore.SessionID]*Journal
-	sessLock map[agentcore.SessionID]*sync.Mutex
+	sessLock map[agentcore.SessionID]*sync.RWMutex
 }
 
 // SessionMeta is the lightweight summary used by List. It is NOT a
@@ -50,7 +50,7 @@ func NewStore(root string) (*Store, error) {
 	return &Store{
 		root:     root,
 		open:     map[agentcore.SessionID]*Journal{},
-		sessLock: map[agentcore.SessionID]*sync.Mutex{},
+		sessLock: map[agentcore.SessionID]*sync.RWMutex{},
 	}, nil
 }
 
@@ -110,8 +110,21 @@ func (s *Store) Create(id agentcore.SessionID, projectID, title string, model ag
 }
 
 // Load replays a session's journal into its current state. Returns
-// ErrSessionNotFound if the session directory does not exist.
+// ErrSessionNotFound if the session directory does not exist. Takes
+// the per-session read lock so a concurrent Append cannot expose a
+// partially-written event (single Write+Sync on the writer side is
+// not observed atomically by a separate file handle on the reader
+// side once an event grows past the kernel's page-write boundary).
 func (s *Store) Load(id agentcore.SessionID) (agentcore.Session, error) {
+	lock := s.sessionLock(id)
+	lock.RLock()
+	defer lock.RUnlock()
+	return s.loadLocked(id)
+}
+
+// loadLocked replays the journal without taking the per-session lock.
+// Callers must already hold sessionLock(id) (read or write).
+func (s *Store) loadLocked(id agentcore.SessionID) (agentcore.Session, error) {
 	path := filepath.Join(s.sessionDir(id), journalFile)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return agentcore.Session{}, ErrSessionNotFound
@@ -150,7 +163,7 @@ func (s *Store) Append(id agentcore.SessionID, ev agentproto.AgentEvent) error {
 	// an empty events.jsonl under a freshly created directory, leaving an
 	// invalid journal (no SessionCreated header) that future Load calls
 	// reject and future Create calls refuse because the file exists.
-	current, err := s.Load(id)
+	current, err := s.loadLocked(id)
 	if err != nil {
 		return err
 	}
@@ -223,16 +236,17 @@ func (s *Store) sessionDir(id agentcore.SessionID) string {
 	return filepath.Join(s.root, string(id))
 }
 
-// sessionLock returns the per-session mutex used to serialize the
+// sessionLock returns the per-session RWMutex used to serialize the
 // Load/Apply/Append sequence in Create and Append. Without it two
 // concurrent appends on the same session could validate against the
-// same pre-snapshot and persist mutually-inconsistent events.
-func (s *Store) sessionLock(id agentcore.SessionID) *sync.Mutex {
+// same pre-snapshot and persist mutually-inconsistent events. Load
+// holds the read side so it cannot observe a journal mid-write.
+func (s *Store) sessionLock(id agentcore.SessionID) *sync.RWMutex {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, ok := s.sessLock[id]
 	if !ok {
-		m = &sync.Mutex{}
+		m = &sync.RWMutex{}
 		s.sessLock[id] = m
 	}
 	return m
