@@ -55,10 +55,11 @@ type DecideInput struct {
 
 // PredictionInput is a testable claim that measure should verify.
 type PredictionInput struct {
-	Claim       string `json:"claim"`
-	Observable  string `json:"observable"`
-	Threshold   string `json:"threshold"`
-	VerifyAfter string `json:"verify_after,omitempty"` // RFC3339 or YYYY-MM-DD — when async evidence should be gathered
+	Claim         string `json:"claim"`
+	Observable    string `json:"observable"`
+	Threshold     string `json:"threshold"`
+	VerifyAfter   string `json:"verify_after,omitempty"`  // RFC3339 or YYYY-MM-DD — when async evidence should be gathered
+	Realizability string `json:"realizability,omitempty"` // C.28 verdict: realizable|nonrealizable|unknown
 }
 
 // RejectionReason explains why a variant was not selected.
@@ -169,10 +170,11 @@ func normalizePredictionInputs(values []PredictionInput) []PredictionInput {
 
 	for _, value := range values {
 		prediction := PredictionInput{
-			Claim:       strings.TrimSpace(value.Claim),
-			Observable:  strings.TrimSpace(value.Observable),
-			Threshold:   strings.TrimSpace(value.Threshold),
-			VerifyAfter: strings.TrimSpace(value.VerifyAfter),
+			Claim:         strings.TrimSpace(value.Claim),
+			Observable:    strings.TrimSpace(value.Observable),
+			Threshold:     strings.TrimSpace(value.Threshold),
+			VerifyAfter:   strings.TrimSpace(value.VerifyAfter),
+			Realizability: strings.TrimSpace(value.Realizability),
 		}
 
 		normalized = append(normalized, prediction)
@@ -1299,16 +1301,17 @@ type MeasureInput struct {
 // JSON decodes missing fields as 0, which is a valid CL value (opposed context).
 // Callers from MCP should set these to -1 when the user doesn't provide them.
 type EvidenceInput struct {
-	ArtifactRef     string   `json:"artifact_ref"`
-	Content         string   `json:"content"`
-	Type            string   `json:"type"`    // measurement, test, research, benchmark, audit
-	Verdict         string   `json:"verdict"` // supports, weakens, refutes
-	CarrierRef      string   `json:"carrier_ref,omitempty"`
-	CongruenceLevel int      `json:"congruence_level"` // 0-3; -1 = not provided (defaults to 3)
-	FormalityLevel  int      `json:"formality_level"`  // F0-F3; legacy 0-9 inputs are normalized
-	ClaimRefs       []string `json:"claim_refs,omitempty"`
-	ClaimScope      []string `json:"claim_scope,omitempty"`
-	ValidUntil      string   `json:"valid_until,omitempty"`
+	ArtifactRef        string   `json:"artifact_ref"`
+	Content            string   `json:"content"`
+	Type               string   `json:"type"`    // measurement, test, research, benchmark, audit
+	Verdict            string   `json:"verdict"` // supports, weakens, refutes
+	CarrierRef         string   `json:"carrier_ref,omitempty"`
+	CongruenceLevel    int      `json:"congruence_level"` // 0-3; -1 = not provided (defaults to 3)
+	FormalityLevel     int      `json:"formality_level"`  // F0-F3; legacy 0-9 inputs are normalized
+	ClaimRefs          []string `json:"claim_refs,omitempty"`
+	ClaimScope         []string `json:"claim_scope,omitempty"`
+	ValidUntil         string   `json:"valid_until,omitempty"`
+	CausalSupportBasis string   `json:"causal_support_basis,omitempty"` // C.28; accepts canonical or alias form
 }
 
 // Measure records post-implementation impact against the DRR's acceptance criteria.
@@ -1644,19 +1647,25 @@ func AttachEvidence(ctx context.Context, store ArtifactStore, input EvidenceInpu
 		return nil, err
 	}
 
+	causalBasis, err := ParseCausalSupportBasis(input.CausalSupportBasis)
+	if err != nil {
+		return nil, err
+	}
+
 	id := fmt.Sprintf("evid-%s-%09d", time.Now().Format("20060102"), time.Now().UnixNano()%1000000000)
 
 	item := &EvidenceItem{
-		ID:              id,
-		Type:            input.Type,
-		Content:         input.Content,
-		Verdict:         storedVerdict,
-		CarrierRef:      input.CarrierRef,
-		CongruenceLevel: input.CongruenceLevel,
-		FormalityLevel:  normalizeFormalityLevel(input.FormalityLevel),
-		ClaimRefs:       input.ClaimRefs,
-		ClaimScope:      input.ClaimScope,
-		ValidUntil:      input.ValidUntil,
+		ID:                 id,
+		Type:               input.Type,
+		Content:            input.Content,
+		Verdict:            storedVerdict,
+		CarrierRef:         input.CarrierRef,
+		CongruenceLevel:    input.CongruenceLevel,
+		FormalityLevel:     normalizeFormalityLevel(input.FormalityLevel),
+		ClaimRefs:          input.ClaimRefs,
+		ClaimScope:         input.ClaimScope,
+		ValidUntil:         input.ValidUntil,
+		CausalSupportBasis: causalBasis,
 	}
 
 	if err := store.AddEvidenceItem(ctx, item, input.ArtifactRef); err != nil {
@@ -1816,9 +1825,20 @@ func ComputeWLNKSummary(ctx context.Context, store ArtifactStore, artifactID str
 	return result
 }
 
-// scoreEvidence delegates to reff.ScoreEvidence (single source of truth).
+// scoreEvidence delegates to reff (single source of truth) and applies the
+// C.28 causal-basis cap so the WLNK summary honors CC-B3.9 in lockstep with
+// the assurance engine. Realizability is not yet plumbed per-claim into this
+// path (TODO post-7.1); the cap fires on CausalSupportBasis alone here.
 func scoreEvidence(e EvidenceItem, now time.Time) float64 {
-	return reff.ScoreEvidence(e.Verdict, e.CongruenceLevel, e.ValidUntil, now)
+	return reff.ScoreEvidenceWithCausalBasis(
+		e.Type,
+		e.Verdict,
+		e.CongruenceLevel,
+		string(e.CausalSupportBasis),
+		"",
+		e.ValidUntil,
+		now,
+	)
 }
 
 func defaultEvidenceFormalityLevel(evidenceType string) int {

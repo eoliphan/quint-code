@@ -648,35 +648,38 @@ const (
 
 // DecisionClaim is the canonical stored runtime state for one decision claim.
 type DecisionClaim struct {
-	ID          string      `json:"id"`
-	Claim       string      `json:"claim"`
-	Observable  string      `json:"observable"`
-	Threshold   string      `json:"threshold"`
-	Status      ClaimStatus `json:"status,omitempty"`
-	VerifyAfter string      `json:"verify_after,omitempty"` // RFC3339 or YYYY-MM-DD — when async evidence should be gathered
+	ID            string               `json:"id"`
+	Claim         string               `json:"claim"`
+	Observable    string               `json:"observable"`
+	Threshold     string               `json:"threshold"`
+	Status        ClaimStatus          `json:"status,omitempty"`
+	VerifyAfter   string               `json:"verify_after,omitempty"`  // RFC3339 or YYYY-MM-DD — when async evidence should be gathered
+	Realizability RealizabilityVerdict `json:"realizability,omitempty"` // C.28 CounterfactualSamplingRealizabilityProfile verdict
 }
 
 // DecisionPrediction is a compatibility projection of a stored decision claim.
 type DecisionPrediction struct {
-	Claim       string      `json:"claim"`
-	Observable  string      `json:"observable"`
-	Threshold   string      `json:"threshold"`
-	Status      ClaimStatus `json:"status,omitempty"`
-	VerifyAfter string      `json:"verify_after,omitempty"`
+	Claim         string               `json:"claim"`
+	Observable    string               `json:"observable"`
+	Threshold     string               `json:"threshold"`
+	Status        ClaimStatus          `json:"status,omitempty"`
+	VerifyAfter   string               `json:"verify_after,omitempty"`
+	Realizability RealizabilityVerdict `json:"realizability,omitempty"`
 }
 
 // EvidenceItem represents a single piece of evidence.
 type EvidenceItem struct {
-	ID              string   `json:"id"`
-	Type            string   `json:"type"` // measurement, test, research, benchmark, audit
-	Content         string   `json:"content"`
-	Verdict         string   `json:"verdict,omitempty"` // supports, weakens, refutes
-	CarrierRef      string   `json:"carrier_ref,omitempty"`
-	CongruenceLevel int      `json:"congruence_level,omitempty"` // 0-3
-	FormalityLevel  int      `json:"formality_level,omitempty"`  // F0-F3 (legacy 0-9 normalized on read)
-	ClaimRefs       []string `json:"claim_refs,omitempty"`
-	ClaimScope      []string `json:"claim_scope,omitempty"`
-	ValidUntil      string   `json:"valid_until,omitempty"`
+	ID                 string                     `json:"id"`
+	Type               string                     `json:"type"` // measurement, test, research, benchmark, audit
+	Content            string                     `json:"content"`
+	Verdict            string                     `json:"verdict,omitempty"` // supports, weakens, refutes
+	CarrierRef         string                     `json:"carrier_ref,omitempty"`
+	CongruenceLevel    int                        `json:"congruence_level,omitempty"` // 0-3
+	FormalityLevel     int                        `json:"formality_level,omitempty"`  // F0-F3 (legacy 0-9 normalized on read)
+	ClaimRefs          []string                   `json:"claim_refs,omitempty"`
+	ClaimScope         []string                   `json:"claim_scope,omitempty"`
+	ValidUntil         string                     `json:"valid_until,omitempty"`
+	CausalSupportBasis CausalEvidenceSupportBasis `json:"causal_support_basis,omitempty"` // C.28 basis for causal-use claim support
 }
 
 // WriteWarning is returned when the operation succeeded but with non-fatal warnings.
