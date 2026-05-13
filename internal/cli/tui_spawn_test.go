@@ -47,7 +47,7 @@ func TestFindTUIEntry_PrefersInstalledBundleOutsideHaftRepo(t *testing.T) {
 	t.Setenv("HOME", homeDir)
 
 	installedBundle := filepath.Join(homeDir, ".haft", "tui", "bundle.mjs")
-	projectSource := filepath.Join(projectRoot, "tui", "src", "index.tsx")
+	projectSource := filepath.Join(projectRoot, "tui-react", "src", "index.tsx")
 
 	if err := os.MkdirAll(filepath.Dir(installedBundle), 0o755); err != nil {
 		t.Fatalf("mkdir installed bundle dir: %v", err)
@@ -80,7 +80,7 @@ func TestFindTUIEntry_UsesRepoSourceForHaftCheckout(t *testing.T) {
 
 	t.Setenv("HOME", homeDir)
 
-	projectSource := filepath.Join(projectRoot, "tui", "src", "index.tsx")
+	projectSource := filepath.Join(projectRoot, "tui-react", "src", "index.tsx")
 
 	if err := os.MkdirAll(filepath.Dir(projectSource), 0o755); err != nil {
 		t.Fatalf("mkdir project source dir: %v", err)

@@ -32,6 +32,8 @@ import (
 )
 
 var agentModel string
+var agentV8 bool
+var agentLegacyTui bool
 
 var agentCmd = &cobra.Command{
 	Use:   "agent [goal]",
@@ -46,12 +48,16 @@ Set OPENAI_API_KEY or login via Codex CLI for authentication.
 Examples:
   haft agent
   haft agent "fix the failing tests in src/auth"
-  haft agent --model gpt-4o-mini "list files"`,
+  haft agent --model gpt-4o-mini "list files"
+  haft agent --v8                          # opt into v8 TUI (Bun + OpenTUI)
+  haft agent --legacy-tui                  # explicitly request React+Ink TUI (default in v8.0)`,
 	RunE: runAgent,
 }
 
 func init() {
 	agentCmd.Flags().StringVar(&agentModel, "model", "", "LLM model to use (overrides config)")
+	agentCmd.Flags().BoolVar(&agentV8, "v8", false, "Use the v8 TUI stack (Bun + OpenTUI + SolidJS). Default off in v8.0 dev cycle; flips to default once provider integration completes (see DR-v8-sunset).")
+	agentCmd.Flags().BoolVar(&agentLegacyTui, "legacy-tui", false, "Explicit opt-in to the legacy React+Ink TUI (default behavior — the flag is for symmetry with --v8 and forward-compat with the eventual default flip).")
 	rootCmd.AddCommand(agentCmd)
 }
 
@@ -71,6 +77,27 @@ func runAgent(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("%q is a slash command, not a CLI subcommand. Run 'haft' and type /%s inside the agent", args[0], args[0])
 		}
 	}
+
+	// v8 route — opt-in via --v8 for the v8.0 dev cycle. DR-v8-sunset
+	// invariant: --legacy-tui escape is always available, default flips
+	// to v8 once the provider integration slice completes.
+	if agentV8 && agentLegacyTui {
+		return fmt.Errorf("--v8 and --legacy-tui are mutually exclusive")
+	}
+	if agentV8 {
+		projectRoot, err := findProjectRoot()
+		if err != nil {
+			return fmt.Errorf("not a haft project (no .haft/ directory found): %w", err)
+		}
+		return runAgentV8(projectRoot)
+	}
+
+	// Deprecation banner per DR-v8-sunset (dec-20260513-v8-sunset-retroactive-366181da):
+	// the legacy React+Ink TUI (tui-react/) is the default in the v8.0 cycle but is
+	// scheduled for conditional removal in v8.1 once telemetry confirms <5%
+	// interactive usage. Print once per process lifetime to stderr so it does not
+	// interfere with stdout-driven agent output.
+	emitLegacyTUIBanner()
 
 	// 0. Ensure configured (run setup on first launch)
 	cfg, err := ensureConfigured()

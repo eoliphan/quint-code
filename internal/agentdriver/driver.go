@@ -2,6 +2,7 @@ package agentdriver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,6 +26,14 @@ type Driver struct {
 	// Permissions hosts pending permission resolutions. Required only when
 	// Tools.Authorize ever returns AuthorisationRequiresPrompt.
 	Permissions *PermissionGate
+	// SubAgent runs spawn_subagent tool calls when the LLM emits them.
+	// Optional — when nil, spawn calls return ErrNoSubAgentRunner as a
+	// synthetic error tool_use_completed so the LLM can recover.
+	SubAgent SubAgentRunner
+	// IsSubAgent flags this Driver as running INSIDE a subagent. When true,
+	// further spawn_subagent calls are rejected with ErrNestedSubAgent
+	// (v8.0 supports single-level subagents only).
+	IsSubAgent bool
 
 	// IDGen produces unique IDs prefixed by kind ("turn", "part", "perm").
 	// Tests inject a deterministic counter; production wires uuid.
@@ -222,6 +231,9 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 }
 
 func (d *Driver) handleToolCall(ctx context.Context, session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall) (agentcore.Session, error) {
+	if call.Name == SubAgentSpawnToolName {
+		return d.handleSubAgentSpawn(ctx, session, turnID, call)
+	}
 	now := d.Now()
 	startedPart := agentcore.NewToolUsePart(agentcore.PartID(d.IDGen("part")), now, call.CallID, call.Name, call.Args)
 	startedEvent := agentproto.PartToolUseStartedEvent{}
@@ -347,6 +359,99 @@ func (d *Driver) gatePermission(ctx context.Context, sessionID agentcore.Session
 		return "", "", err
 	}
 	return decision, reason, nil
+}
+
+// handleSubAgentSpawn dispatches a spawn_subagent tool call. The call
+// flows through the normal tool_use_started / tool_use_completed pair the
+// LLM expects to see (so its conversation state stays coherent), but
+// execution is routed through SubAgentRunner rather than ToolDispatcher.
+// The runner is responsible for the SubAgentSpawnedEvent /
+// SubAgentCompletedEvent pair and for owning the child Session lifecycle;
+// the driver only frames the tool-call result the parent turn renders.
+func (d *Driver) handleSubAgentSpawn(ctx context.Context, session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall) (agentcore.Session, error) {
+	now := d.Now()
+	startedPart := agentcore.NewToolUsePart(agentcore.PartID(d.IDGen("part")), now, call.CallID, call.Name, call.Args)
+	startedEvent := agentproto.PartToolUseStartedEvent{}
+	startedEvent.SessionID = session.ID
+	startedEvent.At = now
+	startedEvent.TurnID = turnID
+	startedEvent.PartID = startedPart.ID()
+	startedEvent.ToolCallID = call.CallID
+	startedEvent.ToolName = call.Name
+	startedEvent.Args = startedPart.Args
+	if err := d.Sink.Publish(startedEvent); err != nil {
+		return session, err
+	}
+	session, err := agentcore.AppendPart(session, turnID, startedPart, now)
+	if err != nil {
+		return session, fmt.Errorf("append subagent tool_use: %w", err)
+	}
+
+	// Rejection paths: nested spawn from a child, or no runner configured.
+	// Both surface as a synthetic error tool_use_completed so the LLM can
+	// reason about the failure without the turn collapsing.
+	if d.IsSubAgent {
+		return d.appendSubAgentErrorResult(session, turnID, call, ErrNestedSubAgent.Error())
+	}
+	if d.SubAgent == nil {
+		return d.appendSubAgentErrorResult(session, turnID, call, ErrNoSubAgentRunner.Error())
+	}
+
+	var args SubAgentSpawnArgs
+	if err := json.Unmarshal(call.Args, &args); err != nil {
+		return d.appendSubAgentErrorResult(session, turnID, call, fmt.Sprintf("spawn_subagent args decode: %v", err))
+	}
+
+	result, err := d.SubAgent.Spawn(ctx, session, turnID, args)
+	if err != nil {
+		return d.appendSubAgentErrorResult(session, turnID, call, fmt.Sprintf("subagent spawn: %v", err))
+	}
+
+	resultNow := d.Now()
+	body := result.Content
+	if body == "" {
+		body = string(result.Verdict)
+	}
+	resultPart := agentcore.NewToolResultPart(agentcore.PartID(d.IDGen("part")), resultNow, call.CallID, call.Name, body, result.IsError)
+	resultEvent := agentproto.PartToolUseCompletedEvent{}
+	resultEvent.SessionID = session.ID
+	resultEvent.At = resultNow
+	resultEvent.TurnID = turnID
+	resultEvent.PartID = resultPart.ID()
+	resultEvent.ToolCallID = call.CallID
+	resultEvent.ToolName = call.Name
+	resultEvent.Content = body
+	resultEvent.IsError = result.IsError
+	if err := d.Sink.Publish(resultEvent); err != nil {
+		return result.Session, err
+	}
+	final, err := agentcore.AppendPart(result.Session, turnID, resultPart, resultNow)
+	if err != nil {
+		return result.Session, fmt.Errorf("append subagent tool_result: %w", err)
+	}
+	return final, nil
+}
+
+// appendSubAgentErrorResult emits a synthetic tool_use_completed marking
+// the spawn as failed and returns the updated session. Used for nested
+// spawns, missing runner, args decode errors, and runner failures.
+func (d *Driver) appendSubAgentErrorResult(session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall, reason string) (agentcore.Session, error) {
+	now := d.Now()
+	body := "subagent spawn failed: " + reason
+	resultPart := agentcore.NewToolResultPart(agentcore.PartID(d.IDGen("part")), now, call.CallID, call.Name, body, true)
+	resultEvent := agentproto.PartToolUseCompletedEvent{}
+	resultEvent.SessionID = session.ID
+	resultEvent.At = now
+	resultEvent.TurnID = turnID
+	resultEvent.PartID = resultPart.ID()
+	resultEvent.ToolCallID = call.CallID
+	resultEvent.ToolName = call.Name
+	resultEvent.Content = body
+	resultEvent.IsError = true
+	if err := d.Sink.Publish(resultEvent); err != nil {
+		return session, err
+	}
+	return agentcore.AppendPart(session, turnID, resultPart, now)
 }
 
 func (d *Driver) appendDeniedToolResult(session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall, reason string) (agentcore.Session, error) {

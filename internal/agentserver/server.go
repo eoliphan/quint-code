@@ -27,6 +27,11 @@ type Server struct {
 	Store      *agentstore.Store
 	Dispatcher Dispatcher
 	Hub        *Hub
+	// AuthStatus exposes the current auth state on GET /auth/status. When
+	// nil the endpoint returns a default anonymous payload so the TUI
+	// can still render an honest "no credentials configured" header in
+	// dev / test deployments without breaking the wire contract.
+	AuthStatus AuthStatusProvider
 
 	listener net.Listener
 	httpSrv  *http.Server
@@ -109,6 +114,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /session/{id}/model", s.handleModelSet)
 	mux.HandleFunc("POST /permission/{id}", s.handlePermissionRespond)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /auth/status", s.handleAuthStatus)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {

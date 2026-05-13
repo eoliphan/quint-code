@@ -48,16 +48,24 @@ func spawnTUI(projectRoot string) (*exec.Cmd, io.WriteCloser, io.ReadCloser, err
 	return cmd, stdin, stdout, nil
 }
 
-// findTUIEntry locates the TUI entry point.
+// findTUIEntry locates the legacy React+Ink TUI entry point.
+//
+// NOTE: this resolves the v7-era TUI now living under tui-react/.
+// The v8 TUI (Bun + OpenTUI + SolidJS, occupies the freed tui/ path)
+// has its own spawn path landing in t15+ of the v8-tui-rebuild goal —
+// it does NOT share this function. Per DR-v8-sunset, the React+Ink
+// surface stays operational behind --legacy-tui for the v8.0 cycle
+// and is conditionally removed in v8.1.
+//
 // Search order:
-// 1. ~/.haft/tui/bundle.mjs (installed bundle)
-// 2. tui/src/index.tsx in the Haft repo (dev mode)
-// 3. tui/dist/tui.mjs in the Haft repo (built)
+// 1. ~/.haft/tui/bundle.mjs (installed bundle from a previous release)
+// 2. tui-react/src/index.tsx in the Haft repo (dev mode)
+// 3. tui-react/dist/tui.mjs in the Haft repo (built)
 func findTUIEntry(projectRoot string) (string, error) {
 	expectedPaths := []string{
 		filepath.Join(homeDir(), ".haft", "tui", "bundle.mjs"),
-		filepath.Join(projectRoot, "tui", "src", "index.tsx"),
-		filepath.Join(projectRoot, "tui", "dist", "tui.mjs"),
+		filepath.Join(projectRoot, "tui-react", "src", "index.tsx"),
+		filepath.Join(projectRoot, "tui-react", "dist", "tui.mjs"),
 	}
 	candidates := []string{
 		expectedPaths[0],

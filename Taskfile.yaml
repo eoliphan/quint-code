@@ -3,9 +3,11 @@ version: '3'
 vars:
   BIN_NAME: haft
   BIN_DIR: ~/.local/bin
-  TUI_DIR: tui
-  TUI_BUNDLE: tui/dist/tui.mjs
+  TUI_DIR: tui-react
+  TUI_BUNDLE: tui-react/dist/tui.mjs
   TUI_INSTALL_DIR: ~/.haft/tui
+  TUI_V8_DIR: tui
+  TUI_V8_BUNDLE: tui/dist/haft-tui.js
   OPEN_SLEIGH_RELEASE_DIR: open-sleigh/_build/prod/rel/open_sleigh
   OPEN_SLEIGH_INSTALL_DIR: ~/.haft/runtimes/open-sleigh/current
   FPF_SPEC: data/FPF/FPF-Spec.md
@@ -32,14 +34,45 @@ tasks:
       - cd {{.TUI_DIR}} && bun run typecheck
 
   tui:
-    desc: Build TUI bundle
+    desc: Build legacy React+Ink TUI bundle (tui-react/)
     cmds:
       - cd {{.TUI_DIR}} && bun run build
     sources:
-      - tui/src/**/*.ts
-      - tui/src/**/*.tsx
+      - tui-react/src/**/*.ts
+      - tui-react/src/**/*.tsx
     generates:
       - '{{.TUI_BUNDLE}}'
+
+  tui-v8-install:
+    desc: Install v8 TUI dependencies (Bun + OpenTUI + SolidJS) — see tui/README.md
+    dir: '{{.TUI_V8_DIR}}'
+    cmds:
+      - bun install
+
+  tui-v8-build:
+    desc: Build v8 TUI bundle (single-file ESM at {{.TUI_V8_BUNDLE}})
+    dir: '{{.TUI_V8_DIR}}'
+    cmds:
+      - bun run build
+    sources:
+      - tui/src/**/*.ts
+      - tui/src/**/*.tsx
+      - tui/build.ts
+      - tui/package.json
+    generates:
+      - '{{.TUI_V8_BUNDLE}}'
+
+  tui-v8-test:
+    desc: Run v8 TUI tests via Bun
+    dir: '{{.TUI_V8_DIR}}'
+    cmds:
+      - bun test
+
+  tui-v8-typecheck:
+    desc: Strict TypeScript typecheck on the v8 TUI package
+    dir: '{{.TUI_V8_DIR}}'
+    cmds:
+      - bun run typecheck
 
   fpf-pull:
     desc: Pull FPF submodule to latest upstream
@@ -74,8 +107,8 @@ tasks:
       - '{{.BIN_NAME}}'
 
   install:
-    desc: Build and install haft (CLI + TUI + Open-Sleigh runtime) locally
-    deps: [tui, fpf-refresh, open-sleigh:install-runtime]
+    desc: Build and install haft (CLI + legacy TUI + v8 TUI + Open-Sleigh runtime) locally
+    deps: [tui, tui-v8-build, fpf-refresh, open-sleigh:install-runtime]
     cmds:
       # Remove any stale `haft` in GOBIN so PATH picks up BIN_DIR/haft,
       # not a leftover `go install`'d binary from an older build.
@@ -83,8 +116,11 @@ tasks:
       - go build -o {{.BIN_DIR}}/{{.BIN_NAME}} -trimpath ./cmd/haft/
       - mkdir -p {{.TUI_INSTALL_DIR}}
       - cp {{.TUI_BUNDLE}} {{.TUI_INSTALL_DIR}}/bundle.mjs
+      - mkdir -p ~/.haft/tui-v8/current
+      - cp {{.TUI_V8_BUNDLE}} ~/.haft/tui-v8/current/haft-tui.js
       - echo "Installed {{.BIN_DIR}}/{{.BIN_NAME}}"
-      - echo "Installed {{.TUI_INSTALL_DIR}}/bundle.mjs"
+      - echo "Installed {{.TUI_INSTALL_DIR}}/bundle.mjs (legacy React+Ink)"
+      - echo "Installed ~/.haft/tui-v8/current/haft-tui.js (v8 OpenTUI — opt in with haft agent --v8)"
       - echo "Installed {{.OPEN_SLEIGH_INSTALL_DIR}}"
       - echo "Desktop — run task desktop:install separately (requires Rust toolchain)"
 
@@ -208,8 +244,8 @@ tasks:
       - mkdir -p .context
       - >-
         repomix
-        --include "cmd/**,internal/**,logger/**,tui/**,desktop/**,desktop-tauri/**,open-sleigh/**,spec/**,skills/**,scripts/**,assurance/**,db/**,*.md,*.go,go.mod,go.sum,Taskfile.yaml,*.sql,*.yaml,*.yml,*.json,*.toml"
-        --ignore ".git,.context,.haft,.task,.cache,.claude,.codex,.crush,.cursor,.playwright-mcp,.zenflow,.zenflow-attachments,data/FPF,desktop-tauri/target,desktop/frontend/node_modules,tui/node_modules,open-sleigh/_build,open-sleigh/deps,node_modules,dist,build,tmp,coverage.out,internal/cli/fpf.db,*.db,*.sqlite,*.log,haft"
+        --include "cmd/**,internal/**,logger/**,tui/**,tui-react/**,desktop/**,desktop-tauri/**,open-sleigh/**,spec/**,skills/**,scripts/**,assurance/**,db/**,*.md,*.go,go.mod,go.sum,Taskfile.yaml,*.sql,*.yaml,*.yml,*.json,*.toml"
+        --ignore ".git,.context,.haft,.task,.cache,.claude,.codex,.crush,.cursor,.playwright-mcp,.zenflow,.zenflow-attachments,data/FPF,desktop-tauri/target,desktop/frontend/node_modules,tui/node_modules,tui-react/node_modules,open-sleigh/_build,open-sleigh/deps,node_modules,dist,build,tmp,coverage.out,internal/cli/fpf.db,*.db,*.sqlite,*.log,haft"
         --output ".context/{{.TIMESTAMP}}_repomix.xml"
         --parsable-style
         --include-diffs
@@ -314,14 +350,14 @@ tasks:
     desc: Remove local build artifacts
     cmds:
       - rm -f {{.BIN_NAME}}
-      - rm -rf tui/dist
+      - rm -rf tui-react/dist tui/dist
       - rm -rf open-sleigh/_build
 
   cleanup:
     desc: Remove all built binaries and installed files
     cmds:
       - rm -f {{.BIN_NAME}}
-      - rm -rf tui/dist
+      - rm -rf tui-react/dist tui/dist
       - rm -rf open-sleigh/_build
       - rm -f {{.BIN_DIR}}/{{.BIN_NAME}}
       - rm -rf {{.TUI_INSTALL_DIR}}
