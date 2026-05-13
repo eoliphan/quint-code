@@ -108,7 +108,7 @@ tasks:
 
   install:
     desc: Build and install haft (CLI + legacy TUI + v8 TUI + Open-Sleigh runtime) locally
-    deps: [tui, tui-v8-build, fpf-refresh, open-sleigh:install-runtime]
+    deps: [tui, fpf-refresh, open-sleigh:install-runtime]
     cmds:
       # Remove any stale `haft` in GOBIN so PATH picks up BIN_DIR/haft,
       # not a leftover `go install`'d binary from an older build.
@@ -116,11 +116,19 @@ tasks:
       - go build -o {{.BIN_DIR}}/{{.BIN_NAME}} -trimpath ./cmd/haft/
       - mkdir -p {{.TUI_INSTALL_DIR}}
       - cp {{.TUI_BUNDLE}} {{.TUI_INSTALL_DIR}}/bundle.mjs
+      # v8 TUI: copy the source tree (NOT a bare bundle — @opentui/core
+      # ships a platform-specific native module the single-file bundle
+      # cannot inline). Then `bun install` at the install location so
+      # node_modules sits next to src/. The Go-side spawn (v8_agent.go)
+      # sets cmd.Dir to the install dir so bun resolves modules from
+      # there.
+      - rm -rf ~/.haft/tui-v8/current
       - mkdir -p ~/.haft/tui-v8/current
-      - cp {{.TUI_V8_BUNDLE}} ~/.haft/tui-v8/current/haft-tui.js
+      - rsync -a --exclude node_modules --exclude dist {{.TUI_V8_DIR}}/ ~/.haft/tui-v8/current/
+      - bash -c 'cd ~/.haft/tui-v8/current && bun install --frozen-lockfile'
       - echo "Installed {{.BIN_DIR}}/{{.BIN_NAME}}"
       - echo "Installed {{.TUI_INSTALL_DIR}}/bundle.mjs (legacy React+Ink)"
-      - echo "Installed ~/.haft/tui-v8/current/haft-tui.js (v8 OpenTUI — opt in with haft agent --v8)"
+      - echo "Installed ~/.haft/tui-v8/current/ (v8 OpenTUI source tree + node_modules — opt in with haft agent --v8)"
       - echo "Installed {{.OPEN_SLEIGH_INSTALL_DIR}}"
       - echo "Desktop — run task desktop:install separately (requires Rust toolchain)"
 

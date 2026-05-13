@@ -76,13 +76,13 @@ func runAgentV8(projectRoot string) error {
 		return fmt.Errorf("agentserver returned unparseable addr %q", boundAddr)
 	}
 
-	tuiEntry, err := findV8TUIEntry(projectRoot)
+	tuiEntry, tuiCwd, err := findV8TUIEntry(projectRoot)
 	if err != nil {
 		_ = srv.Shutdown(context.Background())
 		return err
 	}
 
-	tuiCmd, err := spawnV8TUI(tuiEntry, port)
+	tuiCmd, err := spawnV8TUI(tuiEntry, tuiCwd, port)
 	if err != nil {
 		_ = srv.Shutdown(context.Background())
 		return err
@@ -132,36 +132,59 @@ func runAgentV8(projectRoot string) error {
 	return firstErr
 }
 
-// findV8TUIEntry locates the v8 TUI bundle. Search order:
-//  1. ~/.haft/tui-v8/<version>/haft-tui.js (installed bundle from t17)
-//  2. tui/dist/haft-tui.js in the Haft repo (built locally via task tui-v8-build)
-//  3. tui/src/main.tsx in the Haft repo (dev mode, no build needed)
+// findV8TUIEntry locates the v8 TUI entrypoint AND its bun cwd. The
+// cwd matters because @opentui/core ships a platform-specific native
+// module (@opentui/core-<os>-<arch>) that bun resolves from the cwd's
+// node_modules at runtime — a bare single-file bundle without an
+// adjacent node_modules cannot start.
 //
-// Differs from findTUIEntry (legacy React+Ink at tui-react/) — entirely
-// separate spawn paths so v8.0 cycle can run both surfaces in parallel.
-func findV8TUIEntry(projectRoot string) (string, error) {
-	candidates := []string{
-		filepath.Join(homeDir(), ".haft", "tui-v8", "current", "haft-tui.js"),
-		filepath.Join(projectRoot, "tui", "dist", "haft-tui.js"),
-		filepath.Join(projectRoot, "tui", "src", "main.tsx"),
-	}
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
+// Search order:
+//  1. ~/.haft/tui-v8/current/ as an installed package directory
+//     (must contain src/main.tsx + node_modules — t17 install pipeline
+//     will produce this; broken single-file bundle from the v8.0 alpha
+//     install is no longer supported).
+//  2. <projectRoot>/tui/src/main.tsx in the Haft repo (dev mode —
+//     bun resolves modules from <projectRoot>/tui/node_modules).
+//
+// Returns (entry, cwd, error). The caller passes cwd as cmd.Dir so
+// bun's module resolver finds the native binding.
+func findV8TUIEntry(projectRoot string) (string, string, error) {
+	installedDir := filepath.Join(homeDir(), ".haft", "tui-v8", "current")
+	installedEntry := filepath.Join(installedDir, "src", "main.tsx")
+	installedNodeModules := filepath.Join(installedDir, "node_modules")
+
+	if _, err := os.Stat(installedEntry); err == nil {
+		if _, err := os.Stat(installedNodeModules); err == nil {
+			return installedEntry, installedDir, nil
 		}
 	}
-	return "", fmt.Errorf("v8 TUI bundle not found; expected at one of %s / %s / %s — run `task tui-v8-build` to produce the local bundle, or wait for the t17 install pipeline", candidates[0], candidates[1], candidates[2])
+
+	repoTuiDir := filepath.Join(projectRoot, "tui")
+	repoEntry := filepath.Join(repoTuiDir, "src", "main.tsx")
+	repoNodeModules := filepath.Join(repoTuiDir, "node_modules")
+
+	if _, err := os.Stat(repoEntry); err == nil {
+		if _, err := os.Stat(repoNodeModules); err == nil {
+			return repoEntry, repoTuiDir, nil
+		}
+		return "", "", fmt.Errorf("v8 TUI source at %s but node_modules missing — run `cd %s && bun install`", repoEntry, repoTuiDir)
+	}
+
+	return "", "", fmt.Errorf("v8 TUI not found; expected at %s (installed) or %s (haft repo dev). For v8.0 alpha, run `haft agent --v8` from the haft source tree", installedDir, repoTuiDir)
 }
 
-// spawnV8TUI starts the Bun process with HAFT_AGENT_PORT in env.
-// stdin / stdout / stderr inherit from the parent so the TUI owns
-// the terminal directly.
-func spawnV8TUI(entry string, port int) (*exec.Cmd, error) {
+// spawnV8TUI starts the Bun process with HAFT_AGENT_PORT in env and
+// cmd.Dir set to the TUI package root so bun resolves node_modules
+// (including the platform-specific @opentui/core-<os>-<arch> binding)
+// correctly. stdin / stdout / stderr inherit from the parent so the
+// TUI owns the terminal directly.
+func spawnV8TUI(entry, cwd string, port int) (*exec.Cmd, error) {
 	bunPath, err := exec.LookPath("bun")
 	if err != nil {
-		return nil, fmt.Errorf("bun not found in PATH (required for v8 TUI; see tui/README.md)")
+		return nil, fmt.Errorf("bun not found in PATH (required for v8 TUI)")
 	}
 	cmd := exec.Command(bunPath, "run", entry)
+	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), fmt.Sprintf("HAFT_AGENT_PORT=%d", port))
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
