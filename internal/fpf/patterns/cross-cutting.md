@@ -90,3 +90,21 @@ A concept does not live in one place. When renaming or unifying, audit all its c
 - **Downstream dependents** — other projects importing the concept
 
 Typical failure: localized fix misses reviewer-facing or archive surfaces → concept resurrects via routing-by-use → rework cascades. Run a fixed-point pass: rename, scan all carrier classes, rename again, repeat until no occurrences remain. Declare done only after one clean sweep with zero hits. Combine with F.13 Lexical Continuity for graceful deprecation of the old name.
+
+## X-SOURCE-RESTORATION: Restore Work-Relevant Source Before Reliance
+**Trigger:** About to rely on a dashboard, generated explanation, credential view, projection output, copied approval, provenance label, schema/API wording, or any agent-produced artifact as if it were evidence or authorization
+**Spec:** A.15.4 Work-Relevant Source Restoration; uses A.15 role/method/plan/work kernel and E.17 source-support vocabulary
+**Core:** verify, explore
+
+Dashboards, generated explanations, credential views, green tiles, copied approvals, provenance labels, schema/API text, and composed source chains often look ready for action **before** the project source that makes the reliance admissible has been recovered. The carrier looks authoritative; the underlying source may not exist, may be stale, may not say what the carrier says it says, or may belong to a different scope than the consumer assumes.
+
+The detection rule "Object ≠ Description ≠ Carrier" tells you a problem can exist. **A.15.4 is the operational rule** for what to do about it: before approval, permission, gate passage, evidence use, engineering justification, role/status currentness, or release/reliance — recover the exact project source that makes the action admissible, by appearance is not enough.
+
+Practical sweep for an engineering agent:
+- A dashboard says "100% green" → recover the source check definitions and the data they read; appearance is not evidence.
+- A credential view shows a role assignment → recover the assignment record, scope, valid-until; the carrier is a display.
+- A generated explanation cites a fact → recover the cited artifact and verify the citation; LLM output is a carrier, not source.
+- A projection (e.g. `/h-view brief`, `/h-view rationale`) shows decision rationale → recover the underlying DecisionRecord; projections render, they do not authorize.
+- Composed source chains (one doc references another references another) → walk the chain to the load-bearing source; intermediate carriers are not source by transitivity.
+
+Anti-pattern: skipping restoration because the carrier "looks authoritative" — that is the exact failure A.15.4 names. Authority-looking reliance must be tuned down to verifiable source before the work proceeds.

@@ -343,7 +343,7 @@ These compressed patterns are your floor — always in context. For full detail,
 - **DEC-01 Record structure**: Problem frame + Decision + Rationale + Consequences. Traceable.
 - **DEC-04 Invariants**: Load-bearing constraints: before, during, after. Violation = rollback.
 - **DEC-05 Rollback**: Triggers + Steps + Blast radius + Timeline. Honest about reversibility.
-- **DEC-06 Predictions**: "If X, we see Y within Z under K." Falsifiable. Become measurement targets.
+- **DEC-06 Predictions**: "If X, we see Y within Z under K." Falsifiable. Become measurement targets. Predictions are causal claims — check realizability: can you actually sample the target distribution under physical / ethical / operational constraints? See C.27 / C.28 for causal-use calculus and CounterfactualSamplingRealizabilityProfile.
 - **DEC-08 Counterargument**: Strongest genuine attack on the chosen option. Self-deception check.
 
 ### Verify
@@ -358,3 +358,4 @@ These compressed patterns are your floor — always in context. For full detail,
 - **X-TRANSFORMER**: External agent decides. System doesn't self-improve. Human is the principal.
 - **X-STATEMENT-TYPE**: Every load-bearing sentence = rule / promise / explanation / gate / evidence. Mixed = L1 error; decompose.
 - **X-FANOUT-AUDIT**: On concept rename, sweep all carriers: prose + filenames + manifests + review bundles + provenance + tests + schemas. Fixed-point until clean.
+- **X-SOURCE-RESTORATION** (A.15.4): Before relying on a dashboard, generated explanation, credential view, projection output, or any agent-produced artifact as evidence — recover the project source that makes the reliance admissible. The carrier may look ready for action before the underlying source is verifiable. Object ≠ Description ≠ Carrier is detection; source restoration is the operational rule.
