@@ -93,6 +93,12 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 
 	var textBuf strings.Builder
 	var reasoningBuf strings.Builder
+	// The streaming protocol identifies an accumulating part by part_id.
+	// Allocate the id ONCE per buffer (first delta), reuse it for every
+	// subsequent delta in the same logical part, then reuse it again for
+	// the materialized part on flush. Reset to empty after flushing so the
+	// next chunk gets a fresh id.
+	var textPartID, reasoningPartID agentcore.PartID
 
 	flushText := func(s agentcore.Session) (agentcore.Session, error) {
 		if textBuf.Len() == 0 {
@@ -100,7 +106,9 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 		}
 		text := textBuf.String()
 		textBuf.Reset()
-		return d.emitToolPart(s, turnID, text, agentcore.PartKindText)
+		partID := textPartID
+		textPartID = ""
+		return d.emitToolPart(s, turnID, partID, text, agentcore.PartKindText)
 	}
 	flushReasoning := func(s agentcore.Session) (agentcore.Session, error) {
 		if reasoningBuf.Len() == 0 {
@@ -108,7 +116,9 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 		}
 		text := reasoningBuf.String()
 		reasoningBuf.Reset()
-		return d.emitToolPart(s, turnID, text, agentcore.PartKindReasoning)
+		partID := reasoningPartID
+		reasoningPartID = ""
+		return d.emitToolPart(s, turnID, partID, text, agentcore.PartKindReasoning)
 	}
 
 	for {
@@ -138,11 +148,17 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 			}
 			switch e := ev.(type) {
 			case ProviderTextDelta:
+				if textPartID == "" {
+					textPartID = agentcore.PartID(d.IDGen("part"))
+				}
 				textBuf.WriteString(e.Delta)
-				d.broadcastTextDelta(session.ID, turnID, e.Delta)
+				d.broadcastTextDelta(session.ID, turnID, textPartID, e.Delta)
 			case ProviderReasoningDelta:
+				if reasoningPartID == "" {
+					reasoningPartID = agentcore.PartID(d.IDGen("part"))
+				}
 				reasoningBuf.WriteString(e.Delta)
-				d.broadcastReasoningDelta(session.ID, turnID, e.Delta)
+				d.broadcastReasoningDelta(session.ID, turnID, reasoningPartID, e.Delta)
 			case ProviderToolCall:
 				session, err = flushText(session)
 				if err != nil {
@@ -316,9 +332,11 @@ func (d *Driver) emitTurnStarted(sessionID agentcore.SessionID, turnID agentcore
 	return d.Sink.Publish(ev)
 }
 
-func (d *Driver) emitToolPart(session agentcore.Session, turnID agentcore.TurnID, content string, kind agentcore.PartKind) (agentcore.Session, error) {
+func (d *Driver) emitToolPart(session agentcore.Session, turnID agentcore.TurnID, partID agentcore.PartID, content string, kind agentcore.PartKind) (agentcore.Session, error) {
 	now := d.Now()
-	partID := agentcore.PartID(d.IDGen("part"))
+	if partID == "" {
+		partID = agentcore.PartID(d.IDGen("part"))
+	}
 	switch kind {
 	case agentcore.PartKindText:
 		// Text deltas are wire-only; the materialized TextPart is journaled
@@ -339,22 +357,22 @@ func (d *Driver) emitToolPart(session agentcore.Session, turnID agentcore.TurnID
 	return session, fmt.Errorf("emitToolPart: unsupported kind %s", kind)
 }
 
-func (d *Driver) broadcastTextDelta(sessionID agentcore.SessionID, turnID agentcore.TurnID, delta string) {
+func (d *Driver) broadcastTextDelta(sessionID agentcore.SessionID, turnID agentcore.TurnID, partID agentcore.PartID, delta string) {
 	ev := agentproto.PartTextDeltaEvent{}
 	ev.SessionID = sessionID
 	ev.At = d.Now()
 	ev.TurnID = turnID
-	ev.PartID = agentcore.PartID(d.IDGen("part-delta"))
+	ev.PartID = partID
 	ev.Delta = delta
 	_ = d.Sink.Publish(ev)
 }
 
-func (d *Driver) broadcastReasoningDelta(sessionID agentcore.SessionID, turnID agentcore.TurnID, delta string) {
+func (d *Driver) broadcastReasoningDelta(sessionID agentcore.SessionID, turnID agentcore.TurnID, partID agentcore.PartID, delta string) {
 	ev := agentproto.PartReasoningDeltaEvent{}
 	ev.SessionID = sessionID
 	ev.At = d.Now()
 	ev.TurnID = turnID
-	ev.PartID = agentcore.PartID(d.IDGen("part-delta"))
+	ev.PartID = partID
 	ev.Delta = delta
 	_ = d.Sink.Publish(ev)
 }

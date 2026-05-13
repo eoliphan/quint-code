@@ -139,6 +139,27 @@ func TestDriver_TextOnlyTurn_EmitsExpectedEvents(t *testing.T) {
 	if tp.Text != "Hello, world" {
 		t.Fatalf("text accumulation: %q", tp.Text)
 	}
+
+	// All deltas in one unbroken text part must carry the SAME part_id so
+	// clients can accumulate by id. The finalized TextPart must also reuse
+	// that id.
+	var deltaIDs []agentcore.PartID
+	for _, ev := range sink.Events {
+		if td, ok := ev.(agentproto.PartTextDeltaEvent); ok {
+			deltaIDs = append(deltaIDs, td.PartID)
+		}
+	}
+	if len(deltaIDs) < 2 || deltaIDs[0] == "" {
+		t.Fatalf("expected at least 2 non-empty delta part ids, got %v", deltaIDs)
+	}
+	for i := 1; i < len(deltaIDs); i++ {
+		if deltaIDs[i] != deltaIDs[0] {
+			t.Fatalf("delta part ids diverge: %v", deltaIDs)
+		}
+	}
+	if tp.ID() != deltaIDs[0] {
+		t.Fatalf("materialized text part id %q does not match delta id %q", tp.ID(), deltaIDs[0])
+	}
 }
 
 func TestDriver_ToolCall_GrantedRunsTool(t *testing.T) {

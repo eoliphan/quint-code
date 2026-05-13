@@ -132,6 +132,22 @@ func (s *Store) Append(id agentcore.SessionID, ev agentproto.AgentEvent) error {
 		return fmt.Errorf("agentstore: event session %s does not match journal %s", ev.Session(), id)
 	}
 
+	// Require an existing session. openJournal would otherwise materialize
+	// an empty events.jsonl under a freshly created directory, leaving an
+	// invalid journal (no SessionCreated header) that future Load calls
+	// reject and future Create calls refuse because the file exists.
+	current, err := s.Load(id)
+	if err != nil {
+		return err
+	}
+	// Validate the transition in-memory BEFORE writing. A rejected event
+	// (e.g. model.switched while a turn is running) would otherwise be
+	// persisted and make the journal unreplayable on the next Load.
+	next, err := Apply(current, ev)
+	if err != nil {
+		return err
+	}
+
 	journal, err := s.openJournal(id)
 	if err != nil {
 		return err
@@ -140,13 +156,6 @@ func (s *Store) Append(id agentcore.SessionID, ev agentproto.AgentEvent) error {
 		return err
 	}
 
-	// Refresh meta.json by replaying the journal. This is O(N) per append;
-	// good enough for M1 — M2 will switch to incremental meta updates if
-	// listing latency becomes a concern.
-	session, err := s.Load(id)
-	if err != nil {
-		return fmt.Errorf("refresh meta: %w", err)
-	}
 	meta, err := s.readMeta(id)
 	if err != nil {
 		return fmt.Errorf("read existing meta: %w", err)
@@ -154,7 +163,7 @@ func (s *Store) Append(id agentcore.SessionID, ev agentproto.AgentEvent) error {
 	if ev.Kind() == agentproto.EventSessionArchived {
 		meta.Archived = true
 	}
-	return s.writeMeta(id, session, meta.ProjectID, meta.Archived)
+	return s.writeMeta(id, next, meta.ProjectID, meta.Archived)
 }
 
 // List enumerates session metadata, optionally filtered by project. Empty

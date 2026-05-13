@@ -451,6 +451,57 @@ func TestStore_AppendRejectsCrossSessionEvent(t *testing.T) {
 	}
 }
 
+func TestStore_AppendOnMissingSessionReturnsNotFound(t *testing.T) {
+	store := freshStore(t)
+	rename := agentproto.SessionUpdatedEvent{}
+	rename.SessionID = "ghost"
+	rename.At = time.Now()
+	rename.Title = "should not land"
+	err := store.Append("ghost", rename)
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expected ErrSessionNotFound, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.root, "ghost")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Append must not materialize a session directory; stat err: %v", err)
+	}
+}
+
+func TestStore_AppendValidatesBeforeJournaling(t *testing.T) {
+	// Switching the model while a turn is in flight must not leave an
+	// unreplayable event behind: Apply rejects the transition, so Append
+	// must refuse to write to disk.
+	store := freshStore(t)
+	now := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := store.Create("s1", "proj", "x", sampleModel(), now); err != nil {
+		t.Fatal(err)
+	}
+	firstPart := agentcore.NewTextPart("p1", now.Add(time.Second), "live")
+	firstPayload, err := agentproto.EncodePart(firstPart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := agentproto.TurnStartedEvent{}
+	started.SessionID = "s1"
+	started.At = now.Add(time.Second)
+	started.TurnID = "t1"
+	started.Role = agentcore.TurnRoleUser
+	started.FirstPart = firstPayload
+	if err := store.Append("s1", started); err != nil {
+		t.Fatal(err)
+	}
+	switched := agentproto.ModelSwitchedEvent{}
+	switched.SessionID = "s1"
+	switched.At = now.Add(2 * time.Second)
+	switched.Model = agentcore.ModelChoice{Provider: agentcore.ProviderAnthropic, Model: "claude-sonnet-4-6"}
+	if err := store.Append("s1", switched); !errors.Is(err, agentcore.ErrTurnAlreadyRunning) {
+		t.Fatalf("expected ErrTurnAlreadyRunning, got %v", err)
+	}
+	// Journal must still replay cleanly.
+	if _, err := store.Load("s1"); err != nil {
+		t.Fatalf("journal poisoned by rejected append: %v", err)
+	}
+}
+
 func TestStore_JournalFilePresent(t *testing.T) {
 	store := freshStore(t)
 	now := time.Now()
