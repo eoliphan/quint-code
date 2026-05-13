@@ -119,8 +119,17 @@ func NewReasoningPart(id PartID, now time.Time, text string) ReasoningPart {
 }
 
 func NewToolUsePart(id PartID, now time.Time, callID, name string, args []byte) ToolUsePart {
-	cloned := make([]byte, len(args))
-	copy(cloned, args)
+	// Args carries the raw JSON the LLM produced. Downstream wire formats
+	// (PartToolUseStartedEvent.Args, toolUseBody.Args) hold it as a
+	// json.RawMessage, and a non-nil empty []byte marshals as invalid JSON
+	// ("unexpected end of JSON input") which aborts event encoding. A
+	// no-argument tool call is normal — collapse empty/nil inputs to a nil
+	// Args so RawMessage encodes as JSON null instead.
+	var cloned []byte
+	if len(args) > 0 {
+		cloned = make([]byte, len(args))
+		copy(cloned, args)
+	}
 	return ToolUsePart{
 		partBase:   newPartBase(id, now),
 		ToolCallID: callID,

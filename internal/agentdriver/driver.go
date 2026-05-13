@@ -231,7 +231,10 @@ func (d *Driver) handleToolCall(ctx context.Context, session agentcore.Session, 
 	startedEvent.PartID = startedPart.ID()
 	startedEvent.ToolCallID = call.CallID
 	startedEvent.ToolName = call.Name
-	startedEvent.Args = call.Args
+	// Use the part's normalised Args (see agentcore.NewToolUsePart): an
+	// empty but non-nil []byte from the provider would otherwise crash
+	// json.RawMessage encoding and fail the turn before the tool runs.
+	startedEvent.Args = startedPart.Args
 	if err := d.Sink.Publish(startedEvent); err != nil {
 		return session, err
 	}

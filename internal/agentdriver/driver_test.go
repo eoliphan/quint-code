@@ -221,6 +221,52 @@ func TestDriver_ToolCall_GrantedRunsTool(t *testing.T) {
 	}
 }
 
+// TestDriver_ToolCall_EmptyArgsEncodes guards against a provider emitting a
+// no-argument tool call as a non-nil empty []byte. json.RawMessage of an
+// empty byte slice marshals as invalid JSON, which would fail event
+// encoding on the journal's CombinedSink and abort the turn before the
+// tool runs. The driver must normalise empty Args before assigning them
+// to the wire event so the round-trip succeeds.
+func TestDriver_ToolCall_EmptyArgsEncodes(t *testing.T) {
+	provider := &fakeProvider{events: []ProviderEvent{
+		ProviderToolCall{CallID: "tc1", Name: "ping", Args: []byte{}},
+		ProviderTurnDone{},
+	}}
+	tools := &fakeTools{
+		authorise: map[string]AuthorisationVerdict{"ping": AuthorisationGranted},
+		results:   map[string]string{"ping": "pong"},
+	}
+	sink := &CollectingSink{}
+	now, _ := newFixedClock()
+
+	d := &Driver{
+		Provider: provider,
+		Tools:    tools,
+		Sink:     sink,
+		IDGen:    newCounterIDGen(),
+		Now:      now,
+	}
+	if _, err := d.Drive(context.Background(), freshSession(), "ping"); err != nil {
+		t.Fatalf("Drive: %v", err)
+	}
+
+	var started agentproto.PartToolUseStartedEvent
+	for _, ev := range sink.Events {
+		if s, ok := ev.(agentproto.PartToolUseStartedEvent); ok {
+			started = s
+			break
+		}
+	}
+	if started.ToolName != "ping" {
+		t.Fatalf("no tool_use.started event captured: %+v", sink.Events)
+	}
+	// Encode the event the way the journal would; an empty non-nil
+	// json.RawMessage would crash here with "unexpected end of JSON input".
+	if _, err := agentproto.EncodeEvent(started); err != nil {
+		t.Fatalf("EncodeEvent: %v", err)
+	}
+}
+
 func TestDriver_ToolCall_RequiresPromptApproved(t *testing.T) {
 	provider := &fakeProvider{events: []ProviderEvent{
 		ProviderToolCall{CallID: "tc1", Name: "bash", Args: []byte(`{"cmd":"ls"}`)},

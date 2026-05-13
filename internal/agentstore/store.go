@@ -103,9 +103,13 @@ func (s *Store) Create(id agentcore.SessionID, projectID, title string, model ag
 	}
 
 	session := agentcore.NewSession(id, projectID, title, model, now)
-	if err := s.writeMeta(id, session, projectID, false); err != nil {
-		return agentcore.Session{}, err
-	}
+	// meta.json is a denormalised cache for List; the journal is the
+	// authoritative record. The SessionCreated event is already durable, so
+	// failing here would tell the caller "creation failed" while replay
+	// would happily reconstruct the session. Treat meta as best-effort —
+	// any subsequent successful Append rewrites it. See Append for the
+	// matching rationale on post-commit meta failures.
+	_ = s.writeMeta(id, session, projectID, false)
 	return session, nil
 }
 
@@ -183,14 +187,26 @@ func (s *Store) Append(id agentcore.SessionID, ev agentproto.AgentEvent) error {
 		return err
 	}
 
+	// The journal write above is the authoritative commit; once it
+	// returns nil, the event is durable and Load will replay it. meta.json
+	// is a denormalised cache used only by List for fast listing. Failing
+	// here after a successful journal commit would surface a "Publish
+	// failed" error to the driver, which would skip emitting turn.failed
+	// (or any other terminal event) for a turn the journal already records
+	// as Running — replay and the in-memory dispatcher would diverge and
+	// every future submit would be blocked by HasLiveTurn. Treat the meta
+	// refresh as best-effort: any subsequent successful Append rewrites
+	// meta.json, and a stale UpdatedAt in List is strictly preferable to a
+	// stuck session.
 	meta, err := s.readMeta(id)
 	if err != nil {
-		return fmt.Errorf("read existing meta: %w", err)
+		return nil
 	}
 	if ev.Kind() == agentproto.EventSessionArchived {
 		meta.Archived = true
 	}
-	return s.writeMeta(id, next, meta.ProjectID, meta.Archived)
+	_ = s.writeMeta(id, next, meta.ProjectID, meta.Archived)
+	return nil
 }
 
 // List enumerates session metadata, optionally filtered by project. Empty

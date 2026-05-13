@@ -504,6 +504,53 @@ func TestStore_AppendValidatesBeforeJournaling(t *testing.T) {
 	}
 }
 
+// TestStore_AppendSucceedsWhenMetaWriteFails locks the session directory
+// read-only after Create so writeMeta cannot create its tempfile, while the
+// already-open journal FD keeps accepting Appends. Append must still
+// succeed (the journal is authoritative); otherwise the driver would see a
+// turn.started publish failure and skip emitting turn.failed for a turn the
+// journal already records as Running.
+func TestStore_AppendSucceedsWhenMetaWriteFails(t *testing.T) {
+	store := freshStore(t)
+	now := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	created, err := store.Create("s1", "proj", "x", sampleModel(), now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	dir := filepath.Join(store.root, "s1")
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("chmod ro: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	firstPart := agentcore.NewTextPart("p1", now.Add(time.Second), "hi")
+	firstPayload, err := agentproto.EncodePart(firstPart)
+	if err != nil {
+		t.Fatalf("encode part: %v", err)
+	}
+	started := agentproto.TurnStartedEvent{}
+	started.SessionID = created.ID
+	started.At = now.Add(time.Second)
+	started.TurnID = "t1"
+	started.Role = agentcore.TurnRoleUser
+	started.FirstPart = firstPayload
+	if err := store.Append(created.ID, started); err != nil {
+		t.Fatalf("Append must not fail on post-commit meta failure: %v", err)
+	}
+
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod rw: %v", err)
+	}
+	loaded, err := store.Load(created.ID)
+	if err != nil {
+		t.Fatalf("Load after partial commit: %v", err)
+	}
+	if len(loaded.History) != 1 || loaded.History[0].State != agentcore.TurnStateRunning {
+		t.Fatalf("journal must replay the committed turn: %+v", loaded.History)
+	}
+}
+
 func TestStore_JournalFilePresent(t *testing.T) {
 	store := freshStore(t)
 	now := time.Now()
