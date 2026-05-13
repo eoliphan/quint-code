@@ -81,6 +81,15 @@ func (g *PermissionGate) Resolve(id agentcore.PermissionID, decision agentcore.P
 	}
 }
 
+// Discard removes a pending permission without resolving it. Used when
+// the driver failed to publish the corresponding permission.requested
+// event and must roll back the gate registration.
+func (g *PermissionGate) Discard(id agentcore.PermissionID) {
+	g.mu.Lock()
+	delete(g.pending, id)
+	g.mu.Unlock()
+}
+
 // Wait blocks until the gate resolves the given permission or the context
 // is canceled. Cancellation cleans up the pending entry to avoid leaking
 // channels.

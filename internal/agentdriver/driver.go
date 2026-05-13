@@ -219,6 +219,11 @@ func (d *Driver) gatePermission(ctx context.Context, sessionID agentcore.Session
 	}
 	id := agentcore.PermissionID(d.IDGen("perm"))
 	now := d.Now()
+	// Register the pending entry BEFORE advertising the request. The
+	// permission.requested event is broadcast over SSE on Publish; a fast
+	// operator could POST /permission/{id} before the gate has an entry,
+	// causing Resolve to return ErrUnknownPermission.
+	ch := d.Permissions.Open(id)
 	requested := agentproto.PermissionRequestedEvent{}
 	requested.SessionID = sessionID
 	requested.At = now
@@ -228,9 +233,9 @@ func (d *Driver) gatePermission(ctx context.Context, sessionID agentcore.Session
 	requested.ToolName = call.Name
 	requested.Args = call.Args
 	if err := d.Sink.Publish(requested); err != nil {
+		d.Permissions.Discard(id)
 		return "", "", err
 	}
-	ch := d.Permissions.Open(id)
 	decision, reason, err := d.Permissions.Wait(ctx, id, ch)
 	if err != nil {
 		return "", "", err

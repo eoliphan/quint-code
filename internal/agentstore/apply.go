@@ -51,7 +51,7 @@ func Apply(s agentcore.Session, ev agentproto.AgentEvent) (agentcore.Session, er
 	}
 	switch e := ev.(type) {
 	case agentproto.SessionCreatedEvent:
-		return agentcore.NewSession(e.SessionID, "", e.Title, e.Model, e.At), nil
+		return agentcore.NewSession(e.SessionID, e.ProjectID, e.Title, e.Model, e.At), nil
 	case agentproto.SessionUpdatedEvent:
 		return agentcore.Rename(s, e.Title, e.At), nil
 	case agentproto.SessionArchivedEvent:

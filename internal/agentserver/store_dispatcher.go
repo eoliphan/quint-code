@@ -59,6 +59,7 @@ func (d *StoreDispatcher) handleSessionCreate(c agentproto.SessionCreateCmd) (Di
 	created := agentproto.SessionCreatedEvent{}
 	created.SessionID = id
 	created.At = now
+	created.ProjectID = c.ProjectID
 	created.Title = c.Title
 	created.Model = c.Model
 	return DispatchResult{

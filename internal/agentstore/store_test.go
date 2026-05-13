@@ -188,6 +188,7 @@ func generate1000Events(sessionID agentcore.SessionID) []agentproto.AgentEvent {
 	created := agentproto.SessionCreatedEvent{}
 	created.SessionID = sessionID
 	created.At = now
+	created.ProjectID = "proj"
 	created.Title = "Replay test"
 	created.Model = sampleModel()
 	out = append(out, created)

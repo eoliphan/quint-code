@@ -59,10 +59,16 @@ func (eventBase) eventSeal()                     {}
 
 // SessionCreatedEvent: server created a new Session row, history empty,
 // model pinned. Sent once per Session lifetime.
+//
+// ProjectID is the free-form project identifier the session belongs to.
+// It is journaled here so replay reconstructs the same Session value the
+// caller observed at creation; meta.json carries a redundant copy for
+// fast listing.
 type SessionCreatedEvent struct {
 	eventBase
-	Title string                `json:"title"`
-	Model agentcore.ModelChoice `json:"model"`
+	ProjectID string                `json:"project_id,omitempty"`
+	Title     string                `json:"title"`
+	Model     agentcore.ModelChoice `json:"model"`
 }
 
 func (SessionCreatedEvent) Kind() EventKind { return EventSessionCreated }

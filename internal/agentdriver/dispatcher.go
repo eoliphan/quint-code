@@ -99,6 +99,7 @@ func (d *Dispatcher) handleSessionCreate(c agentproto.SessionCreateCmd) (agentse
 	created := agentproto.SessionCreatedEvent{}
 	created.SessionID = id
 	created.At = now
+	created.ProjectID = c.ProjectID
 	created.Title = c.Title
 	created.Model = c.Model
 	return agentserver.DispatchResult{
@@ -147,11 +148,16 @@ func (d *Dispatcher) handleTurnSubmit(ctx context.Context, c agentproto.TurnSubm
 
 	turnCtx, cancel := context.WithCancel(context.Background())
 	d.mu.Lock()
-	if existing, ok := d.running[c.SessionID]; ok {
-		// Cancel the previous turn before starting a new one. agentcore
-		// also rejects concurrent turns at append time, but we cancel
-		// proactively to free the goroutine.
-		existing()
+	if _, ok := d.running[c.SessionID]; ok {
+		// A turn is already in flight. Reject rather than replace: the
+		// previous goroutine still owns the journal until it appends a
+		// terminal event, and proactively canceling does not wait for
+		// that — starting a new Drive immediately would append turn.started
+		// while the journal still shows the previous turn as running,
+		// producing an unreplayable journal.
+		d.mu.Unlock()
+		cancel()
+		return agentserver.DispatchResult{}, fmt.Errorf("%w: session %s", agentcore.ErrTurnAlreadyRunning, c.SessionID)
 	}
 	d.running[c.SessionID] = cancel
 	d.mu.Unlock()

@@ -89,6 +89,7 @@ func (s *Store) Create(id agentcore.SessionID, projectID, title string, model ag
 	created := agentproto.SessionCreatedEvent{}
 	created.SessionID = id
 	created.At = now
+	created.ProjectID = projectID
 	created.Title = title
 	created.Model = model
 
