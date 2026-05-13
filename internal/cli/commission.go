@@ -36,6 +36,11 @@ var (
 	commissionFromDecisionValidFor         string
 	commissionFromDecisionValidUntil       string
 	commissionFromDecisionSliceDescription string
+	commissionLifecycleEvent               string
+	commissionLifecycleVerdict             string
+	commissionLifecycleReason              string
+	commissionLifecyclePayload             string
+	commissionLifecyclePayloadFile         string
 )
 
 var commissionCmd = &cobra.Command{
@@ -115,6 +120,19 @@ var commissionCancelCmd = &cobra.Command{
 	RunE:  runCommissionCancel,
 }
 
+var commissionCompleteExternalCmd = &cobra.Command{
+	Use:   "complete-external <commission-id>",
+	Short: "Record terminal success/failure for an externally-run WorkCommission",
+	Long: `Record terminal success/failure for an externally-run WorkCommission.
+
+This is the operator path for external runners that already wrote local runtime
+evidence outside Haft Harness. If the commission is still preflighting, this
+command first records a passed preflight/start event, then records the terminal
+complete_or_block event. It does not apply, merge, or publish any workspace diff.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runCommissionCompleteExternal,
+}
+
 func init() {
 	commissionCreateCmd.Flags().StringVar(&commissionJSONPath, "json", "", "JSON payload path, or '-' for stdin")
 	registerCommissionFromDecisionFlags(commissionCreateFromDecisionCmd)
@@ -128,6 +146,12 @@ func init() {
 	commissionRequeueCmd.Flags().String("reason", "operator_requested_requeue", "reason recorded on the recovery event")
 	commissionCancelCmd.Flags().StringVar(&commissionRunnerID, "runner", "haft-cli", "runner id for the cancellation event")
 	commissionCancelCmd.Flags().String("reason", "operator_cancelled", "reason recorded on the cancellation event")
+	commissionCompleteExternalCmd.Flags().StringVar(&commissionRunnerID, "runner", "haft-cli", "runner id for the lifecycle events")
+	commissionCompleteExternalCmd.Flags().StringVar(&commissionLifecycleVerdict, "verdict", "completed", "terminal verdict: completed, pass, failed, or blocked")
+	commissionCompleteExternalCmd.Flags().StringVar(&commissionLifecycleReason, "reason", "external_runtime_completed", "reason recorded on lifecycle events")
+	commissionCompleteExternalCmd.Flags().StringVar(&commissionLifecycleEvent, "event", "external_runtime_terminal", "terminal event name recorded on completion")
+	commissionCompleteExternalCmd.Flags().StringVar(&commissionLifecyclePayload, "payload", "", "JSON object payload, or @path to read JSON from a file")
+	commissionCompleteExternalCmd.Flags().StringVar(&commissionLifecyclePayloadFile, "payload-file", "", "JSON object payload file")
 
 	commissionCmd.AddCommand(commissionCreateCmd)
 	commissionCmd.AddCommand(commissionCreateFromDecisionCmd)
@@ -139,6 +163,7 @@ func init() {
 	commissionCmd.AddCommand(commissionClaimCmd)
 	commissionCmd.AddCommand(commissionRequeueCmd)
 	commissionCmd.AddCommand(commissionCancelCmd)
+	commissionCmd.AddCommand(commissionCompleteExternalCmd)
 	rootCmd.AddCommand(commissionCmd)
 }
 
@@ -318,6 +343,120 @@ func runCommissionCancel(cmd *cobra.Command, args []string) error {
 		result, err := handleHaftCommission(ctx, store, params)
 		return writeCommissionResult(cmd, result, err)
 	})
+}
+
+func runCommissionCompleteExternal(cmd *cobra.Command, args []string) error {
+	payload, err := commissionLifecyclePayloadFromFlags(cmd)
+	if err != nil {
+		return err
+	}
+
+	params := map[string]any{
+		"commission_id": args[0],
+		"runner_id":     commissionRunnerID,
+		"event":         commissionLifecycleEvent,
+		"verdict":       commissionLifecycleVerdict,
+		"reason":        commissionLifecycleReason,
+	}
+	if payload != nil {
+		params["payload"] = payload
+	}
+
+	return withCommissionStore(func(ctx context.Context, store *artifact.Store) error {
+		result, err := completeExternalWorkCommission(ctx, store, params)
+		return writeCommissionResult(cmd, result, err)
+	})
+}
+
+func completeExternalWorkCommission(ctx context.Context, store *artifact.Store, params map[string]any) (string, error) {
+	commissionID := strings.TrimSpace(stringArg(params, "commission_id"))
+	if commissionID == "" {
+		return "", fmt.Errorf("commission_id is required")
+	}
+
+	shown, err := handleHaftCommission(ctx, store, map[string]any{
+		"action":        "show",
+		"commission_id": commissionID,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	var decoded map[string]map[string]any
+	if err := json.Unmarshal([]byte(shown), &decoded); err != nil {
+		return "", fmt.Errorf("decode WorkCommission %s: %w", commissionID, err)
+	}
+	commission := decoded["commission"]
+	state := strings.TrimSpace(stringField(commission, "state"))
+
+	switch state {
+	case "preflighting":
+		_, err := handleHaftCommission(ctx, store, map[string]any{
+			"action":        "start_after_preflight",
+			"commission_id": commissionID,
+			"runner_id":     stringArg(params, "runner_id"),
+			"event":         "external_preflight_passed",
+			"verdict":       "pass",
+			"reason":        stringArg(params, "reason"),
+		})
+		if err != nil {
+			return "", err
+		}
+	case "running":
+		// Already started; record only the terminal lifecycle event below.
+	case "completed", "completed_with_projection_debt", "failed", "blocked_policy", "blocked_stale", "blocked_conflict":
+		if externalCompletionVerdictMatchesState(state, stringArg(params, "verdict")) {
+			return shown, nil
+		}
+		return "", fmt.Errorf("commission_complete_external_already_terminal: state=%s verdict=%s", state, stringArg(params, "verdict"))
+	default:
+		return "", fmt.Errorf("commission_complete_external_not_allowed: state=%s allowed_states=preflighting,running", state)
+	}
+
+	completeArgs := copyStringAnyMap(params)
+	completeArgs["action"] = "complete_or_block"
+	return handleHaftCommission(ctx, store, completeArgs)
+}
+
+func externalCompletionVerdictMatchesState(state string, verdict string) bool {
+	switch strings.TrimSpace(verdict) {
+	case "pass", "completed":
+		return state == "completed" || state == "completed_with_projection_debt"
+	case "failed":
+		return state == "failed"
+	case "blocked":
+		return strings.HasPrefix(state, "blocked_")
+	default:
+		return false
+	}
+}
+
+func commissionLifecyclePayloadFromFlags(cmd *cobra.Command) (map[string]any, error) {
+	payload := strings.TrimSpace(commissionLifecyclePayload)
+	payloadFile := strings.TrimSpace(commissionLifecyclePayloadFile)
+	if payload != "" && payloadFile != "" {
+		return nil, fmt.Errorf("use either --payload or --payload-file, not both")
+	}
+	if strings.HasPrefix(payload, "@") {
+		payloadFile = strings.TrimSpace(strings.TrimPrefix(payload, "@"))
+		payload = ""
+	}
+	if payloadFile != "" {
+		data, err := os.ReadFile(payloadFile)
+		if err != nil {
+			return nil, fmt.Errorf("read payload file %s: %w", payloadFile, err)
+		}
+		payload = string(data)
+	}
+	if payload == "" {
+		return nil, nil
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		return nil, fmt.Errorf("parse lifecycle payload JSON: %w", err)
+	}
+	return decoded, nil
 }
 
 func withCommissionStore(fn func(context.Context, *artifact.Store) error) error {
