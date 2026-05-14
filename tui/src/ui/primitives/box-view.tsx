@@ -12,9 +12,16 @@ export interface BoxViewProps {
   readonly paddingRight?: number;
   readonly paddingTop?: number;
   readonly paddingBottom?: number;
+  readonly marginTop?: number;
+  readonly marginBottom?: number;
+  readonly marginLeft?: number;
+  readonly marginRight?: number;
   readonly flexDirection?: "row" | "column";
+  readonly flexGrow?: number;
+  readonly flexShrink?: number;
   readonly alignItems?: "flex-start" | "flex-end" | "center" | "stretch";
   readonly width?: number;
+  readonly minHeight?: number;
   readonly children: JSX.Element;
 }
 
@@ -29,12 +36,19 @@ export function BoxView(props: BoxViewProps): JSX.Element {
     <box
       backgroundColor={bg()}
       flexDirection={props.flexDirection ?? "column"}
+      flexGrow={props.flexGrow}
+      flexShrink={props.flexShrink}
       paddingLeft={props.paddingLeft}
       paddingRight={props.paddingRight}
       paddingTop={props.paddingTop}
       paddingBottom={props.paddingBottom}
+      marginTop={props.marginTop}
+      marginBottom={props.marginBottom}
+      marginLeft={props.marginLeft}
+      marginRight={props.marginRight}
       alignItems={props.alignItems}
       width={props.width}
+      minHeight={props.minHeight}
     >
       {props.children}
     </box>

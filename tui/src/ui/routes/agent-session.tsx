@@ -1,4 +1,16 @@
 // L8: SessionRoute — agent chat view composed from L7 widgets.
+//
+// Layout:
+//   ┌───── session header (title · model · live spinner) ────────┐
+//   │ scrollbox: turn feed (sticky bottom)                       │
+//   │   ↳ TurnView (user block + assistant stack)                │
+//   │   ↳ TurnView ...                                           │
+//   │ optional permission prompt overlay                         │
+//   ├──── divider ──────                                          │
+//   │ InputArea (focused <input>)                                │
+//   │ ToastStack                                                  │
+//   │ KeyHintBar                                                  │
+//   └────────────────────────────────────────────────────────────┘
 
 import { type JSX, For, Show } from "solid-js";
 import { TextView } from "../primitives/text-view.js";
@@ -36,11 +48,11 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
   };
 
   return (
-    <BoxView paddingLeft={1} paddingRight={1}>
+    <BoxView flexGrow={1} paddingLeft={1} paddingRight={1}>
       <Show
         when={props.session()}
         fallback={
-          <BoxView flexDirection="row">
+          <BoxView flexDirection="row" paddingTop={1}>
             <SpinnerView />
             <TextView fg="fgMuted"> connecting…</TextView>
           </BoxView>
@@ -49,8 +61,9 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
         {(session) => {
           const s = session();
           return (
-            <BoxView>
-              <BoxView flexDirection="row">
+            <BoxView flexGrow={1}>
+              <BoxView flexDirection="row" paddingTop={1} paddingBottom={1}>
+                <TextView fg="toolName">▣ </TextView>
                 <TextView>{s.title}</TextView>
                 <TextView fg="fgDim"> · </TextView>
                 <TextView fg="toolName">{modelLabel(s.model)}</TextView>
@@ -61,16 +74,18 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
                 </Show>
               </BoxView>
               <Divider />
-              <For each={[...turns(s)]}>
-                {(t) => (
-                  <TurnView
-                    turn={t}
-                    onInspectArtifact={(id) =>
-                      props.dispatch({ tag: "InspectArtifact", artifactId: id })
-                    }
-                  />
-                )}
-              </For>
+              <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
+                <For each={[...turns(s)]}>
+                  {(t) => (
+                    <TurnView
+                      turn={t}
+                      onInspectArtifact={(id) =>
+                        props.dispatch({ tag: "InspectArtifact", artifactId: id })
+                      }
+                    />
+                  )}
+                </For>
+              </scrollbox>
               <Show when={pending()}>
                 {(p) => (
                   <PermissionPrompt permission={p()} onResolve={props.dispatch} />
