@@ -64,7 +64,12 @@ export const TurnCompletedSchema = Schema.extend(
   TurnEventBase,
   Schema.Struct({
     kind: Schema.Literal("turn.completed"),
-    verdict: VerdictSchema,
+    // The Go side does not emit `verdict` on the success path — the
+    // event is only fired when the turn finished cleanly, so verdict
+    // is implicitly "pass". Keep the field optional on the wire so
+    // future server versions can attach a richer verdict without a
+    // wire break.
+    verdict: Schema.optional(VerdictSchema),
   }),
 );
 

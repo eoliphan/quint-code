@@ -403,10 +403,12 @@ function makeStepBoundaryPart(idRaw: string, label: string, now: Date): PartStep
 }
 
 function firstPartFromEvent(raw: unknown, now: Date): Part {
-  // turn.started carries a first_part of unknown shape — for now,
-  // synthesize a text part if raw is a string; otherwise emit a
-  // step_boundary placeholder. Full part decoder lands when the Go
-  // side starts emitting structured PartPayload (Layer P spec).
+  // turn.started carries `first_part` in the tagged-envelope shape
+  // {kind, id, body:{at, text, ...}}. Extract the inner body and use
+  // the part's own id when it is present so journal replays produce
+  // identical part values. Fall through to step_boundary only when
+  // the envelope is malformed — every well-formed text turn produces
+  // a real text part here.
   if (typeof raw === "string") {
     return {
       id: unsafeBrand<string, "PartID">(`part-firstof-${now.getTime()}`) as PartID,
@@ -415,13 +417,33 @@ function firstPartFromEvent(raw: unknown, now: Date): Part {
       createdAt: now,
     };
   }
-  if (raw !== null && typeof raw === "object" && "text" in raw && typeof (raw as { text: unknown }).text === "string") {
-    return {
-      id: unsafeBrand<string, "PartID">(`part-firstof-${now.getTime()}`) as PartID,
-      kind: "text",
-      text: (raw as { text: string }).text,
-      createdAt: now,
-    };
+  if (raw !== null && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    const kind = obj["kind"];
+    const id = typeof obj["id"] === "string" ? (obj["id"] as string) : `part-firstof-${now.getTime()}`;
+    const body = obj["body"];
+    if (kind === "text" && body !== null && typeof body === "object") {
+      const text = (body as Record<string, unknown>)["text"];
+      if (typeof text === "string") {
+        return {
+          id: unsafeBrand<string, "PartID">(id) as PartID,
+          kind: "text",
+          text,
+          createdAt: now,
+        };
+      }
+    }
+    // Legacy/flat shape: {text:"..."} with no envelope. Kept so a
+    // future Go-side simplification doesn't silently break the
+    // first-part rendering path.
+    if (typeof obj["text"] === "string") {
+      return {
+        id: unsafeBrand<string, "PartID">(id) as PartID,
+        kind: "text",
+        text: obj["text"] as string,
+        createdAt: now,
+      };
+    }
   }
   return {
     id: unsafeBrand<string, "PartID">(`part-firstof-${now.getTime()}`) as PartID,
