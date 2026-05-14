@@ -9,9 +9,20 @@
 import { Context, Effect, Layer, type Stream as StreamNS } from "effect";
 import { Stream } from "effect";
 import { createSignal, type Accessor } from "solid-js";
+import { appendFileSync } from "node:fs";
 import type { Session } from "../../core/domain/session.js";
 import { reduce, type ReduceError } from "../../core/reducer/reduce.js";
 import type { AgentEventWire } from "../../core/wire/events.js";
+
+const DEBUG_LOG = process.env["HAFT_TUI_DEBUG_LOG"];
+function debugLog(msg: string): void {
+  if (DEBUG_LOG === undefined) return;
+  try {
+    appendFileSync(DEBUG_LOG, `[${new Date().toISOString()}] ${msg}\n`);
+  } catch {
+    // best-effort logging; never fail the reducer pump
+  }
+}
 
 export interface SessionStore {
   /** Current Session value (or undefined before session.created). */
@@ -36,9 +47,13 @@ const make = Effect.sync<SessionStore>(() => {
     if (!result.ok) {
       // Reducer errors are surfaceable but non-fatal; routes can
       // observe via a parallel "lastError" signal in v8.1+ if needed.
+      debugLog(`reject ${ev.kind}: ${JSON.stringify(result.error)}`);
       return false;
     }
     setCurrent(() => result.value);
+    const s = result.value;
+    const turnCount = s.state === "idle" ? s.history.length : s.history.length + 1;
+    debugLog(`accept ${ev.kind} sessionState=${s.state} turns=${turnCount}`);
     return true;
   };
 

@@ -1,16 +1,4 @@
 // L8: SessionRoute — agent chat view composed from L7 widgets.
-//
-// Layout:
-//   ┌───── session header (title · model · live spinner) ────────┐
-//   │ scrollbox: turn feed (sticky bottom)                       │
-//   │   ↳ TurnView (user block + assistant stack)                │
-//   │   ↳ TurnView ...                                           │
-//   │ optional permission prompt overlay                         │
-//   ├──── divider ──────                                          │
-//   │ InputArea (focused <input>)                                │
-//   │ ToastStack                                                  │
-//   │ KeyHintBar                                                  │
-//   └────────────────────────────────────────────────────────────┘
 
 import { type JSX, For, Show } from "solid-js";
 import { TextView } from "../primitives/text-view.js";
@@ -38,6 +26,15 @@ export interface AgentSessionRouteProps {
 }
 
 export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
+  // Every accessor below reads props.session() inside its body so
+  // Solid re-runs the computation whenever SessionStore.applyEvent
+  // installs a new Session value. Using `const s = props.session()`
+  // at the top of the route ONCE captures a stale reference and the
+  // chat feed never updates — that bug bit us when streams of
+  // turn.started / part.text.completed / turn.completed events
+  // reached SessionStore but the UI kept rendering the empty
+  // bootstrap session.
+
   const pending = (): PermissionPending | undefined => {
     const s = props.session();
     if (s === undefined) return undefined;
@@ -45,6 +42,17 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
       if (isPending(p)) return p;
     }
     return undefined;
+  };
+
+  const turnList = (): ReadonlyArray<ReturnType<typeof turns>[number]> => {
+    const s = props.session();
+    if (s === undefined) return [];
+    return turns(s);
+  };
+
+  const inFlight = (): boolean => {
+    const s = props.session();
+    return s !== undefined && hasLiveTurn(s);
   };
 
   return (
@@ -58,51 +66,45 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
           </BoxView>
         }
       >
-        {(session) => {
-          const s = session();
-          return (
-            <BoxView flexGrow={1}>
-              <BoxView flexDirection="row" paddingTop={1} paddingBottom={1}>
-                <TextView fg="toolName">▣ </TextView>
-                <TextView>{s.title}</TextView>
-                <TextView fg="fgDim"> · </TextView>
-                <TextView fg="toolName">{modelLabel(s.model)}</TextView>
-                <Show when={hasLiveTurn(s)}>
-                  <TextView fg="fgDim"> · </TextView>
-                  <SpinnerView fg="caret" />
-                  <TextView fg="fgDim"> turn in flight</TextView>
-                </Show>
-              </BoxView>
-              <Divider />
-              <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
-                <For each={[...turns(s)]}>
-                  {(t) => (
-                    <TurnView
-                      turn={t}
-                      onInspectArtifact={(id) =>
-                        props.dispatch({ tag: "InspectArtifact", artifactId: id })
-                      }
-                    />
-                  )}
-                </For>
-              </scrollbox>
-              <Show when={pending()}>
-                {(p) => (
-                  <PermissionPrompt permission={p()} onResolve={props.dispatch} />
-                )}
-              </Show>
-            </BoxView>
-          );
-        }}
+        <BoxView flexGrow={1}>
+          <BoxView flexDirection="row" paddingTop={1} paddingBottom={1}>
+            <TextView fg="toolName">▣ </TextView>
+            <TextView>{props.session()?.title ?? ""}</TextView>
+            <TextView fg="fgDim"> · </TextView>
+            <TextView fg="toolName">
+              {(() => {
+                const s = props.session();
+                return s === undefined ? "" : modelLabel(s.model);
+              })()}
+            </TextView>
+            <Show when={inFlight()}>
+              <TextView fg="fgDim"> · </TextView>
+              <SpinnerView fg="caret" />
+              <TextView fg="fgDim"> turn in flight</TextView>
+            </Show>
+          </BoxView>
+          <Divider />
+          <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
+            <For each={turnList()}>
+              {(t) => (
+                <TurnView
+                  turn={t}
+                  onInspectArtifact={(id) =>
+                    props.dispatch({ tag: "InspectArtifact", artifactId: id })
+                  }
+                />
+              )}
+            </For>
+          </scrollbox>
+          <Show when={pending()}>
+            {(p) => (
+              <PermissionPrompt permission={p()} onResolve={props.dispatch} />
+            )}
+          </Show>
+        </BoxView>
       </Show>
       <Divider />
-      <InputArea
-        disabled={(() => {
-          const s = props.session();
-          return s !== undefined && hasLiveTurn(s);
-        })()}
-        onSubmit={props.dispatch}
-      />
+      <InputArea disabled={inFlight()} onSubmit={props.dispatch} />
       <ToastStack entries={props.toasts} />
       <KeyHintBar hints={props.hints} />
     </BoxView>

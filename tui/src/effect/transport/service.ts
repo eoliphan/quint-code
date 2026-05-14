@@ -251,9 +251,23 @@ function dispatchFrame(
   const decoded = decodeAgentEvent(flat);
   if (Either.isRight(decoded)) {
     void emit.single(decoded.right);
+    return;
   }
-  // Unknown / invalid events: drop silently. The route layer may want
-  // a notification channel for this in v8.1+.
+  // Unknown / invalid events: log when debug env is set so SSE decode
+  // misses can be diagnosed without a full Effect log infra. Stays
+  // silent in production.
+  const log = process.env["HAFT_TUI_DEBUG_LOG"];
+  if (log === undefined) return;
+  try {
+    const fs = require("node:fs") as typeof import("node:fs");
+    const kind = (flat as { kind?: unknown }).kind ?? "?";
+    fs.appendFileSync(
+      log,
+      `[${new Date().toISOString()}] sse-decode-miss kind=${String(kind)} reason=${JSON.stringify(decoded.left)}\n`,
+    );
+  } catch {
+    // best effort
+  }
 }
 
 function flattenEnvelope(raw: unknown): unknown {
