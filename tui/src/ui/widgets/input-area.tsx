@@ -1,8 +1,9 @@
 // L7: InputArea — operator types here; Enter dispatches SubmitTurn.
 //
-// Pure widget — receives a Solid setter for the draft text and an
-// onSubmit callback that constructs the Action. The L8 route owns
-// the focus + state.
+// Backed by OpenTUI's <input> renderable. Enter triggers onSubmit
+// which the route maps to a SubmitTurn Action. When `disabled` is
+// true (a turn is in flight), focus is dropped so keystrokes are
+// ignored — the surface is read-only until the turn ends.
 
 import { type JSX, createSignal, Show } from "solid-js";
 import { TextView } from "../primitives/text-view.js";
@@ -16,34 +17,34 @@ export interface InputAreaProps {
 }
 
 export function InputArea(props: InputAreaProps): JSX.Element {
-  const [text, setText] = createSignal("");
+  // The OpenTUI <input> owns its own buffer; we surface a controlled
+  // value only when the caller cares (for now nobody outside does).
+  const [_value, setValue] = createSignal("");
 
-  const submit = (): void => {
-    const value = text();
-    if (value.trim().length === 0) return;
-    props.onSubmit({ tag: "SubmitTurn", text: value });
-    setText("");
+  const handleSubmit = (text: string): void => {
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return;
+    props.onSubmit({ tag: "SubmitTurn", text: trimmed });
+    setValue("");
   };
-  // submit is only invoked by InputArea's own keybinding wiring at the
-  // route layer (L8); kept here so the API is coherent for future
-  // direct-input variants.
-  void submit;
 
   return (
-    <BoxView paddingTop={1}>
+    <BoxView paddingTop={1} flexDirection="row">
       <TextView fg="caret">›</TextView>
       <Show
-        when={text().length > 0}
+        when={!props.disabled}
         fallback={
-          <TextView fg="fgDim">
-            {props.placeholder ?? "type a message and press enter"}
-          </TextView>
+          <BoxView paddingLeft={1}>
+            <TextView fg="warning">turn in flight — input disabled</TextView>
+          </BoxView>
         }
       >
-        <TextView fg="fg">{text()}</TextView>
-      </Show>
-      <Show when={props.disabled}>
-        <TextView fg="warning">(turn in flight — input disabled)</TextView>
+        <input
+          focused
+          placeholder={props.placeholder ?? "type a message and press enter"}
+          onInput={((v: string) => setValue(v)) as never}
+          onSubmit={(handleSubmit) as never}
+        />
       </Show>
     </BoxView>
   );

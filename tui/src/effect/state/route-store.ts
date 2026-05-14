@@ -17,7 +17,7 @@ export class RouteStoreService extends Context.Tag("haft/RouteStore")<
 >() {}
 
 const make = Effect.sync<RouteStore>(() => {
-  const [active, setActive] = createSignal<RouteName>("agent.session");
+  const [active, setActive] = createSignal<RouteName>("home");
   const [inspected, setInspected] = createSignal<string | undefined>(undefined);
 
   const navigate = (to: RouteName): void => { setActive(() => to); };

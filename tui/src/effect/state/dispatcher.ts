@@ -95,6 +95,14 @@ const make: Effect.Effect<Dispatcher, never, Deps> = Effect.gen(function* () {
         );
       }
       case "CreateSession":
+        // Server publishes session.created over SSE; the SessionStore
+        // pump picks it up and the reducer transitions
+        // SessionIdle → SessionWithLiveTurn. The route hop happens here
+        // (rather than reactively on session.current()) because the
+        // SSE round-trip is what authorises the transition — flipping
+        // the route prematurely would surface the "connecting…"
+        // fallback for the duration of the network hop, which is
+        // visually identical to a broken boot.
         return client
           .sessionCreate({
             project_id: "haft",
@@ -106,6 +114,7 @@ const make: Effect.Effect<Dispatcher, never, Deps> = Effect.gen(function* () {
             },
           })
           .pipe(
+            Effect.tap(() => Effect.sync(() => route.navigate("agent.session"))),
             Effect.asVoid,
             Effect.catchAll(reportRpc("create session")),
           );

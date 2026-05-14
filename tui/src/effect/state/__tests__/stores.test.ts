@@ -29,9 +29,9 @@ describe("RouteStore", () => {
   test("navigate + inspectArtifact", async () => {
     const program = Effect.gen(function* () {
       const r = yield* RouteStoreService;
-      expect(r.active()).toBe("agent.session");
-      r.navigate("home");
       expect(r.active()).toBe("home");
+      r.navigate("agent.session");
+      expect(r.active()).toBe("agent.session");
       r.inspectArtifact("dec-123");
       expect(r.active()).toBe("fpf.inspector");
       expect(r.inspectedArtifactId()).toBe("dec-123");
