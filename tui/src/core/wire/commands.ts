@@ -16,7 +16,7 @@ export const SessionCreateRequest = Schema.Struct({
 });
 
 export const SessionCreateResponse = Schema.Struct({
-  id: Schema.String,
+  session_id: Schema.String,
 });
 
 // ---- turn.submit ----

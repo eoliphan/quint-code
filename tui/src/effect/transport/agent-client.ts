@@ -75,7 +75,7 @@ const make: Effect.Effect<AgentClient, never, TransportService> = Effect.gen(fun
 
   const sessionCreate: AgentClient["sessionCreate"] = (body) =>
     transport.postJson("/session", body, decodeSessionCreateResponse).pipe(
-      Effect.map((r) => ({ id: r.id as unknown as SessionID })),
+      Effect.map((r) => ({ id: r.session_id as unknown as SessionID })),
     );
 
   const turnSubmit: AgentClient["turnSubmit"] = (id, text) =>
