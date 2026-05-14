@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/m0n0x41d/haft/internal/agentcore"
-	"github.com/m0n0x41d/haft/internal/agentproto"
 	"github.com/m0n0x41d/haft/internal/agentserver"
 	"github.com/m0n0x41d/haft/internal/agentstore"
 )
@@ -54,17 +53,7 @@ func runAgentV8(projectRoot string) error {
 	}
 
 	srv := agentserver.NewServer("127.0.0.1:0", store, dispatcher, nil)
-	srv.AuthStatus = agentserver.AuthStatusFunc(func() agentproto.AuthStatusPayload {
-		// v8.0 dev path: no LLM driver wired here yet (production wiring
-		// adapts internal/provider to agentdriver.Provider in a later
-		// slice). Report honest "none" so the TUI renders a clear
-		// "no credentials configured" banner.
-		return agentproto.AuthStatusPayload{
-			Provider:       "none",
-			Model:          "",
-			HasCredentials: false,
-		}
-	})
+	srv.AuthStatus = agentserver.AuthStatusFunc(realAuthStatus)
 
 	boundAddr, srvErrCh, err := srv.Start()
 	if err != nil {

@@ -17,7 +17,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/m0n0x41d/haft/internal/agentcore"
-	"github.com/m0n0x41d/haft/internal/agentproto"
 	"github.com/m0n0x41d/haft/internal/agentserver"
 	"github.com/m0n0x41d/haft/internal/agentstore"
 )
@@ -102,15 +101,7 @@ func runV8Serve(_ *cobra.Command, _ []string) error {
 	}
 
 	srv := agentserver.NewServer(v8ServeAddr, store, dispatcher, nil)
-	srv.AuthStatus = agentserver.AuthStatusFunc(func() agentproto.AuthStatusPayload {
-		// Smoke path: no driver wired, so no usable provider auth. Report
-		// honest "none" so the TUI / curl client sees the actual state.
-		return agentproto.AuthStatusPayload{
-			Provider:       "none",
-			Model:          "",
-			HasCredentials: false,
-		}
-	})
+	srv.AuthStatus = agentserver.AuthStatusFunc(realAuthStatus)
 
 	boundAddr, errCh, err := srv.Start()
 	if err != nil {
