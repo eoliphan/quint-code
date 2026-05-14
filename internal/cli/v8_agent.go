@@ -16,8 +16,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/m0n0x41d/haft/internal/agentcore"
+	"github.com/m0n0x41d/haft/internal/agentdriver"
+	"github.com/m0n0x41d/haft/internal/agentdriver/providers"
+	"github.com/m0n0x41d/haft/internal/agentproto"
 	"github.com/m0n0x41d/haft/internal/agentserver"
 	"github.com/m0n0x41d/haft/internal/agentstore"
+	"github.com/m0n0x41d/haft/internal/config"
 )
 
 // runAgentV8 is the v8 stack spawn lifecycle. Boots agentserver on
@@ -39,21 +43,31 @@ func runAgentV8(projectRoot string) error {
 	}
 	defer func() { _ = store.Close() }()
 
-	var sessionCounter atomic.Int64
-	dispatcher := &agentserver.StoreDispatcher{
-		Store: store,
-		IDGen: func() agentcore.SessionID {
-			id := uuid.NewString()
-			if id == "" {
-				id = fmt.Sprintf("sess-%d", sessionCounter.Add(1))
-			}
-			return agentcore.SessionID(id)
-		},
-		Now: time.Now,
+	idGen := newSessionIDGen()
+
+	dispatcher, drvErr := buildDispatcher(store, idGen)
+	if drvErr != nil {
+		// Credentials missing or provider construction failed. Fall back to
+		// session lifecycle only — the home screen will surface the
+		// "no credentials" state via /auth/status and `haft login` fixes it.
+		fmt.Fprintf(os.Stderr, "haft agent --v8: driver init skipped (%v); turns will be rejected until `haft login` succeeds\n", drvErr)
+		dispatcher = &agentserver.StoreDispatcher{Store: store, IDGen: idGen, Now: time.Now}
 	}
 
 	srv := agentserver.NewServer("127.0.0.1:0", store, dispatcher, nil)
 	srv.AuthStatus = agentserver.AuthStatusFunc(realAuthStatus)
+
+	// agentdriver.Dispatcher publishes events through the same Hub the
+	// server hosts; rewire it now that the server's Hub is final. The
+	// StoreDispatcher fallback path has no Hub coupling.
+	if drv, ok := dispatcher.(*agentdriver.Dispatcher); ok {
+		drv.Driver.Sink = &agentdriver.CombinedSink{
+			Store: store,
+			Broadcast: func(ev agentproto.AgentEvent) {
+				srv.Hub.Publish(ev)
+			},
+		}
+	}
 
 	boundAddr, srvErrCh, err := srv.Start()
 	if err != nil {
@@ -119,6 +133,77 @@ func runAgentV8(projectRoot string) error {
 		firstErr = fmt.Errorf("agentserver shutdown: %w", err)
 	}
 	return firstErr
+}
+
+// newSessionIDGen returns a SessionID generator that prefers uuid and
+// falls back to a monotonically increasing counter when the random
+// reader is unavailable. Shared by Driver and Store dispatchers.
+func newSessionIDGen() func() agentcore.SessionID {
+	var counter atomic.Int64
+	return func() agentcore.SessionID {
+		id := uuid.NewString()
+		if id == "" {
+			id = fmt.Sprintf("sess-%d", counter.Add(1))
+		}
+		return agentcore.SessionID(id)
+	}
+}
+
+// buildDispatcher constructs the production DriverDispatcher when
+// credentials resolve cleanly. Returns the wired Dispatcher AND an
+// error path the caller uses to fall back to lifecycle-only mode.
+//
+// Today only the OpenAI / codex provider is supported by the v8 driver
+// — the Anthropic adapter ships in a later slice. When the configured
+// model belongs to Anthropic, return an error rather than guessing.
+func buildDispatcher(store *agentstore.Store, idGen func() agentcore.SessionID) (agentserver.Dispatcher, error) {
+	cfg, err := config.Load()
+	if err != nil || cfg == nil {
+		return nil, fmt.Errorf("config.Load: %w", err)
+	}
+	model := cfg.Model
+	if model == "" {
+		return nil, errors.New("no model configured (set HAFT_MODEL or run `haft login`)")
+	}
+	providerID := config.ProviderForModel(model)
+	if providerID == "" {
+		return nil, fmt.Errorf("cannot determine provider for model %q", model)
+	}
+	if providerID != "openai" {
+		return nil, fmt.Errorf("v8 driver supports openai/codex only, got provider %q for model %q", providerID, model)
+	}
+	auth := cfg.GetAuth(providerID)
+	if auth.APIKey == "" && auth.AccessToken == "" {
+		return nil, fmt.Errorf("no credentials for provider %q — run `haft login`", providerID)
+	}
+
+	llm, err := providers.NewOpenAIAdapter(model)
+	if err != nil {
+		return nil, fmt.Errorf("OpenAI adapter: %w", err)
+	}
+
+	driver := &agentdriver.Driver{
+		Provider: llm,
+		Tools:    providers.NoOpTools{},
+		IDGen: func(kind string) string {
+			id := uuid.NewString()
+			if id == "" {
+				return fmt.Sprintf("%s-fallback", kind)
+			}
+			return fmt.Sprintf("%s-%s", kind, id)
+		},
+		Now: time.Now,
+	}
+	perms := agentdriver.NewPermissionGate()
+
+	// NewDispatcher wires Driver.Sink against a placeholder Hub it
+	// constructs from the (nil, fn) closure below; the real Hub is
+	// substituted in runAgentV8 once srv.Hub is the canonical one.
+	hubPlaceholder := agentserver.NewHub()
+	disp := agentdriver.NewDispatcher(store, hubPlaceholder, driver, perms)
+	disp.IDGen = idGen
+	disp.Now = time.Now
+	return disp, nil
 }
 
 // findV8TUIEntry locates the v8 TUI entrypoint AND its bun cwd. The

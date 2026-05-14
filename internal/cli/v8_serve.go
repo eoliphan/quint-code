@@ -17,6 +17,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/m0n0x41d/haft/internal/agentcore"
+	"github.com/m0n0x41d/haft/internal/agentdriver"
+	"github.com/m0n0x41d/haft/internal/agentproto"
 	"github.com/m0n0x41d/haft/internal/agentserver"
 	"github.com/m0n0x41d/haft/internal/agentstore"
 )
@@ -68,9 +70,6 @@ func init() {
 }
 
 func runV8Serve(_ *cobra.Command, _ []string) error {
-	if v8ServeWithDrv {
-		return errors.New("--with-driver: production wiring not implemented yet; ship via the cobra cut-over (t15+)")
-	}
 	if err := os.MkdirAll(v8ServeStoreRoot, 0o755); err != nil {
 		return fmt.Errorf("create store root: %w", err)
 	}
@@ -86,22 +85,41 @@ func runV8Serve(_ *cobra.Command, _ []string) error {
 	defer func() { _ = store.Close() }()
 
 	var idCounter atomic.Int64
-	dispatcher := &agentserver.StoreDispatcher{
-		Store: store,
-		IDGen: func() agentcore.SessionID {
-			// Production uses uuid.NewString() — keep deterministic
-			// fallback if the random reader is unavailable on this host.
-			id := uuid.NewString()
-			if id == "" {
-				id = fmt.Sprintf("sess-%d", idCounter.Add(1))
-			}
-			return agentcore.SessionID(id)
-		},
-		Now: time.Now,
+	idGen := func() agentcore.SessionID {
+		// Production uses uuid.NewString() — keep deterministic
+		// fallback if the random reader is unavailable on this host.
+		id := uuid.NewString()
+		if id == "" {
+			id = fmt.Sprintf("sess-%d", idCounter.Add(1))
+		}
+		return agentcore.SessionID(id)
+	}
+
+	var dispatcher agentserver.Dispatcher
+	driverLabel := "store"
+	if v8ServeWithDrv {
+		drv, err := buildDispatcher(store, idGen)
+		if err != nil {
+			return fmt.Errorf("--with-driver: %w", err)
+		}
+		dispatcher = drv
+		driverLabel = "driver"
+	} else {
+		dispatcher = &agentserver.StoreDispatcher{Store: store, IDGen: idGen, Now: time.Now}
 	}
 
 	srv := agentserver.NewServer(v8ServeAddr, store, dispatcher, nil)
 	srv.AuthStatus = agentserver.AuthStatusFunc(realAuthStatus)
+
+	// Rebind Driver.Sink to the live Hub (see runAgentV8 comment).
+	if drv, ok := dispatcher.(*agentdriver.Dispatcher); ok {
+		drv.Driver.Sink = &agentdriver.CombinedSink{
+			Store: store,
+			Broadcast: func(ev agentproto.AgentEvent) {
+				srv.Hub.Publish(ev)
+			},
+		}
+	}
 
 	boundAddr, errCh, err := srv.Start()
 	if err != nil {
@@ -111,7 +129,7 @@ func runV8Serve(_ *cobra.Command, _ []string) error {
 		"port":       portFromAddr(boundAddr),
 		"addr":       boundAddr,
 		"store_root": storeRoot,
-		"driver":     "store",
+		"driver":     driverLabel,
 	}
 	if data, err := json.Marshal(startup); err == nil {
 		fmt.Println(string(data))
