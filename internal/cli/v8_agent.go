@@ -257,7 +257,21 @@ func spawnV8TUI(entry, cwd string, port int) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bun not found in PATH (required for v8 TUI)")
 	}
-	cmd := exec.Command(bunPath, "run", entry)
+	// --conditions=browser forces Bun's package.json `exports`
+	// resolver to pick the SolidJS client/reactive runtime
+	// (dist/solid.js → real createSignal/createContext + effect graph)
+	// instead of its SSR build (dist/server.js, which exposes stub
+	// no-op implementations and crashes the moment a context provider
+	// or signal updates). Bun's `--conditions` ADDS conditions on top
+	// of its defaults (bun, node, import), and the resolver picks the
+	// FIRST matching export key in JSON declaration order. solid-js's
+	// exports declare "browser" BEFORE "node", so passing
+	// --conditions=browser makes it win over the node→server.js path.
+	// @opentui/solid is OpenTUI's custom Solid renderer; it mounts the
+	// reactive tree against an OpenTUI Renderable graph rather than
+	// the DOM, so the "browser" build is the correct target even
+	// though no browser is involved.
+	cmd := exec.Command(bunPath, "run", "--conditions=browser", entry)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), fmt.Sprintf("HAFT_AGENT_PORT=%d", port))
 	cmd.Stdin = os.Stdin

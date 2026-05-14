@@ -47,7 +47,7 @@ export function PermissionPrompt(props: PermissionPromptProps): JSX.Element {
     <BoxView bg="bgPanel" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
       <TextView fg="warning">⚠ permission required</TextView>
       <TextView>
-        tool <TextView fg="toolName">{p.toolName}</TextView> wants to run
+        tool <b>{p.toolName}</b> wants to run
       </TextView>
       <TextView fg="toolArgs">{args()}</TextView>
       <BoxView flexDirection="row" paddingTop={1}>
