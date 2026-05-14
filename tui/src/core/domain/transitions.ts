@@ -38,8 +38,6 @@ import {
 } from "./subagent.js";
 import { type TurnID, type PermissionID, type SubAgentID } from "./ids.js";
 import { type Verdict } from "./verdict.js";
-import { type UserDecision } from "../user-action/user-decision.js";
-
 export type DomainError =
   | { readonly kind: "turn_not_found"; readonly turnId: TurnID }
   | { readonly kind: "permission_not_found"; readonly id: PermissionID }
@@ -159,14 +157,19 @@ export function requestPermission(
   return { ...s, updatedAt: now, permissions: next };
 }
 
-// resolvePermission REQUIRES a UserDecision capability token. The token
-// can only be produced by L8 keyboard input handlers — auto-approval
-// from code paths is a compile error because UserDecision's constructor
-// is module-private to user-action/.
+// resolvePermission is wire-driven — the reducer (L4) calls it when a
+// permission.resolved event arrives from the backend (which is the
+// authority on resolution). Auto-approval invariant lives at the L3 SDK
+// boundary: the only function that can SEND a resolution decision
+// (permissionRespond) requires a UserDecision capability token, so no
+// TUI code path can issue an unauthorized approval. The reducer
+// trusting the backend's authoritative emit is correct — the gate is
+// upstream, at the user-keystroke → SDK call.
 export function resolvePermission<S extends SessionWithLiveTurn | SessionIdle>(
   s: S,
   id: PermissionID,
-  user: UserDecision,
+  decision: "approved" | "denied",
+  reason: string,
   now: Date,
 ): Result<S, DomainError> {
   const existing = s.permissions.get(id);
@@ -175,8 +178,8 @@ export function resolvePermission<S extends SessionWithLiveTurn | SessionIdle>(
   const resolved: PermissionResolved = {
     ...existing,
     state: "resolved",
-    decision: user.decision,
-    reason: user.reason,
+    decision,
+    reason,
     resolvedAt: now,
   };
   const next = new Map<string, Permission>(s.permissions);

@@ -24,7 +24,6 @@ import {
   resolvePermission,
 } from "../domain/transitions.js";
 import { type PermissionPending } from "../domain/permission.js";
-import { fromKeystroke } from "../user-action/user-decision.js";
 import {
   type SessionID,
   type TurnID,
@@ -160,7 +159,7 @@ describe("Permission resolution requires UserDecision capability", () => {
     expect(s2.permissions.get(permId)!.state).toBe("pending");
   });
 
-  test("resolvePermission transitions pending → resolved with UserDecision", () => {
+  test("resolvePermission applies backend-authoritative resolution", () => {
     const s0 = freshIdle();
     const s1 = startTurn(s0, tid1, "user", textPart(pid1, "hi", NOW), NOW);
     const perm: PermissionPending = {
@@ -173,8 +172,7 @@ describe("Permission resolution requires UserDecision capability", () => {
       state: "pending",
     };
     const s2 = requestPermission(s1, perm, NOW);
-    const decision = fromKeystroke({ type: "keydown", key: "Enter" }, "approved", "operator approved", LATER);
-    const s3 = resolvePermission(s2, permId, decision, LATEST);
+    const s3 = resolvePermission(s2, permId, "approved", "operator approved", LATEST);
     expect(Result.isOk(s3)).toBe(true);
     if (Result.isOk(s3)) {
       const p = s3.value.permissions.get(permId);
@@ -198,11 +196,9 @@ describe("Permission resolution requires UserDecision capability", () => {
       state: "pending",
     };
     const s2 = requestPermission(s1, perm, NOW);
-    const d1 = fromKeystroke({ type: "keydown", key: "Enter" }, "approved", "", LATER);
-    const s3 = resolvePermission(s2, permId, d1, LATER);
+    const s3 = resolvePermission(s2, permId, "approved", "", LATER);
     if (!Result.isOk(s3)) throw new Error("first resolve failed");
-    const d2 = fromKeystroke({ type: "keydown", key: "Enter" }, "denied", "", LATEST);
-    const s4 = resolvePermission(s3.value, permId, d2, LATEST);
+    const s4 = resolvePermission(s3.value, permId, "denied", "", LATEST);
     expect(Result.isErr(s4)).toBe(true);
     if (Result.isErr(s4)) expect(s4.error.kind).toBe("permission_already_resolved");
   });
