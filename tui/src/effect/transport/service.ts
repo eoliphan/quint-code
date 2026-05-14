@@ -243,12 +243,27 @@ function dispatchFrame(
     // if we wanted to fail the stream; for v8.0 alpha we tolerate.
     return;
   }
-  const decoded = decodeAgentEvent(raw);
+  // Server emits the tagged-envelope shape {kind, body:{...}}. The
+  // wire schemas decode the flat shape (kind + body's fields at top
+  // level) — flatten here so a malformed envelope still surfaces as
+  // a decode miss rather than a structural mismatch on every event.
+  const flat = flattenEnvelope(raw);
+  const decoded = decodeAgentEvent(flat);
   if (Either.isRight(decoded)) {
     void emit.single(decoded.right);
   }
   // Unknown / invalid events: drop silently. The route layer may want
   // a notification channel for this in v8.1+.
+}
+
+function flattenEnvelope(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object") return raw;
+  const obj = raw as Record<string, unknown>;
+  const kind = obj["kind"];
+  const body = obj["body"];
+  if (typeof kind !== "string") return raw;
+  if (body === null || typeof body !== "object") return raw;
+  return { kind, ...(body as Record<string, unknown>) };
 }
 
 function sleep(ms: number): Promise<void> {
