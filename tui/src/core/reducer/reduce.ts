@@ -43,6 +43,7 @@ import { unsafeBrand } from "../algebra/brand.js";
 import {
   startTurn,
   appendPart,
+  upsertPart,
   completeTurn,
   failTurn,
   requestPermission,
@@ -144,17 +145,35 @@ export function reduce(
       );
 
     case "part.text.delta":
+      // Stream the delta into the live turn so the chat surface
+      // updates as the assistant types. Each delta carries a stable
+      // part_id; the part is upserted, accumulating text from prior
+      // deltas with the same id. part.text.completed later replaces
+      // the accumulated part with the canonical final text.
+      return upsertKind(
+        session,
+        event.turn_id,
+        event.kind,
+        makeTextPart(event.part_id, accumulateText(session, event.turn_id, event.part_id, event.delta, "text"), now),
+      );
+
     case "part.reasoning.delta":
-      // Deltas are wire-only — the journal carries materialized
-      // completed parts. Reducer drops deltas; UI may render them via
-      // a separate streaming buffer outside the Session state.
-      return Result.ok(session ?? noSession(event.kind));
+      return upsertKind(
+        session,
+        event.turn_id,
+        event.kind,
+        makeReasoningPart(
+          event.part_id,
+          accumulateText(session, event.turn_id, event.part_id, event.delta, "reasoning"),
+          now,
+        ),
+      );
 
     case "part.text.completed":
-      return appendKind(session, event.turn_id, event.kind, makeTextPart(event.part_id, event.text, now));
+      return upsertKind(session, event.turn_id, event.kind, makeTextPart(event.part_id, event.text, now));
 
     case "part.reasoning.completed":
-      return appendKind(session, event.turn_id, event.kind, makeReasoningPart(event.part_id, event.text, now));
+      return upsertKind(session, event.turn_id, event.kind, makeReasoningPart(event.part_id, event.text, now));
 
     case "part.tool_use.started":
       return appendKind(
@@ -301,16 +320,50 @@ function appendKind(
   return mapDomain(appendPart(session, unsafeBrand<string, "TurnID">(turnIdRaw) as TurnID, part, part.createdAt));
 }
 
+// upsertKind is appendKind's idempotent sibling — used by delta and
+// completed events so successive deltas with the same part_id replace
+// the running part rather than each delta appending a fresh row.
+function upsertKind(
+  session: Session | undefined,
+  turnIdRaw: string,
+  eventKind: string,
+  part: Part,
+): Result.Result<SessionWithLiveTurn, ReduceError> {
+  if (session === undefined || !hasLiveTurn(session)) {
+    return Result.err({ kind: "wrong_session_state", expected: "hasLiveTurn", eventKind });
+  }
+  return mapDomain(upsertPart(session, unsafeBrand<string, "TurnID">(turnIdRaw) as TurnID, part, part.createdAt));
+}
+
+// accumulateText returns the current text of the running part with the
+// given id (concatenated with the new delta), or just the delta when
+// no such part exists yet. Centralises the look-up so the reducer
+// stays a flat switch.
+function accumulateText(
+  session: Session | undefined,
+  turnIdRaw: string,
+  partIdRaw: string,
+  delta: string,
+  kind: "text" | "reasoning",
+): string {
+  if (session === undefined || !hasLiveTurn(session)) return delta;
+  const turnIdBrand = unsafeBrand<string, "TurnID">(turnIdRaw) as TurnID;
+  if (session.liveTurn.id !== turnIdBrand) return delta;
+  for (const p of session.liveTurn.parts) {
+    if (p.id === (unsafeBrand<string, "PartID">(partIdRaw) as PartID) && p.kind === kind) {
+      return (p as { text: string }).text + delta;
+    }
+  }
+  return delta;
+}
+
 function mapDomain<T>(r: Result.Result<T, DomainError>): Result.Result<T, ReduceError> {
   return r.ok ? r : Result.err({ kind: "domain", cause: r.error });
 }
 
-function noSession<S>(eventKind: string): S {
-  // Used for non-failing no-op paths where session may legitimately be
-  // undefined (delta events arriving before session.created — should be
-  // impossible in practice but we don't want to crash).
-  throw new Error(`reducer: ${eventKind} received before session.created`);
-}
+// noSession placeholder removed — every delta path now upserts via
+// upsertKind which surfaces the wrong-state error instead of
+// throwing.
 
 function assertNeverEvent(_: never): never {
   throw new Error(`reducer: unhandled AgentEvent kind`);

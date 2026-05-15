@@ -91,6 +91,51 @@ export function appendPart(
   });
 }
 
+// upsertPart replaces a Part with the same id, or appends if absent.
+// Used by streaming-delta paths in the reducer: each delta materialises
+// a part with a stable part_id and the accumulated text so far; the
+// rendered chat surface sees the part grow without waiting for the
+// terminal part.text.completed event. The legacy append-only contract
+// of appendPart is preserved — call this only from delta handlers.
+export function upsertPart(
+  s: SessionWithLiveTurn,
+  turnId: TurnID,
+  part: Part,
+  now: Date,
+): Result<SessionWithLiveTurn, DomainError> {
+  if (s.liveTurn.id !== turnId) {
+    return err({ kind: "turn_id_mismatch", expected: s.liveTurn.id, got: turnId });
+  }
+  const parts = s.liveTurn.parts;
+  let nextParts = parts;
+  let found = false;
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i]!.id === part.id) {
+      const copy = [...parts];
+      copy[i] = part;
+      // copy preserves the original length (>=1) and starts with the
+      // original parts[0] when i>0, or the replacement part when i==0;
+      // either way the first element is defined, which is the
+      // NonEmpty invariant. Cast through unknown so the type checker
+      // accepts the assertion.
+      nextParts = copy as unknown as typeof parts;
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    nextParts = neAppend(parts, part);
+  }
+  return ok({
+    ...s,
+    updatedAt: now,
+    liveTurn: {
+      ...s.liveTurn,
+      parts: nextParts,
+    },
+  });
+}
+
 export function completeTurn(
   s: SessionWithLiveTurn,
   turnId: TurnID,

@@ -193,24 +193,35 @@ describe("reduce — session lifecycle", () => {
     }
   });
 
-  test("text and reasoning deltas are no-ops on session shape", () => {
+  test("text deltas upsert a streaming text part", () => {
     const s1 = reduce(undefined, sessionCreated(), T0);
     if (!s1.ok) throw new Error("bootstrap");
     const s2 = reduce(s1.value, turnStarted("t1", "hi", T1), T1);
     if (!s2.ok) throw new Error("turn started");
-    const delta: AgentEventWire = {
+    const delta1: AgentEventWire = {
       kind: "part.text.delta",
       session_id: "s1",
       turn_id: "t1",
       at: T2.toISOString(),
       part_id: "p1",
-      delta: "world",
+      delta: "hello",
     };
-    const s3 = reduce(s2.value, delta, T2);
+    const s3 = reduce(s2.value, delta1, T2);
     expect(Result.isOk(s3)).toBe(true);
-    if (Result.isOk(s3) && hasLiveTurn(s3.value)) {
-      // No new part appended for a delta event.
-      expect(s3.value.liveTurn.parts.length).toBe(1);
-    }
+    if (!Result.isOk(s3) || !hasLiveTurn(s3.value)) throw new Error("s3 invariant");
+    // First delta creates a brand-new streaming text part next to the
+    // user's input part.
+    expect(s3.value.liveTurn.parts.length).toBe(2);
+    expect(s3.value.liveTurn.parts[1]?.kind).toBe("text");
+    expect((s3.value.liveTurn.parts[1] as { text: string }).text).toBe("hello");
+
+    // Second delta with the same part_id appends to the same part —
+    // length stays at 2.
+    const delta2: AgentEventWire = { ...delta1, delta: " world" };
+    const s4 = reduce(s3.value, delta2, T2);
+    expect(Result.isOk(s4)).toBe(true);
+    if (!Result.isOk(s4) || !hasLiveTurn(s4.value)) throw new Error("s4 invariant");
+    expect(s4.value.liveTurn.parts.length).toBe(2);
+    expect((s4.value.liveTurn.parts[1] as { text: string }).text).toBe("hello world");
   });
 });

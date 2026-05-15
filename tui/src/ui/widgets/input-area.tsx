@@ -1,10 +1,11 @@
 // L7: InputArea — operator types here; Enter dispatches SubmitTurn.
 //
-// Backed by OpenTUI's <input> renderable inside a bordered box. The
-// border colour tracks the caret theme token so an active prompt is
-// visually distinct from the rest of the chat feed. When `disabled`
-// is true (a turn is in flight) the input is replaced by a muted
-// "input disabled" line so keystrokes don't go to a stale buffer.
+// Uses OpenTUI's <input> renderable. The input element flex-grows
+// inside the bordered row so long Cyrillic / multi-language text
+// expands to the full bordered width rather than colliding with the
+// caret column. The OpenTUI input is single-line and scrolls
+// horizontally; the visible cursor follows the typing position so
+// the operator always sees what they're adding.
 
 import { type JSX, createSignal, Show } from "solid-js";
 import { TextView } from "../primitives/text-view.js";
@@ -47,6 +48,7 @@ export function InputArea(props: InputAreaProps): JSX.Element {
       paddingLeft={1}
       paddingRight={1}
       marginTop={1}
+      flexShrink={0}
     >
       <Show
         when={!props.disabled}
@@ -56,15 +58,16 @@ export function InputArea(props: InputAreaProps): JSX.Element {
           </BoxView>
         }
       >
-        <BoxView flexDirection="row">
-          <TextView fg="caret">› </TextView>
+        <box flexDirection="row" flexGrow={1}>
+          <text fg={borderColor()}>› </text>
           <input
             focused
+            flexGrow={1}
             placeholder={props.placeholder ?? "type a message and press enter"}
             onInput={((v: string) => setValue(v)) as never}
             onSubmit={(handleSubmit) as never}
           />
-        </BoxView>
+        </box>
       </Show>
     </box>
   );
