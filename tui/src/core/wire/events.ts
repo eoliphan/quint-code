@@ -70,6 +70,10 @@ export const TurnCompletedSchema = Schema.extend(
     // future server versions can attach a richer verdict without a
     // wire break.
     verdict: Schema.optional(VerdictSchema),
+    // Cumulative tokens used during the turn (input + output across
+    // every internal Stream call). Optional — providers that can't
+    // surface a count just leave it absent.
+    tokens: Schema.optional(Schema.Number),
   }),
 );
 

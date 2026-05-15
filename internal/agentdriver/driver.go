@@ -95,10 +95,15 @@ func (d *Driver) DriveTurn(ctx context.Context, session agentcore.Session, turnI
 // streamTurn consumes the provider channel, emits events, dispatches
 // tools, and finishes with turn.completed or turn.failed.
 func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turnID agentcore.TurnID, userInput string) (agentcore.Session, error) {
-	events, err := d.Provider.Generate(ctx, session.Model, session.History, userInput)
+	events, results, err := d.Provider.Generate(ctx, session.Model, session.History, userInput)
 	if err != nil {
 		return d.failTurn(session, turnID, fmt.Errorf("provider Generate: %w", err))
 	}
+	// Close the tool-results channel when this function returns so
+	// the provider's goroutine can exit cleanly even on the failure
+	// paths below. The provider must tolerate a closed results
+	// channel and treat it as "no more tool results coming".
+	defer close(results)
 
 	var textBuf strings.Builder
 	var reasoningBuf strings.Builder
@@ -153,7 +158,7 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 				if err != nil {
 					return d.failTurn(session, turnID, fmt.Errorf("flush reasoning: %w", err))
 				}
-				return d.completeTurn(session, turnID)
+				return d.completeTurn(session, turnID, 0)
 			}
 			switch e := ev.(type) {
 			case ProviderTextDelta:
@@ -177,7 +182,22 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 				if err != nil {
 					return d.failTurn(session, turnID, fmt.Errorf("flush reasoning: %w", err))
 				}
-				session, err = d.handleToolCall(ctx, session, turnID, e)
+				var oc toolOutcome
+				session, oc, err = d.handleToolCall(ctx, session, turnID, e)
+				// Send the result back to the provider before
+				// inspecting err so the provider's goroutine can
+				// unblock even on tool failure (the provider may
+				// still want to continue with a degraded outcome
+				// instead of failing the whole turn).
+				select {
+				case <-ctx.Done():
+				case results <- ProviderToolResult{
+					CallID:  e.CallID,
+					Name:    e.Name,
+					Content: oc.content,
+					IsError: oc.isError,
+				}:
+				}
 				if err != nil {
 					// handleToolCall has already journaled events (tool_use.started,
 					// possibly permission.requested/resolved) and any error here
@@ -206,7 +226,7 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 				if err != nil {
 					return d.failTurn(session, turnID, fmt.Errorf("flush reasoning: %w", err))
 				}
-				return d.completeTurn(session, turnID)
+				return d.completeTurn(session, turnID, e.Tokens)
 			case ProviderError:
 				// Provider contract (provider.go: ProviderError) says the
 				// driver flushes pending text/reasoning before failing.
@@ -230,9 +250,19 @@ func (d *Driver) streamTurn(ctx context.Context, session agentcore.Session, turn
 	}
 }
 
-func (d *Driver) handleToolCall(ctx context.Context, session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall) (agentcore.Session, error) {
+// toolOutcome is the (content, isError) pair the driver feeds back
+// to the provider via the results channel after running a tool.
+// Captured separately from session updates so the provider can
+// continue its multi-step loop without inspecting the session.
+type toolOutcome struct {
+	content string
+	isError bool
+}
+
+func (d *Driver) handleToolCall(ctx context.Context, session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall) (agentcore.Session, toolOutcome, error) {
 	if call.Name == SubAgentSpawnToolName {
-		return d.handleSubAgentSpawn(ctx, session, turnID, call)
+		s, oc, err := d.handleSubAgentSpawn(ctx, session, turnID, call)
+		return s, oc, err
 	}
 	now := d.Now()
 	startedPart := agentcore.NewToolUsePart(agentcore.PartID(d.IDGen("part")), now, call.CallID, call.Name, call.Args)
@@ -243,16 +273,13 @@ func (d *Driver) handleToolCall(ctx context.Context, session agentcore.Session, 
 	startedEvent.PartID = startedPart.ID()
 	startedEvent.ToolCallID = call.CallID
 	startedEvent.ToolName = call.Name
-	// Use the part's normalised Args (see agentcore.NewToolUsePart): an
-	// empty but non-nil []byte from the provider would otherwise crash
-	// json.RawMessage encoding and fail the turn before the tool runs.
 	startedEvent.Args = startedPart.Args
 	if err := d.Sink.Publish(startedEvent); err != nil {
-		return session, err
+		return session, toolOutcome{}, err
 	}
 	session, err := agentcore.AppendPart(session, turnID, startedPart, now)
 	if err != nil {
-		return session, fmt.Errorf("append tool_use: %w", err)
+		return session, toolOutcome{}, fmt.Errorf("append tool_use: %w", err)
 	}
 
 	verdict := d.Tools.Authorize(ctx, call.Name, call.Args)
@@ -262,20 +289,18 @@ func (d *Driver) handleToolCall(ctx context.Context, session agentcore.Session, 
 	case AuthorisationRequiresPrompt:
 		decision, reason, err := d.gatePermission(ctx, session.ID, turnID, call)
 		if err != nil {
-			return session, err
+			return session, toolOutcome{}, err
 		}
-		// Only the exact "approved" decision authorizes execution. A typo,
-		// malformed body, or new-but-unknown value MUST be treated as denial
-		// — otherwise a client posting `decision: "approve"` (or any other
-		// non-"denied" string) would silently bypass the gate.
 		if decision != agentcore.PermissionApproved {
 			if reason == "" {
 				reason = "permission not approved"
 			}
-			return d.appendDeniedToolResult(session, turnID, call, reason)
+			s, oc, ferr := d.appendDeniedToolResult(session, turnID, call, reason)
+			return s, oc, ferr
 		}
 	case AuthorisationDenied:
-		return d.appendDeniedToolResult(session, turnID, call, "denied by tool policy")
+		s, oc, ferr := d.appendDeniedToolResult(session, turnID, call, "denied by tool policy")
+		return s, oc, ferr
 	}
 
 	content, isError, err := d.Tools.Run(ctx, call.Name, call.Args)
@@ -295,13 +320,13 @@ func (d *Driver) handleToolCall(ctx context.Context, session agentcore.Session, 
 	resultEvent.Content = content
 	resultEvent.IsError = isError
 	if err := d.Sink.Publish(resultEvent); err != nil {
-		return session, err
+		return session, toolOutcome{}, err
 	}
 	session, err = agentcore.AppendPart(session, turnID, resultPart, resultNow)
 	if err != nil {
-		return session, fmt.Errorf("append tool_result: %w", err)
+		return session, toolOutcome{}, fmt.Errorf("append tool_result: %w", err)
 	}
-	return session, nil
+	return session, toolOutcome{content: content, isError: isError}, nil
 }
 
 func (d *Driver) gatePermission(ctx context.Context, sessionID agentcore.SessionID, turnID agentcore.TurnID, call ProviderToolCall) (agentcore.PermissionDecision, string, error) {
@@ -368,7 +393,7 @@ func (d *Driver) gatePermission(ctx context.Context, sessionID agentcore.Session
 // The runner is responsible for the SubAgentSpawnedEvent /
 // SubAgentCompletedEvent pair and for owning the child Session lifecycle;
 // the driver only frames the tool-call result the parent turn renders.
-func (d *Driver) handleSubAgentSpawn(ctx context.Context, session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall) (agentcore.Session, error) {
+func (d *Driver) handleSubAgentSpawn(ctx context.Context, session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall) (agentcore.Session, toolOutcome, error) {
 	now := d.Now()
 	startedPart := agentcore.NewToolUsePart(agentcore.PartID(d.IDGen("part")), now, call.CallID, call.Name, call.Args)
 	startedEvent := agentproto.PartToolUseStartedEvent{}
@@ -380,16 +405,13 @@ func (d *Driver) handleSubAgentSpawn(ctx context.Context, session agentcore.Sess
 	startedEvent.ToolName = call.Name
 	startedEvent.Args = startedPart.Args
 	if err := d.Sink.Publish(startedEvent); err != nil {
-		return session, err
+		return session, toolOutcome{}, err
 	}
 	session, err := agentcore.AppendPart(session, turnID, startedPart, now)
 	if err != nil {
-		return session, fmt.Errorf("append subagent tool_use: %w", err)
+		return session, toolOutcome{}, fmt.Errorf("append subagent tool_use: %w", err)
 	}
 
-	// Rejection paths: nested spawn from a child, or no runner configured.
-	// Both surface as a synthetic error tool_use_completed so the LLM can
-	// reason about the failure without the turn collapsing.
 	if d.IsSubAgent {
 		return d.appendSubAgentErrorResult(session, turnID, call, ErrNestedSubAgent.Error())
 	}
@@ -423,19 +445,19 @@ func (d *Driver) handleSubAgentSpawn(ctx context.Context, session agentcore.Sess
 	resultEvent.Content = body
 	resultEvent.IsError = result.IsError
 	if err := d.Sink.Publish(resultEvent); err != nil {
-		return result.Session, err
+		return result.Session, toolOutcome{}, err
 	}
 	final, err := agentcore.AppendPart(result.Session, turnID, resultPart, resultNow)
 	if err != nil {
-		return result.Session, fmt.Errorf("append subagent tool_result: %w", err)
+		return result.Session, toolOutcome{}, fmt.Errorf("append subagent tool_result: %w", err)
 	}
-	return final, nil
+	return final, toolOutcome{content: body, isError: result.IsError}, nil
 }
 
 // appendSubAgentErrorResult emits a synthetic tool_use_completed marking
 // the spawn as failed and returns the updated session. Used for nested
 // spawns, missing runner, args decode errors, and runner failures.
-func (d *Driver) appendSubAgentErrorResult(session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall, reason string) (agentcore.Session, error) {
+func (d *Driver) appendSubAgentErrorResult(session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall, reason string) (agentcore.Session, toolOutcome, error) {
 	now := d.Now()
 	body := "subagent spawn failed: " + reason
 	resultPart := agentcore.NewToolResultPart(agentcore.PartID(d.IDGen("part")), now, call.CallID, call.Name, body, true)
@@ -449,12 +471,13 @@ func (d *Driver) appendSubAgentErrorResult(session agentcore.Session, turnID age
 	resultEvent.Content = body
 	resultEvent.IsError = true
 	if err := d.Sink.Publish(resultEvent); err != nil {
-		return session, err
+		return session, toolOutcome{}, err
 	}
-	return agentcore.AppendPart(session, turnID, resultPart, now)
+	next, err := agentcore.AppendPart(session, turnID, resultPart, now)
+	return next, toolOutcome{content: body, isError: true}, err
 }
 
-func (d *Driver) appendDeniedToolResult(session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall, reason string) (agentcore.Session, error) {
+func (d *Driver) appendDeniedToolResult(session agentcore.Session, turnID agentcore.TurnID, call ProviderToolCall, reason string) (agentcore.Session, toolOutcome, error) {
 	now := d.Now()
 	body := "tool denied: " + reason
 	resultPart := agentcore.NewToolResultPart(agentcore.PartID(d.IDGen("part")), now, call.CallID, call.Name, body, true)
@@ -468,9 +491,10 @@ func (d *Driver) appendDeniedToolResult(session agentcore.Session, turnID agentc
 	resultEvent.Content = body
 	resultEvent.IsError = true
 	if err := d.Sink.Publish(resultEvent); err != nil {
-		return session, err
+		return session, toolOutcome{}, err
 	}
-	return agentcore.AppendPart(session, turnID, resultPart, now)
+	next, err := agentcore.AppendPart(session, turnID, resultPart, now)
+	return next, toolOutcome{content: body, isError: true}, err
 }
 
 func (d *Driver) emitTurnStarted(sessionID agentcore.SessionID, turnID agentcore.TurnID, firstPart agentcore.Part, now time.Time) error {
@@ -546,12 +570,13 @@ func (d *Driver) broadcastReasoningDelta(sessionID agentcore.SessionID, turnID a
 	_ = d.Sink.Publish(ev)
 }
 
-func (d *Driver) completeTurn(session agentcore.Session, turnID agentcore.TurnID) (agentcore.Session, error) {
+func (d *Driver) completeTurn(session agentcore.Session, turnID agentcore.TurnID, tokens int) (agentcore.Session, error) {
 	now := d.Now()
 	ev := agentproto.TurnCompletedEvent{}
 	ev.SessionID = session.ID
 	ev.At = now
 	ev.TurnID = turnID
+	ev.Tokens = tokens
 	if err := d.Sink.Publish(ev); err != nil {
 		return session, err
 	}

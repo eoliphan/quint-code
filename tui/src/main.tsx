@@ -28,6 +28,7 @@ import { RouteStoreLive, RouteStoreService } from "./effect/state/route-store.js
 import { DialogStoreLive, DialogStoreService } from "./effect/state/dialog-store.js";
 import { ToastStoreLive, ToastStoreService } from "./effect/state/toast-store.js";
 import { KeymapStoreLive, KeymapStoreService } from "./effect/state/keymap-store.js";
+import { TokenStoreLive, TokenStoreService } from "./effect/state/token-store.js";
 import { DispatcherLive, DispatcherService } from "./effect/state/dispatcher.js";
 import { AppShell } from "./ui/app.js";
 import { AgentClientProvider } from "./ui/agent-client-context.js";
@@ -71,6 +72,7 @@ const storesLive = Layer.mergeAll(
   DialogStoreLive,
   ToastStoreLive,
   KeymapStoreLive,
+  TokenStoreLive,
 );
 const dispatcherDeps = Layer.merge(clientLive, storesLive);
 const dispatcherLive = Layer.provide(DispatcherLive, dispatcherDeps);
@@ -84,6 +86,7 @@ const program = Effect.gen(function* () {
   const route = yield* RouteStoreService;
   const toast = yield* ToastStoreService;
   const keymap = yield* KeymapStoreService;
+  const tokens = yield* TokenStoreService;
   const dispatcher = yield* DispatcherService;
   void DialogStoreService;
 
@@ -103,7 +106,21 @@ const program = Effect.gen(function* () {
   // the UI. The pump pushes every wire event through the reducer into
   // the SessionStore.
   yield* Effect.forkDaemon(
-    pumpEventsIntoStore(session, transport.subscribeEvents() as Stream.Stream<import("./core/wire/events.js").AgentEventWire, unknown>),
+    pumpEventsIntoStore(
+      session,
+      transport.subscribeEvents() as Stream.Stream<
+        import("./core/wire/events.js").AgentEventWire,
+        unknown
+      >,
+      (ev) => {
+        if (ev.kind === "turn.completed" && typeof ev.tokens === "number" && ev.tokens > 0) {
+          tokens.add(ev.tokens);
+        }
+        if (ev.kind === "session.created") {
+          tokens.reset();
+        }
+      },
+    ),
   );
 
   // Captured AgentClient + Dispatcher are already provided in the
@@ -130,6 +147,7 @@ const program = Effect.gen(function* () {
         toasts={toast.entries}
         hints={keymap.visibleHints}
         inspectedArtifactId={route.inspectedArtifactId}
+        tokenTotal={tokens.total}
         dispatch={dispatch}
         fetchAuth={fetchAuth}
       />

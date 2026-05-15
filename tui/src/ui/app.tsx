@@ -41,6 +41,7 @@ export interface AppShellProps {
   readonly toasts: () => ReadonlyArray<ToastEntry>;
   readonly hints: () => ReadonlyArray<{ readonly key: string; readonly action: string }>;
   readonly inspectedArtifactId: () => string | undefined;
+  readonly tokenTotal: () => number;
   readonly dispatch: (action: Action) => void;
   readonly fetchAuth: () => Promise<AuthStatus>;
 }
@@ -72,6 +73,45 @@ export function AppShell(props: AppShellProps): JSX.Element {
   // props.activeRoute() and re-arms / tears down the listener
   // accordingly. onCleanup also fires on shell unmount so we never
   // leak the binding.
+  // Global keymap with route awareness. The agent.session route has
+  // a focused <input> that competes for keystrokes; `t` and `?` only
+  // bind on routes where no input is focused (home + fpf.inspector)
+  // so they don't pollute the operator's typing. Ctrl+T / Ctrl+? add
+  // a modifier-gated path that works everywhere.
+  createEffect(() => {
+    const route = props.activeRoute();
+    const inputFocused = route === "agent.session";
+    const renderer = useRenderer();
+    const onKey = (ev: { name: string; ctrl: boolean; shift: boolean; sequence: string }): void => {
+      // Ctrl+T cycles theme on every route — modifier-gated so it
+      // doesn't collide with the input field.
+      if (ev.ctrl && ev.name === "t") {
+        props.dispatch({ tag: "CycleTheme" });
+        return;
+      }
+      // Unmodified `t` and `?` only fire when no input is focused.
+      if (!inputFocused) {
+        if (ev.sequence === "t" && !ev.ctrl) {
+          props.dispatch({ tag: "CycleTheme" });
+          return;
+        }
+        if (ev.sequence === "?" && !ev.ctrl) {
+          props.dispatch({ tag: "OpenDialog", spec: { kind: "help" } });
+          return;
+        }
+      }
+      // Tab switches agent.session → home for quick session
+      // switching. Most operator setups already consume Tab inside
+      // the input box for autocomplete; the OpenTUI input does NOT,
+      // so we wire Tab here.
+      if (ev.name === "tab" && route === "agent.session") {
+        props.dispatch({ tag: "NavigateRoute", to: "home" });
+      }
+    };
+    renderer.keyInput.on("keypress", onKey);
+    onCleanup(() => renderer.keyInput.off("keypress", onKey));
+  });
+
   createEffect(() => {
     if (props.activeRoute() !== "home") return;
     const renderer = useRenderer();
@@ -166,6 +206,7 @@ export function AppShell(props: AppShellProps): JSX.Element {
             session={props.session}
             toasts={props.toasts}
             hints={props.hints}
+            tokenTotal={props.tokenTotal}
             dispatch={props.dispatch}
           />
         </Match>

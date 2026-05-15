@@ -33,9 +33,12 @@ export function PartView(props: PartViewProps): JSX.Element {
     case "reasoning":
       return (
         <BoxView paddingLeft={2}>
-          <TextView fg="fgMuted">
-            ▶ reasoning ({truncate(p.text)})
+          <TextView fg="fgDim">
+            ▶ reasoning <span style={{ fg: "#666" }}>{`(${p.text.length} chars)`}</span>
           </TextView>
+          <BoxView paddingLeft={2}>
+            <TextView fg="fgDim">{truncate(p.text, 200)}</TextView>
+          </BoxView>
         </BoxView>
       );
     case "tool_use_started":

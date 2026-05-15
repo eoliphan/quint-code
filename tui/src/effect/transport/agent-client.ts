@@ -75,6 +75,13 @@ export interface AgentClient {
 
   // getSkill returns the markdown body of one skill.
   readonly getSkill: (name: string) => Effect.Effect<{ name: string; body: string }, RPCError>;
+
+  // readFile returns the contents of a project-rooted file via the
+  // /file endpoint. Used by the @-mention expander in the
+  // dispatcher to inline file contents into the operator's prompt.
+  readonly readFile: (
+    path: string,
+  ) => Effect.Effect<{ path: string; body: string; truncated: boolean; size: number }, RPCError>;
 }
 
 export class AgentClientService extends Context.Tag("haft/AgentClient")<
@@ -152,6 +159,17 @@ const make: Effect.Effect<AgentClient, never, TransportService> = Effect.gen(fun
   const getSkill: AgentClient["getSkill"] = (name) =>
     transport.getJson(`/skills/${encodeURIComponent(name)}`, decodeItemBody);
 
+  const FileBodySchema = S.Struct({
+    path: S.String,
+    body: S.String,
+    truncated: S.Boolean,
+    size: S.Number,
+  });
+  const decodeFileBody = S.decodeUnknownEither(FileBodySchema);
+
+  const readFile: AgentClient["readFile"] = (path) =>
+    transport.getJson(`/file?path=${encodeURIComponent(path)}`, decodeFileBody);
+
   return {
     healthz,
     authStatus,
@@ -166,6 +184,7 @@ const make: Effect.Effect<AgentClient, never, TransportService> = Effect.gen(fun
     getCommand,
     listSkills,
     getSkill,
+    readFile,
   } satisfies AgentClient;
 });
 

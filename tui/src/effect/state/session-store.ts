@@ -72,10 +72,20 @@ export const SessionStoreLive: Layer.Layer<SessionStoreService> = Layer.effect(
 export function pumpEventsIntoStore(
   store: SessionStore,
   stream: StreamNS.Stream<AgentEventWire, unknown>,
+  onEvent?: (ev: AgentEventWire) => void,
 ): Effect.Effect<void, unknown> {
   return Stream.runForEach(stream, (ev) =>
     Effect.sync(() => {
       store.applyEvent(ev, new Date());
+      // Side-effect hook for stores that piggyback on the SSE feed
+      // without going through the reducer (token counter, toast
+      // notifier, etc.). Failures here are swallowed so a buggy
+      // side-channel never breaks the reducer pump.
+      try {
+        onEvent?.(ev);
+      } catch {
+        // best effort
+      }
     }),
   );
 }

@@ -67,15 +67,21 @@ func (a *OpenAIAdapter) WithTools(t []agent.ToolSchema) *OpenAIAdapter {
 //     just before close);
 //   - ctx is canceled (ProviderError(ctx.Err()) emitted, close).
 //
-// Per the Provider contract, the caller does NOT close the channel.
+// Per the Provider contract, the caller does NOT close the events
+// channel. The caller MUST close the results channel when no more
+// tool results will arrive so the multi-step loop can exit cleanly.
 func (a *OpenAIAdapter) Generate(
 	ctx context.Context,
 	model agentcore.ModelChoice,
 	history []agentcore.Turn,
 	userInput string,
-) (<-chan agentdriver.ProviderEvent, error) {
+) (<-chan agentdriver.ProviderEvent, chan<- agentdriver.ProviderToolResult, error) {
 	messages := buildMessages(a.instructions, history, userInput)
 	out := make(chan agentdriver.ProviderEvent, 16)
+	// Buffered to the same depth as the events channel so a slow
+	// driver doesn't deadlock when the provider has emitted several
+	// tool calls in quick succession.
+	results := make(chan agentdriver.ProviderToolResult, 16)
 
 	go func() {
 		defer close(out)
@@ -92,35 +98,45 @@ func (a *OpenAIAdapter) Generate(
 				case <-ctx.Done():
 				}
 			}
-			for _, tc := range d.ToolCalls {
-				if tc.ID == "" || tc.Name == "" {
-					continue
-				}
-				select {
-				case out <- agentdriver.ProviderToolCall{
-					CallID: tc.ID,
-					Name:   tc.Name,
-					Args:   []byte(tc.ArgsDelta),
-				}:
-				case <-ctx.Done():
-				}
-			}
+			// Tool call deltas streamed by the SDK are partial; the
+			// FINAL list comes back from Stream's returned message.
+			// Ignore them here to avoid double-counting.
 		}
 
-		// Tool calls come back as items inside the final response
-		// object, NOT through the streaming deltas. The deltas
-		// surface text + reasoning only; the tool_use parts are only
-		// present once response.completed has been observed and the
-		// SDK has folded them into msg.ToolCalls(). Mirror them onto
-		// the driver's event channel BEFORE TurnDone so the driver
-		// dispatches the calls before closing the turn.
-		msg, err := a.llm.Stream(ctx, messages, a.tools, handler)
-		if err != nil {
-			out <- agentdriver.ProviderError{Err: err}
-			return
-		}
-		if msg != nil {
-			for _, tc := range msg.ToolCalls() {
+		// Multi-step loop. Each iteration runs one model generation
+		// and dispatches any tool calls back through the driver.
+		// Loop exits when the model returns with no tool calls.
+		// Safety cap: 20 rounds prevents an unbounded loop if a
+		// pathological tool keeps producing the same call.
+		const maxRounds = 20
+		totalTokens := 0
+		for round := 0; round < maxRounds; round++ {
+			msg, err := a.llm.Stream(ctx, messages, a.tools, handler)
+			if err != nil {
+				select {
+				case out <- agentdriver.ProviderError{Err: err}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			if msg == nil {
+				// Shouldn't happen — Stream returns a message or an
+				// error — but defend against it rather than
+				// deadlocking the driver.
+				break
+			}
+			totalTokens += msg.Tokens
+
+			toolCalls := msg.ToolCalls()
+			if len(toolCalls) == 0 {
+				// Terminal generation — model produced text only.
+				break
+			}
+
+			// Emit every tool call onto the events channel so the
+			// driver journals + dispatches them. The provider then
+			// blocks until it gets a result for each, in order.
+			for _, tc := range toolCalls {
 				if tc.ToolCallID == "" || tc.ToolName == "" {
 					continue
 				}
@@ -131,13 +147,42 @@ func (a *OpenAIAdapter) Generate(
 					Args:   []byte(tc.Arguments),
 				}:
 				case <-ctx.Done():
+					return
 				}
 			}
+
+			// Append the assistant's tool_call message and the
+			// tool_output rows so the next Stream call sees the
+			// model's last move + the operator/registry's response.
+			messages = append(messages, *msg)
+			for range toolCalls {
+				var res agentdriver.ProviderToolResult
+				select {
+				case res = <-results:
+				case <-ctx.Done():
+					return
+				}
+				messages = append(messages, agent.Message{
+					Role: agent.RoleTool,
+					Parts: []agent.Part{
+						agent.ToolResultPart{
+							ToolCallID: res.CallID,
+							ToolName:   res.Name,
+							Content:    res.Content,
+							IsError:    res.IsError,
+						},
+					},
+				})
+			}
 		}
-		out <- agentdriver.ProviderTurnDone{}
+
+		select {
+		case out <- agentdriver.ProviderTurnDone{Tokens: totalTokens}:
+		case <-ctx.Done():
+		}
 	}()
 
-	return out, nil
+	return out, results, nil
 }
 
 // buildMessages converts journaled Turns + the new user input into the

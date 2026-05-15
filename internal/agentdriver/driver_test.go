@@ -18,8 +18,9 @@ type fakeProvider struct {
 	events []ProviderEvent
 }
 
-func (p *fakeProvider) Generate(ctx context.Context, model agentcore.ModelChoice, history []agentcore.Turn, userInput string) (<-chan ProviderEvent, error) {
+func (p *fakeProvider) Generate(ctx context.Context, model agentcore.ModelChoice, history []agentcore.Turn, userInput string) (<-chan ProviderEvent, chan<- ProviderToolResult, error) {
 	ch := make(chan ProviderEvent, len(p.events))
+	results := make(chan ProviderToolResult, len(p.events))
 	go func() {
 		defer close(ch)
 		for _, ev := range p.events {
@@ -28,9 +29,18 @@ func (p *fakeProvider) Generate(ctx context.Context, model agentcore.ModelChoice
 				return
 			case ch <- ev:
 			}
+			if _, ok := ev.(ProviderToolCall); ok {
+				// Drain the driver's tool-result reply so the
+				// scripted stream can proceed.
+				select {
+				case <-ctx.Done():
+					return
+				case <-results:
+				}
+			}
 		}
 	}()
-	return ch, nil
+	return ch, results, nil
 }
 
 // fakeTools dispatches based on a static authorisation map and returns a
@@ -518,13 +528,14 @@ func TestDriver_ContextCancel_FailsTurnAsCanceled(t *testing.T) {
 
 type hangingProvider struct{}
 
-func (hangingProvider) Generate(ctx context.Context, model agentcore.ModelChoice, history []agentcore.Turn, userInput string) (<-chan ProviderEvent, error) {
+func (hangingProvider) Generate(ctx context.Context, model agentcore.ModelChoice, history []agentcore.Turn, userInput string) (<-chan ProviderEvent, chan<- ProviderToolResult, error) {
 	ch := make(chan ProviderEvent)
+	results := make(chan ProviderToolResult)
 	go func() {
 		<-ctx.Done()
 		close(ch)
 	}()
-	return ch, nil
+	return ch, results, nil
 }
 
 // closedProvider returns an already-closed channel and tracks whether
@@ -533,10 +544,11 @@ func (hangingProvider) Generate(ctx context.Context, model agentcore.ModelChoice
 // already done.
 type closedProvider struct{}
 
-func (closedProvider) Generate(ctx context.Context, model agentcore.ModelChoice, history []agentcore.Turn, userInput string) (<-chan ProviderEvent, error) {
+func (closedProvider) Generate(ctx context.Context, model agentcore.ModelChoice, history []agentcore.Turn, userInput string) (<-chan ProviderEvent, chan<- ProviderToolResult, error) {
 	ch := make(chan ProviderEvent)
 	close(ch)
-	return ch, nil
+	results := make(chan ProviderToolResult)
+	return ch, results, nil
 }
 
 func TestDriver_ClosedStreamWithCanceledCtx_ReportsCanceled(t *testing.T) {

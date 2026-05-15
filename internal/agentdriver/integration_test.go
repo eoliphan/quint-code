@@ -27,8 +27,9 @@ type scriptedProvider struct {
 	events []ProviderEvent
 }
 
-func (p *scriptedProvider) Generate(ctx context.Context, _ agentcore.ModelChoice, _ []agentcore.Turn, _ string) (<-chan ProviderEvent, error) {
+func (p *scriptedProvider) Generate(ctx context.Context, _ agentcore.ModelChoice, _ []agentcore.Turn, _ string) (<-chan ProviderEvent, chan<- ProviderToolResult, error) {
 	ch := make(chan ProviderEvent, len(p.events))
+	results := make(chan ProviderToolResult, len(p.events))
 	go func() {
 		defer close(ch)
 		for _, ev := range p.events {
@@ -38,9 +39,20 @@ func (p *scriptedProvider) Generate(ctx context.Context, _ agentcore.ModelChoice
 			case ch <- ev:
 				time.Sleep(time.Millisecond)
 			}
+			// Drain results so the driver doesn't deadlock when a
+			// ProviderToolCall is scripted into the events. The
+			// test path doesn't use the result — it just unblocks
+			// the driver's send.
+			if _, ok := ev.(ProviderToolCall); ok {
+				select {
+				case <-ctx.Done():
+					return
+				case <-results:
+				}
+			}
 		}
 	}()
-	return ch, nil
+	return ch, results, nil
 }
 
 type passthroughTools struct{}

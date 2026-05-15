@@ -108,9 +108,13 @@ type TurnStartedEvent struct {
 
 func (TurnStartedEvent) Kind() EventKind { return EventTurnStarted }
 
-// TurnCompletedEvent: assistant finished cleanly.
+// TurnCompletedEvent: assistant finished cleanly. Tokens is the
+// provider's cumulative token count for the turn (input + output
+// across every internal Stream call); 0 when the provider didn't
+// surface a usage figure.
 type TurnCompletedEvent struct {
 	turnEventBase
+	Tokens int `json:"tokens,omitempty"`
 }
 
 func (TurnCompletedEvent) Kind() EventKind { return EventTurnCompleted }

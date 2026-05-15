@@ -30,13 +30,20 @@ const make = Effect.sync<ToastStore>(() => {
 
   const push = (message: string, level: ToastLevel): void => {
     seq += 1;
+    const id = `toast-${seq}`;
     const entry: ToastEntry = {
-      id: `toast-${seq}`,
+      id,
       message,
       level,
       createdAt: new Date(),
     };
     setEntries((prev) => [...prev, entry]);
+    // Auto-dismiss after a level-dependent timeout so error toasts
+    // don't accumulate forever. Info: 4s, warn: 6s, error: 10s.
+    const ttl = level === "error" ? 10_000 : level === "warn" ? 6_000 : 4_000;
+    setTimeout(() => {
+      setEntries((prev) => prev.filter((e) => e.id !== id));
+    }, ttl);
   };
 
   const dismiss = (id: string): void => { setEntries((prev) => prev.filter((e) => e.id !== id)); };

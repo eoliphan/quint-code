@@ -6,13 +6,16 @@
 // git branch, model, and live-turn indicator — same shape Claude
 // Code uses, ported from the legacy haft StatusBar.
 
-import { type JSX, For, Show } from "solid-js";
+import { type JSX, For, Show, onCleanup, onMount } from "solid-js";
+import { useRenderer } from "@opentui/solid";
+import type { TurnID } from "../../core/domain/ids.js";
 import { TextView } from "../primitives/text-view.js";
 import { BoxView } from "../primitives/box-view.js";
 import { KeyHintBar } from "../primitives/key-hint-bar.js";
 import { Divider } from "../primitives/divider.js";
 import { SpinnerView } from "../primitives/spinner-view.js";
 import { StatusBar, shortenPath, type StatusBarItem } from "../primitives/status-bar.js";
+import { formatTokens } from "../../effect/state/token-store.js";
 import { TurnView } from "../widgets/turn-view.js";
 import { ThinkingIndicator } from "../widgets/thinking-indicator.js";
 import { PermissionPrompt } from "../widgets/permission-prompt.js";
@@ -33,6 +36,7 @@ export interface AgentSessionRouteProps {
   readonly session: () => Session | undefined;
   readonly toasts: () => ReadonlyArray<ToastEntry>;
   readonly hints: () => ReadonlyArray<{ readonly key: string; readonly action: string }>;
+  readonly tokenTotal: () => number;
   readonly dispatch: (action: Action) => void;
 }
 
@@ -59,6 +63,33 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
     return s !== undefined && hasLiveTurn(s);
   };
 
+  const liveTurnId = (): TurnID | undefined => {
+    const s = props.session();
+    if (s === undefined || !hasLiveTurn(s)) return undefined;
+    return s.liveTurn.id;
+  };
+
+  // Global keystroke handler scoped to the agent.session route.
+  // Esc + Ctrl+C while a turn is running both dispatch CancelTurn so
+  // the operator can interrupt a long generation. Ctrl+C without
+  // an active turn falls through to the AppShell's home-route
+  // handler which exits the process; we don't exit here to avoid
+  // losing the operator's session by accident.
+  onMount(() => {
+    const renderer = useRenderer();
+    const onKey = (ev: { name: string; ctrl: boolean }): void => {
+      if (!inFlight()) return;
+      const tid = liveTurnId();
+      if (tid === undefined) return;
+      if (ev.name === "escape" || (ev.ctrl && ev.name === "c")) {
+        props.dispatch({ tag: "CancelTurn", turnId: tid });
+        props.dispatch({ tag: "ShowToast", message: "cancel requested", level: "info" });
+      }
+    };
+    renderer.keyInput.on("keypress", onKey);
+    onCleanup(() => renderer.keyInput.off("keypress", onKey));
+  });
+
   // Status-bar items. Mirrors the legacy Ink StatusBar shape: project
   // path · branch · provider/model · streaming. Items are added
   // conditionally so a missing branch (non-git project) doesn't
@@ -80,6 +111,10 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
     }
     if (inFlight()) {
       items.push({ label: "stream", tone: "success", bold: true });
+    }
+    const t = props.tokenTotal();
+    if (t > 0) {
+      items.push({ label: `${formatTokens(t)} tokens`, tone: "muted" });
     }
     return items;
   };

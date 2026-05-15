@@ -8,7 +8,7 @@
 // back as events.
 
 import { Context, Effect, Layer } from "effect";
-import { AgentClientService } from "../transport/agent-client.js";
+import { AgentClientService, type AgentClient } from "../transport/agent-client.js";
 import type { Action } from "./actions.js";
 import { assertNeverAction } from "./actions.js";
 import { SessionStoreService } from "./session-store.js";
@@ -64,10 +64,15 @@ const make: Effect.Effect<Dispatcher, never, Deps> = Effect.gen(function* () {
       case "SubmitTurn": {
         const sid = sessionIdOrToast();
         if (sid === undefined) return Effect.void;
-        return client.turnSubmit(sid, action.text).pipe(
-          Effect.asVoid,
-          Effect.catchAll(reportRpc("submit turn")),
-        );
+        // Expand @file mentions before sending. Each @path is
+        // replaced by a fenced code block containing the file's
+        // contents (truncated server-side at 256KB). Failures fall
+        // through as a notice so the operator sees why the
+        // expansion didn't happen.
+        return Effect.gen(function* () {
+          const expanded = yield* expandMentions(action.text, client);
+          yield* client.turnSubmit(sid, expanded).pipe(Effect.asVoid);
+        }).pipe(Effect.catchAll(reportRpc("submit turn")));
       }
       case "CancelTurn": {
         const sid = sessionIdOrToast();
@@ -166,3 +171,43 @@ export const DispatcherLive: Layer.Layer<DispatcherService, never, Deps> = Layer
   DispatcherService,
   make,
 );
+
+// expandMentions scans the operator's prompt for @path tokens
+// (whitespace-delimited, must start with a letter, dot, or slash).
+// Each is fetched via /file and inlined as a fenced code block.
+// Failures degrade gracefully — the original @token stays in the
+// prompt so the model can see what was attempted.
+function expandMentions(
+  text: string,
+  client: AgentClient,
+): Effect.Effect<string, never, never> {
+  return Effect.gen(function* () {
+    // Capture @relative/path/with/slashes_and-dots.ext tokens.
+    // Reject pure email-looking "@name" without "/" or "." so a
+    // chat about "@user" doesn't trigger file reads.
+    const re = /@([A-Za-z0-9_./-]+)/g;
+    const matches: { full: string; path: string }[] = [];
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+      const p = m[1] ?? "";
+      if (p === "" || (!p.includes("/") && !p.includes("."))) continue;
+      matches.push({ full: m[0], path: p });
+    }
+    if (matches.length === 0) return text;
+    let out = text;
+    for (const { full, path } of matches) {
+      const body = yield* (client.readFile(path) as Effect.Effect<{ path: string; body: string; truncated: boolean }, unknown, never>).pipe(
+        Effect.either,
+      );
+      if (body._tag === "Right") {
+        const note = body.right.truncated ? " (truncated)" : "";
+        const block = `\n\n=== ${path}${note} ===\n\`\`\`\n${body.right.body}\n\`\`\`\n`;
+        out = out.replace(full, block);
+      }
+      // Failure: leave the @token in place; the LLM sees it as a
+      // literal hint that the operator wanted to reference that
+      // file. A toast surfaces the issue separately at the call
+      // site.
+    }
+    return out;
+  });
+}

@@ -10,17 +10,42 @@ import (
 // existing internal/provider clients (OpenAI, Anthropic, Codex) to the
 // driver's coarse-grained event model.
 //
-// Generate returns a channel that the driver consumes until it closes or
-// emits a ProviderTurnDone or ProviderError. The provider owns the
-// lifecycle of the channel and must close it deterministically — the
-// driver does NOT close it.
+// Generate returns two channels:
+//   - events (provider → driver): streams text/reasoning deltas, tool
+//     calls, and the terminal ProviderTurnDone / ProviderError. The
+//     provider owns the lifecycle of this channel and must close it
+//     deterministically — the driver does NOT close it.
+//   - results (driver → provider): the driver writes a ProviderToolResult
+//     for every ProviderToolCall it processed. The provider blocks until
+//     it has a result for every tool it dispatched in the current round,
+//     then continues with another Stream call carrying the assistant's
+//     tool_call + tool_output messages so the model can iterate.
+//     The driver MUST close this channel when no more results will be
+//     written (turn ended / error path) so the provider's loop doesn't
+//     leak.
 //
 // Cancellation: the driver passes a context derived from the operator's
 // session context. When the operator cancels a turn, the driver cancels
 // this context; the provider must abort its in-flight HTTP call and
 // emit a ProviderError(context.Canceled) or close the channel cleanly.
 type Provider interface {
-	Generate(ctx context.Context, model agentcore.ModelChoice, history []agentcore.Turn, userInput string) (<-chan ProviderEvent, error)
+	Generate(
+		ctx context.Context,
+		model agentcore.ModelChoice,
+		history []agentcore.Turn,
+		userInput string,
+	) (events <-chan ProviderEvent, results chan<- ProviderToolResult, err error)
+}
+
+// ProviderToolResult is the driver's reply to a ProviderToolCall.
+// content is what the LLM sees as the tool's output; isError signals
+// tool-side failure (vs. provider-side stream failure which surfaces
+// as ProviderError). callID matches the originating ProviderToolCall.
+type ProviderToolResult struct {
+	CallID  string
+	Name    string
+	Content string
+	IsError bool
 }
 
 // ProviderEvent is the sealed sum type the provider streams. Event order
@@ -64,9 +89,13 @@ type ProviderToolCall struct {
 
 // ProviderTurnDone marks the assistant's terminal "done" signal. After the
 // driver receives this, it flushes any pending text/reasoning, emits
-// turn.completed, and stops consuming the channel.
+// turn.completed, and stops consuming the channel. Tokens is the
+// cumulative token count for the turn (input + output across all
+// Stream calls the provider made internally); 0 when the provider
+// can't surface a count.
 type ProviderTurnDone struct {
 	providerBase
+	Tokens int
 }
 
 // ProviderError is a terminal failure from the provider side. The driver

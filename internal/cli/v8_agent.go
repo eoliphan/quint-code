@@ -197,8 +197,8 @@ func buildDispatcher(
 	if providerID == "" {
 		return nil, nil, fmt.Errorf("cannot determine provider for model %q", model)
 	}
-	if providerID != "openai" {
-		return nil, nil, fmt.Errorf("v8 driver supports openai/codex only, got provider %q for model %q", providerID, model)
+	if providerID != "openai" && providerID != "anthropic" {
+		return nil, nil, fmt.Errorf("v8 driver supports openai/codex and anthropic; got provider %q for model %q", providerID, model)
 	}
 	auth := cfg.GetAuth(providerID)
 	if auth.APIKey == "" && auth.AccessToken == "" {
@@ -245,6 +245,13 @@ func buildDispatcher(
 	toolRegistry.Register(tools.NewLSPReferencesTool(lspManager, projectRoot))
 	toolRegistry.Register(tools.NewLSPRestartTool(lspManager))
 
+	// Worktree isolation tools — agent can spawn a temporary git
+	// worktree, work there, and exit it (committing or discarding).
+	// Same shape the legacy haft agent registers.
+	worktreeState := tools.NewWorktreeState(projectRoot)
+	toolRegistry.Register(tools.NewEnterWorktreeTool(worktreeState))
+	toolRegistry.Register(tools.NewExitWorktreeTool(worktreeState))
+
 	// External MCP servers. Reads ~/.claude.json mcpServers +
 	// project-local .mcp.json. Each server's advertised tools are
 	// surfaced into toolRegistry with a "<server>__" prefix so two
@@ -275,12 +282,24 @@ func buildDispatcher(
 		systemPrompt = workflow.PromptPrefix() + "\n\n" + systemPrompt
 	}
 
-	llm, err := providers.NewOpenAIAdapter(model)
-	if err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("OpenAI adapter: %w", err)
+	var llm agentdriver.Provider
+	if providerID == "anthropic" {
+		a, aerr := providers.NewAnthropicAdapter(model)
+		if aerr != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("anthropic adapter: %w", aerr)
+		}
+		a.WithInstructions(systemPrompt).WithTools(toolRegistry.List())
+		llm = a
+	} else {
+		o, oerr := providers.NewOpenAIAdapter(model)
+		if oerr != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("OpenAI adapter: %w", oerr)
+		}
+		o.WithInstructions(systemPrompt).WithTools(toolRegistry.List())
+		llm = o
 	}
-	llm.WithInstructions(systemPrompt).WithTools(toolRegistry.List())
 
 	toolDispatcher := &providers.RegistryDispatcher{Registry: toolRegistry}
 

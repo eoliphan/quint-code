@@ -119,6 +119,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /commands/{name}", s.handleCommandGet)
 	mux.HandleFunc("GET /skills", s.handleSkillsList)
 	mux.HandleFunc("GET /skills/{name}", s.handleSkillGet)
+	mux.HandleFunc("GET /file", s.handleFileRead)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
