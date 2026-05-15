@@ -15,13 +15,18 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/m0n0x41d/haft/db"
+	"github.com/m0n0x41d/haft/internal/agent"
 	"github.com/m0n0x41d/haft/internal/agentcore"
 	"github.com/m0n0x41d/haft/internal/agentdriver"
 	"github.com/m0n0x41d/haft/internal/agentdriver/providers"
 	"github.com/m0n0x41d/haft/internal/agentproto"
 	"github.com/m0n0x41d/haft/internal/agentserver"
 	"github.com/m0n0x41d/haft/internal/agentstore"
+	"github.com/m0n0x41d/haft/internal/artifact"
 	"github.com/m0n0x41d/haft/internal/config"
+	"github.com/m0n0x41d/haft/internal/project"
+	"github.com/m0n0x41d/haft/internal/tools"
 )
 
 // runAgentV8 is the v8 stack spawn lifecycle. Boots agentserver on
@@ -45,13 +50,16 @@ func runAgentV8(projectRoot string) error {
 
 	idGen := newSessionIDGen()
 
-	dispatcher, drvErr := buildDispatcher(store, idGen)
+	dispatcher, drvCleanup, drvErr := buildDispatcher(store, idGen, projectRoot)
 	if drvErr != nil {
 		// Credentials missing or provider construction failed. Fall back to
 		// session lifecycle only — the home screen will surface the
 		// "no credentials" state via /auth/status and `haft login` fixes it.
 		fmt.Fprintf(os.Stderr, "haft agent --v8: driver init skipped (%v); turns will be rejected until `haft login` succeeds\n", drvErr)
 		dispatcher = &agentserver.StoreDispatcher{Store: store, IDGen: idGen, Now: time.Now}
+	}
+	if drvCleanup != nil {
+		defer drvCleanup()
 	}
 
 	srv := agentserver.NewServer("127.0.0.1:0", store, dispatcher, nil)
@@ -150,41 +158,106 @@ func newSessionIDGen() func() agentcore.SessionID {
 }
 
 // buildDispatcher constructs the production DriverDispatcher when
-// credentials resolve cleanly. Returns the wired Dispatcher AND an
-// error path the caller uses to fall back to lifecycle-only mode.
+// credentials resolve cleanly. Returns the wired Dispatcher, a
+// cleanup closure that the caller defers (closes the DB handle
+// opened for the haft kernel tools), and an error path the caller
+// uses to fall back to lifecycle-only mode.
 //
-// Today only the OpenAI / codex provider is supported by the v8 driver
-// — the Anthropic adapter ships in a later slice. When the configured
-// model belongs to Anthropic, return an error rather than guessing.
-func buildDispatcher(store *agentstore.Store, idGen func() agentcore.SessionID) (agentserver.Dispatcher, error) {
+// What this wires:
+//   - OpenAI / codex provider (reads ~/.haft/config.yaml)
+//   - Full FPF system prompt via agent.BuildSystemPrompt(Lemniscate=true)
+//   - project context + workflow prefix — same prompt the legacy
+//     `haft agent` builds.
+//   - tools.Registry pre-populated with builtin tools (bash, read,
+//     write, edit, multiedit, glob, grep, fetch) + haft kernel tools
+//     (haft_problem, haft_solution, haft_decision, haft_query,
+//     haft_refresh, haft_note) calling the underlying Go functions
+//     directly — no MCP/JSON-RPC veneer.
+//   - RegistryDispatcher as the agentdriver.ToolDispatcher; write
+//     tools route through the PermissionGate, read tools auto-approve.
+//
+// Non-OpenAI providers return an explicit error rather than guessing.
+// The Anthropic adapter is a follow-up slice.
+func buildDispatcher(
+	store *agentstore.Store,
+	idGen func() agentcore.SessionID,
+	projectRoot string,
+) (agentserver.Dispatcher, func(), error) {
 	cfg, err := config.Load()
 	if err != nil || cfg == nil {
-		return nil, fmt.Errorf("config.Load: %w", err)
+		return nil, nil, fmt.Errorf("config.Load: %w", err)
 	}
 	model := cfg.Model
 	if model == "" {
-		return nil, errors.New("no model configured (set HAFT_MODEL or run `haft login`)")
+		return nil, nil, errors.New("no model configured (set HAFT_MODEL or run `haft login`)")
 	}
 	providerID := config.ProviderForModel(model)
 	if providerID == "" {
-		return nil, fmt.Errorf("cannot determine provider for model %q", model)
+		return nil, nil, fmt.Errorf("cannot determine provider for model %q", model)
 	}
 	if providerID != "openai" {
-		return nil, fmt.Errorf("v8 driver supports openai/codex only, got provider %q for model %q", providerID, model)
+		return nil, nil, fmt.Errorf("v8 driver supports openai/codex only, got provider %q for model %q", providerID, model)
 	}
 	auth := cfg.GetAuth(providerID)
 	if auth.APIKey == "" && auth.AccessToken == "" {
-		return nil, fmt.Errorf("no credentials for provider %q — run `haft login`", providerID)
+		return nil, nil, fmt.Errorf("no credentials for provider %q — run `haft login`", providerID)
+	}
+
+	// Open the project DB so haft kernel tools (problem/solution/
+	// decision/query/refresh/note) can read+write the artifact store
+	// the same way `haft agent` does. The handle is owned by this
+	// function; the cleanup closure surfaces back to runAgentV8 so
+	// the caller can defer-close at the right scope.
+	haftDir := filepath.Join(projectRoot, ".haft")
+	projCfg, perr := project.Load(haftDir)
+	if perr != nil || projCfg == nil {
+		return nil, nil, fmt.Errorf("project not initialized — run `haft init` first (%v)", perr)
+	}
+	dbPath, derr := projCfg.DBPath()
+	if derr != nil {
+		return nil, nil, fmt.Errorf("resolve DB path: %w", derr)
+	}
+	database, derr := db.NewStore(dbPath)
+	if derr != nil {
+		return nil, nil, fmt.Errorf("open DB: %w", derr)
+	}
+	cleanup := func() { _ = database.Close() }
+
+	artStore := artifact.NewStore(database.GetRawDB())
+
+	toolRegistry := tools.NewRegistry(projectRoot)
+	toolRegistry.Register(tools.NewHaftProblemTool(artStore, haftDir))
+	toolRegistry.Register(tools.NewHaftSolutionTool(artStore, haftDir, toolRegistry))
+	toolRegistry.Register(tools.NewHaftDecisionTool(artStore, haftDir, projectRoot, toolRegistry))
+	toolRegistry.Register(tools.NewHaftQueryTool(artStore, buildFPFSearchFunc()))
+	toolRegistry.Register(tools.NewHaftRefreshTool(artStore, haftDir, projectRoot))
+	toolRegistry.Register(tools.NewHaftNoteTool(artStore, haftDir))
+
+	// Build the FPF-aware system prompt. project.LoadWorkflow may
+	// return nil if no workflow is configured; we tolerate that
+	// silently — the prefix is purely additive.
+	cwd, _ := os.Getwd()
+	systemPrompt := agent.BuildSystemPrompt(agent.PromptConfig{
+		ProjectRoot: projectRoot,
+		Cwd:         cwd,
+		Lemniscate:  true,
+	}) + agent.LoadProjectContext(projectRoot)
+	if workflow, werr := project.LoadWorkflow(projectRoot); werr == nil && workflow != nil {
+		systemPrompt = workflow.PromptPrefix() + "\n\n" + systemPrompt
 	}
 
 	llm, err := providers.NewOpenAIAdapter(model)
 	if err != nil {
-		return nil, fmt.Errorf("OpenAI adapter: %w", err)
+		cleanup()
+		return nil, nil, fmt.Errorf("OpenAI adapter: %w", err)
 	}
+	llm.WithInstructions(systemPrompt).WithTools(toolRegistry.List())
+
+	toolDispatcher := &providers.RegistryDispatcher{Registry: toolRegistry}
 
 	driver := &agentdriver.Driver{
 		Provider: llm,
-		Tools:    providers.NoOpTools{},
+		Tools:    toolDispatcher,
 		IDGen: func(kind string) string {
 			id := uuid.NewString()
 			if id == "" {
@@ -203,7 +276,7 @@ func buildDispatcher(store *agentstore.Store, idGen func() agentcore.SessionID) 
 	disp := agentdriver.NewDispatcher(store, hubPlaceholder, driver, perms)
 	disp.IDGen = idGen
 	disp.Now = time.Now
-	return disp, nil
+	return disp, cleanup, nil
 }
 
 // findV8TUIEntry locates the v8 TUI entrypoint AND its bun cwd. The

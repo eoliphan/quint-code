@@ -85,6 +85,22 @@ func (p *OpenAIProvider) Stream(
 	var streamErr error
 	var accumulatedText strings.Builder
 	var eventTypes []string
+
+	// Streamed function calls — keyed by output_item_id. The codex
+	// (ChatGPT-Sub) backend does NOT include function_call items in
+	// the final response.completed.Output array; it only emits them
+	// through the output_item.added + function_call_arguments.done
+	// stream. Capture both halves here so the legacy "fold from
+	// finalResp.Output" path stays a no-op for codex and the parts
+	// get merged at the bottom of this function.
+	type streamedCall struct {
+		callID string
+		name   string
+		args   string
+	}
+	streamedCalls := map[string]*streamedCall{}
+	streamedCallOrder := []string{}
+
 	for stream.Next() {
 		event := stream.Current()
 		eventTypes = append(eventTypes, event.Type)
@@ -102,6 +118,28 @@ func (p *OpenAIProvider) Stream(
 			if event.Delta != "" {
 				accumulatedText.WriteString(event.Delta)
 				handler(StreamDelta{Text: event.Delta})
+			}
+		case "response.output_item.added":
+			added := event.AsResponseOutputItemAdded()
+			if added.Item.Type == "function_call" {
+				fc := added.Item.AsFunctionCall()
+				if fc.ID != "" {
+					streamedCalls[fc.ID] = &streamedCall{callID: fc.CallID, name: fc.Name}
+					streamedCallOrder = append(streamedCallOrder, fc.ID)
+				}
+			}
+		case "response.function_call_arguments.done":
+			done := event.AsResponseFunctionCallArgumentsDone()
+			if c, ok := streamedCalls[done.ItemID]; ok {
+				c.args = done.Arguments
+				// Some backends omit the function name on the
+				// output_item.added event and only attach it here.
+				if c.name == "" {
+					c.name = done.Name
+				}
+			} else {
+				streamedCalls[done.ItemID] = &streamedCall{name: done.Name, args: done.Arguments}
+				streamedCallOrder = append(streamedCallOrder, done.ItemID)
 			}
 		case "response.completed":
 			resp := event.Response
@@ -138,6 +176,29 @@ func (p *OpenAIProvider) Stream(
 	// event even though text deltas were streamed. Recover the streamed text.
 	if msg.Text() == "" && accumulatedText.Len() > 0 {
 		msg.Parts = append([]agent.Part{agent.TextPart{Text: accumulatedText.String()}}, msg.Parts...)
+	}
+
+	// Codex backend: function_call items never appear in
+	// finalResp.Output. Fold the streamed tool calls into msg.Parts
+	// when responseToMessage didn't already produce them. The legacy
+	// API-key path goes through responseToMessage and ends up with
+	// the same ToolCallPart shape — we just avoid double-counting.
+	if len(msg.ToolCalls()) == 0 && len(streamedCallOrder) > 0 {
+		for _, itemID := range streamedCallOrder {
+			c := streamedCalls[itemID]
+			if c == nil || c.name == "" || c.callID == "" {
+				continue
+			}
+			args := c.args
+			if args == "" {
+				args = "{}"
+			}
+			msg.Parts = append(msg.Parts, agent.ToolCallPart{
+				ToolCallID: c.callID,
+				ToolName:   c.name,
+				Arguments:  args,
+			})
+		}
 	}
 
 	// Debug: log response output details when text is empty

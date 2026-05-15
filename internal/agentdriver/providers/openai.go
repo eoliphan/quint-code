@@ -19,20 +19,41 @@ import (
 // OAuth tokens (codex auth), API keys, and the codex CLI fallback —
 // reuse all of that rather than re-implementing the auth ladder.
 type OpenAIAdapter struct {
-	llm *provider.OpenAIProvider
+	llm          *provider.OpenAIProvider
+	instructions string
+	tools        []agent.ToolSchema
 }
 
 var _ agentdriver.Provider = (*OpenAIAdapter)(nil)
 
 // NewOpenAIAdapter builds an adapter pinned to the given model. It fails
 // fast if no usable credential is found — same surface as the legacy
-// `haft` command path.
+// `haft` command path. The instructions string is the system prompt
+// the provider sends as the OpenAI Responses Instructions field;
+// tools is the schema list advertised to the LLM. Both default-empty
+// at construction time and are wired via WithInstructions / WithTools
+// so the constructor signature stays stable.
 func NewOpenAIAdapter(model string) (*OpenAIAdapter, error) {
 	p, err := provider.NewOpenAI(model)
 	if err != nil {
 		return nil, fmt.Errorf("agentdriver/providers: NewOpenAI: %w", err)
 	}
 	return &OpenAIAdapter{llm: p}, nil
+}
+
+// WithInstructions overrides the system prompt. Empty string keeps
+// the minimum-codex-required defaultInstructions stub.
+func (a *OpenAIAdapter) WithInstructions(instr string) *OpenAIAdapter {
+	a.instructions = instr
+	return a
+}
+
+// WithTools advertises the given tool schemas on every Generate call.
+// Tool dispatch happens through agentdriver.ToolDispatcher — this
+// only controls what the LLM SEES.
+func (a *OpenAIAdapter) WithTools(t []agent.ToolSchema) *OpenAIAdapter {
+	a.tools = t
+	return a
 }
 
 // Generate is the agentdriver.Provider entry point. It launches the
@@ -53,7 +74,7 @@ func (a *OpenAIAdapter) Generate(
 	history []agentcore.Turn,
 	userInput string,
 ) (<-chan agentdriver.ProviderEvent, error) {
-	messages := buildMessages(history, userInput)
+	messages := buildMessages(a.instructions, history, userInput)
 	out := make(chan agentdriver.ProviderEvent, 16)
 
 	go func() {
@@ -86,10 +107,32 @@ func (a *OpenAIAdapter) Generate(
 			}
 		}
 
-		_, err := a.llm.Stream(ctx, messages, nil, handler)
+		// Tool calls come back as items inside the final response
+		// object, NOT through the streaming deltas. The deltas
+		// surface text + reasoning only; the tool_use parts are only
+		// present once response.completed has been observed and the
+		// SDK has folded them into msg.ToolCalls(). Mirror them onto
+		// the driver's event channel BEFORE TurnDone so the driver
+		// dispatches the calls before closing the turn.
+		msg, err := a.llm.Stream(ctx, messages, a.tools, handler)
 		if err != nil {
 			out <- agentdriver.ProviderError{Err: err}
 			return
+		}
+		if msg != nil {
+			for _, tc := range msg.ToolCalls() {
+				if tc.ToolCallID == "" || tc.ToolName == "" {
+					continue
+				}
+				select {
+				case out <- agentdriver.ProviderToolCall{
+					CallID: tc.ToolCallID,
+					Name:   tc.ToolName,
+					Args:   []byte(tc.Arguments),
+				}:
+				case <-ctx.Done():
+				}
+			}
 		}
 		out <- agentdriver.ProviderTurnDone{}
 	}()
@@ -114,14 +157,20 @@ func (a *OpenAIAdapter) Generate(
 // requires. ChatGPT's /backend-api/codex/responses returns
 // `{"detail":"Instructions are required"}` 400 when the request omits
 // Instructions; the platform /v1/responses API allows omission, but the
-// adapter has to satisfy both call paths from the same code.
+// adapter has to satisfy both call paths from the same code. The
+// caller is expected to override this via WithInstructions for any
+// non-trivial agent — without the full BuildSystemPrompt the model
+// has no idea it is the haft agent operating under FPF discipline.
 const defaultInstructions = "You are haft, a conversational coding assistant. Answer concisely; defer to the user's intent."
 
-func buildMessages(history []agentcore.Turn, userInput string) []agent.Message {
+func buildMessages(instructions string, history []agentcore.Turn, userInput string) []agent.Message {
+	if instructions == "" {
+		instructions = defaultInstructions
+	}
 	out := make([]agent.Message, 0, len(history)*2+2)
 	out = append(out, agent.Message{
 		Role:  agent.RoleSystem,
-		Parts: []agent.Part{agent.TextPart{Text: defaultInstructions}},
+		Parts: []agent.Part{agent.TextPart{Text: instructions}},
 	})
 	for _, turn := range history {
 		if !turn.IsTerminal() {

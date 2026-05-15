@@ -98,9 +98,17 @@ func runV8Serve(_ *cobra.Command, _ []string) error {
 	var dispatcher agentserver.Dispatcher
 	driverLabel := "store"
 	if v8ServeWithDrv {
-		drv, err := buildDispatcher(store, idGen)
+		// The --with-driver smoke path needs a project root to load
+		// the haft kernel tools. Use the cwd as a best-effort root;
+		// operators running `haft v8 serve --with-driver` from a
+		// repo checkout get the same tool stack the TUI sees.
+		root, _ := os.Getwd()
+		drv, cleanup, err := buildDispatcher(store, idGen, root)
 		if err != nil {
 			return fmt.Errorf("--with-driver: %w", err)
+		}
+		if cleanup != nil {
+			defer cleanup()
 		}
 		dispatcher = drv
 		driverLabel = "driver"
