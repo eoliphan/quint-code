@@ -18,4 +18,12 @@ type AuthStatusPayload struct {
 	Model          string `json:"model"`
 	HasCredentials bool   `json:"has_credentials"`
 	ExpiresAt      string `json:"expires_at,omitempty"`
+	// ProjectRoot is the absolute path of the haft project the agent
+	// is running inside; the TUI surfaces a shortened form in the
+	// status bar so operators always know which project they're in.
+	ProjectRoot string `json:"project_root,omitempty"`
+	// GitBranch is the current branch of the project's git repo, or
+	// empty when the project is not a git repo. Best-effort — never
+	// blocks the auth-status response.
+	GitBranch string `json:"git_branch,omitempty"`
 }

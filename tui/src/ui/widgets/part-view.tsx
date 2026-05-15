@@ -10,7 +10,8 @@ import { type JSX, Show } from "solid-js";
 import type { Part } from "../../core/domain/part.js";
 import { TextView } from "../primitives/text-view.js";
 import { BoxView } from "../primitives/box-view.js";
-import { Badge } from "../primitives/badge.js";
+import { ToolDot } from "../primitives/tool-dot.js";
+import { DiffView, looksLikeDiff } from "./diff-view.js";
 import { DecisionRecordView } from "./fpf/decision-record-view.js";
 import { ProblemCardView } from "./fpf/problem-card-view.js";
 import { SolutionPortfolioView } from "./fpf/solution-portfolio-view.js";
@@ -38,20 +39,35 @@ export function PartView(props: PartViewProps): JSX.Element {
       );
     case "tool_use_started":
       return (
-        <BoxView paddingLeft={2} paddingTop={1}>
-          <TextView fg="toolName">
-            ▸ {p.toolName} <Badge label={String(p.toolCallId)} />
-          </TextView>
-          <TextView fg="toolArgs">{stringifyArgs(p.args)}</TextView>
+        <BoxView paddingLeft={1} paddingTop={1} flexDirection="row">
+          <ToolDot state="running" />
+          <BoxView>
+            <TextView fg="toolName">
+              <b>{p.toolName}</b>
+              <span style={{ fg: "#888" }}> ({oneLineArgs(p.args)})</span>
+            </TextView>
+          </BoxView>
         </BoxView>
       );
     case "tool_use_completed":
       return (
-        <BoxView paddingLeft={2}>
-          <TextView fg={p.isError ? "toolError" : "toolResult"}>
-            {p.isError ? "✗ " : "✓ "}
-            {p.content}
-          </TextView>
+        <BoxView paddingLeft={1} flexDirection="row">
+          <ToolDot state={p.isError ? "error" : "ok"} />
+          <BoxView flexGrow={1}>
+            <TextView fg={p.isError ? "toolError" : "toolName"}>
+              <b>{p.toolName}</b>
+            </TextView>
+            <Show
+              when={looksLikeDiff(p.content)}
+              fallback={
+                <TextView fg={p.isError ? "toolError" : "fgDim"}>{truncateContent(p.content)}</TextView>
+              }
+            >
+              <BoxView paddingLeft={2}>
+                <DiffView diff={p.content} />
+              </BoxView>
+            </Show>
+          </BoxView>
         </BoxView>
       );
     case "file_ref":
@@ -98,14 +114,28 @@ export function PartView(props: PartViewProps): JSX.Element {
   }
 }
 
-function stringifyArgs(args: unknown): string {
+function oneLineArgs(args: unknown): string {
+  if (args === null || args === undefined) return "";
+  let serialised: string;
   try {
-    return JSON.stringify(args, null, 2);
+    serialised = JSON.stringify(args);
   } catch {
-    return String(args);
+    serialised = String(args);
   }
+  // Tool-call argument blob, single-line. Long values truncate so
+  // the chat surface stays readable; the FPF inspector route can
+  // show the full payload when the operator needs it.
+  return truncate(serialised, 80);
 }
 
-function truncate(s: string): string {
-  return s.length > 60 ? `${s.slice(0, 57)}…` : s;
+function truncate(s: string, max: number = 60): string {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+function truncateContent(s: string): string {
+  // tool_use_completed content can be huge (full file reads, bash
+  // output). Cap at ~600 chars in the chat surface; operators
+  // press the inspect shortcut to see the full payload.
+  if (s.length <= 600) return s;
+  return s.slice(0, 600) + `\n… (${s.length - 600} more chars)`;
 }

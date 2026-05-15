@@ -162,6 +162,7 @@ export function AppShell(props: AppShellProps): JSX.Element {
         </Match>
         <Match when={props.activeRoute() === "agent.session"}>
           <AgentSessionRoute
+            auth={auth}
             session={props.session}
             toasts={props.toasts}
             hints={props.hints}
