@@ -12,6 +12,7 @@ import { TextView } from "../primitives/text-view.js";
 import { BoxView } from "../primitives/box-view.js";
 import { ToolDot } from "../primitives/tool-dot.js";
 import { DiffView, looksLikeDiff } from "./diff-view.js";
+import { MarkdownView } from "./markdown-view.js";
 import { DecisionRecordView } from "./fpf/decision-record-view.js";
 import { ProblemCardView } from "./fpf/problem-card-view.js";
 import { SolutionPortfolioView } from "./fpf/solution-portfolio-view.js";
@@ -28,7 +29,7 @@ export function PartView(props: PartViewProps): JSX.Element {
   const p = props.part;
   switch (p.kind) {
     case "text":
-      return <TextView>{p.text}</TextView>;
+      return <MarkdownView text={p.text} />;
     case "reasoning":
       return (
         <BoxView paddingLeft={2}>

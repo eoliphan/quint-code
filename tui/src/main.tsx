@@ -30,6 +30,7 @@ import { ToastStoreLive, ToastStoreService } from "./effect/state/toast-store.js
 import { KeymapStoreLive, KeymapStoreService } from "./effect/state/keymap-store.js";
 import { DispatcherLive, DispatcherService } from "./effect/state/dispatcher.js";
 import { AppShell } from "./ui/app.js";
+import { AgentClientProvider } from "./ui/agent-client-context.js";
 import type { Action } from "./effect/state/actions.js";
 import type { AuthStatus } from "./core/wire/auth-status.js";
 
@@ -114,18 +115,25 @@ const program = Effect.gen(function* () {
     void Effect.runPromise(dispatcher.dispatch(action));
   };
 
-  // Mount the AppShell.
+  // Mount the AppShell wrapped in the AgentClient context so any
+  // descendant route can pull the RPC surface + Effect runner
+  // without prop-drilling through every level.
+  const runForUI = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
+    Effect.runPromise(eff);
+
   render(() => (
-    <AppShell
-      activeRoute={route.active}
-      themeName={theme.active}
-      session={session.current}
-      toasts={toast.entries}
-      hints={keymap.visibleHints}
-      inspectedArtifactId={route.inspectedArtifactId}
-      dispatch={dispatch}
-      fetchAuth={fetchAuth}
-    />
+    <AgentClientProvider value={{ client, run: runForUI }}>
+      <AppShell
+        activeRoute={route.active}
+        themeName={theme.active}
+        session={session.current}
+        toasts={toast.entries}
+        hints={keymap.visibleHints}
+        inspectedArtifactId={route.inspectedArtifactId}
+        dispatch={dispatch}
+        fetchAuth={fetchAuth}
+      />
+    </AgentClientProvider>
   ));
 });
 

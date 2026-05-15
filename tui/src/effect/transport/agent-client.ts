@@ -6,7 +6,7 @@
 // L1.5's fromKeystroke — which requires a real KeyboardEvent witness.
 // Auto-approval is a compile error.
 
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Either, Layer, Schema as S } from "effect";
 import { TransportService } from "./service.js";
 import {
   decodeSessionCreateResponse,
@@ -55,6 +55,26 @@ export interface AgentClient {
     id: PermissionID,
     user: UserDecision,
   ) => Effect.Effect<void, RPCError>;
+
+  // listCommands returns the slash-command entries the Go side
+  // reads from ~/.claude/commands/. Empty list when the directory
+  // is missing; never errors on the happy path.
+  readonly listCommands: () => Effect.Effect<
+    { commands: ReadonlyArray<{ name: string; description?: string }> },
+    RPCError
+  >;
+
+  // getCommand returns the markdown body of one command.
+  readonly getCommand: (name: string) => Effect.Effect<{ name: string; body: string }, RPCError>;
+
+  // listSkills mirrors listCommands for ~/.claude/skills/.
+  readonly listSkills: () => Effect.Effect<
+    { skills: ReadonlyArray<{ name: string; description?: string }> },
+    RPCError
+  >;
+
+  // getSkill returns the markdown body of one skill.
+  readonly getSkill: (name: string) => Effect.Effect<{ name: string; body: string }, RPCError>;
 }
 
 export class AgentClientService extends Context.Tag("haft/AgentClient")<
@@ -104,6 +124,34 @@ const make: Effect.Effect<AgentClient, never, TransportService> = Effect.gen(fun
       reason: user.reason,
     });
 
+  const CommandsListSchema = S.Struct({
+    commands: S.Array(
+      S.Struct({ name: S.String, description: S.optional(S.String) }),
+    ),
+  });
+  const SkillsListSchema = S.Struct({
+    skills: S.Array(
+      S.Struct({ name: S.String, description: S.optional(S.String) }),
+    ),
+  });
+  const ItemBodySchema = S.Struct({ name: S.String, body: S.String });
+
+  const decodeCommandsList = S.decodeUnknownEither(CommandsListSchema);
+  const decodeSkillsList = S.decodeUnknownEither(SkillsListSchema);
+  const decodeItemBody = S.decodeUnknownEither(ItemBodySchema);
+
+  const listCommands: AgentClient["listCommands"] = () =>
+    transport.getJson("/commands", (raw) => decodeCommandsList(raw) as Either.Either<{ commands: ReadonlyArray<{ name: string; description?: string }> }, unknown>);
+
+  const getCommand: AgentClient["getCommand"] = (name) =>
+    transport.getJson(`/commands/${encodeURIComponent(name)}`, decodeItemBody);
+
+  const listSkills: AgentClient["listSkills"] = () =>
+    transport.getJson("/skills", (raw) => decodeSkillsList(raw) as Either.Either<{ skills: ReadonlyArray<{ name: string; description?: string }> }, unknown>);
+
+  const getSkill: AgentClient["getSkill"] = (name) =>
+    transport.getJson(`/skills/${encodeURIComponent(name)}`, decodeItemBody);
+
   return {
     healthz,
     authStatus,
@@ -114,6 +162,10 @@ const make: Effect.Effect<AgentClient, never, TransportService> = Effect.gen(fun
     sessionRename,
     modelSet,
     permissionRespond,
+    listCommands,
+    getCommand,
+    listSkills,
+    getSkill,
   } satisfies AgentClient;
 });
 

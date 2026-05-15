@@ -25,6 +25,8 @@ import (
 	"github.com/m0n0x41d/haft/internal/agentstore"
 	"github.com/m0n0x41d/haft/internal/artifact"
 	"github.com/m0n0x41d/haft/internal/config"
+	"github.com/m0n0x41d/haft/internal/lsp"
+	"github.com/m0n0x41d/haft/internal/mcpclient"
 	"github.com/m0n0x41d/haft/internal/project"
 	"github.com/m0n0x41d/haft/internal/tools"
 )
@@ -232,6 +234,33 @@ func buildDispatcher(
 	toolRegistry.Register(tools.NewHaftQueryTool(artStore, buildFPFSearchFunc()))
 	toolRegistry.Register(tools.NewHaftRefreshTool(artStore, haftDir, projectRoot))
 	toolRegistry.Register(tools.NewHaftNoteTool(artStore, haftDir))
+
+	// LSP tools — same shape as legacy haft agent. The manager spins
+	// up language servers lazily on the first diagnostics/references
+	// call; nothing extra to start here. Status callbacks go nowhere
+	// in v8 (no Bus); a future slice can pipe server state to a
+	// status-bar item.
+	lspManager := lsp.NewManager(projectRoot, lsp.DefaultConfigs())
+	toolRegistry.Register(tools.NewLSPDiagnosticsTool(lspManager, projectRoot))
+	toolRegistry.Register(tools.NewLSPReferencesTool(lspManager, projectRoot))
+	toolRegistry.Register(tools.NewLSPRestartTool(lspManager))
+
+	// External MCP servers. Reads ~/.claude.json mcpServers +
+	// project-local .mcp.json. Each server's advertised tools are
+	// surfaced into toolRegistry with a "<server>__" prefix so two
+	// servers can't collide on a tool name. Per-server start
+	// failures are logged to stderr but don't abort the agent —
+	// the operator still gets the rest of the stack.
+	mcpCfgs, _ := mcpclient.LoadConfig(projectRoot)
+	mcpMgr := mcpclient.Start(context.Background(), mcpCfgs)
+	for _, te := range mcpMgr.ToolExecutors() {
+		toolRegistry.Register(te)
+	}
+	prevCleanup := cleanup
+	cleanup = func() {
+		_ = mcpMgr.Close()
+		prevCleanup()
+	}
 
 	// Build the FPF-aware system prompt. project.LoadWorkflow may
 	// return nil if no workflow is configured; we tolerate that

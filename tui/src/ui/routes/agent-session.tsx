@@ -18,6 +18,7 @@ import { ThinkingIndicator } from "../widgets/thinking-indicator.js";
 import { PermissionPrompt } from "../widgets/permission-prompt.js";
 import { InputArea } from "../widgets/input-area.js";
 import { ToastStack } from "../widgets/toast-stack.js";
+import { CommandSkillPicker } from "../widgets/command-skill-picker.js";
 import type { Session } from "../../core/domain/session.js";
 import { hasLiveTurn, turns } from "../../core/domain/session.js";
 import { modelLabel } from "../../core/domain/model-choice.js";
@@ -133,6 +134,8 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
       <Show when={pending()}>
         {(p) => <PermissionPrompt permission={p()} onResolve={props.dispatch} />}
       </Show>
+
+      <CommandSkillPicker enabled={() => !inFlight()} dispatch={props.dispatch} />
 
       <Divider />
       <InputArea disabled={inFlight()} onSubmit={props.dispatch} />

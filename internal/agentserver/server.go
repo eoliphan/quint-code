@@ -115,6 +115,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /permission/{id}", s.handlePermissionRespond)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /auth/status", s.handleAuthStatus)
+	mux.HandleFunc("GET /commands", s.handleCommandsList)
+	mux.HandleFunc("GET /commands/{name}", s.handleCommandGet)
+	mux.HandleFunc("GET /skills", s.handleSkillsList)
+	mux.HandleFunc("GET /skills/{name}", s.handleSkillGet)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
