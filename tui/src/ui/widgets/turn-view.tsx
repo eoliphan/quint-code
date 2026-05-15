@@ -14,8 +14,8 @@ import type { Part } from "../../core/domain/part.js";
 import { TextView } from "../primitives/text-view.js";
 import { BoxView } from "../primitives/box-view.js";
 import { Badge } from "../primitives/badge.js";
-import { SpinnerView } from "../primitives/spinner-view.js";
 import { PartView } from "./part-view.js";
+import { ThinkingIndicator } from "./thinking-indicator.js";
 import { useTheme } from "../theme-context.js";
 
 export interface TurnViewProps {
@@ -72,9 +72,8 @@ export function TurnView(props: TurnViewProps): JSX.Element {
           )}
         </For>
         <Show when={t.state === "running"}>
-          <BoxView flexDirection="row" paddingTop={1}>
-            <SpinnerView fg="caret" />
-            <TextView fg="fgDim"> thinking…</TextView>
+          <BoxView paddingTop={1}>
+            <ThinkingIndicator />
           </BoxView>
         </Show>
         <Show when={t.state === "failed"}>

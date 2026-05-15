@@ -23,6 +23,7 @@ import { KeyHintBar } from "../primitives/key-hint-bar.js";
 import { Divider } from "../primitives/divider.js";
 import { SpinnerView } from "../primitives/spinner-view.js";
 import { TurnView } from "../widgets/turn-view.js";
+import { ThinkingIndicator } from "../widgets/thinking-indicator.js";
 import { PermissionPrompt } from "../widgets/permission-prompt.js";
 import { InputArea } from "../widgets/input-area.js";
 import { ToastStack } from "../widgets/toast-stack.js";
@@ -86,8 +87,7 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
           </TextView>
           <Show when={inFlight()}>
             <TextView fg="fgDim"> · </TextView>
-            <SpinnerView fg="caret" />
-            <TextView fg="fgDim"> turn in flight</TextView>
+            <ThinkingIndicator />
           </Show>
         </BoxView>
       </Show>
