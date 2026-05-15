@@ -20,6 +20,7 @@ export interface BoxViewProps {
   readonly flexGrow?: number;
   readonly flexShrink?: number;
   readonly alignItems?: "flex-start" | "flex-end" | "center" | "stretch";
+  readonly justifyContent?: "flex-start" | "flex-end" | "center" | "space-between" | "space-around" | "space-evenly";
   readonly width?: number;
   readonly minHeight?: number;
   readonly children: JSX.Element;
@@ -47,6 +48,7 @@ export function BoxView(props: BoxViewProps): JSX.Element {
       marginLeft={props.marginLeft}
       marginRight={props.marginRight}
       alignItems={props.alignItems}
+      justifyContent={props.justifyContent}
       width={props.width}
       minHeight={props.minHeight}
     >

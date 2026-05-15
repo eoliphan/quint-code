@@ -1,4 +1,20 @@
 // L8: SessionRoute — agent chat view composed from L7 widgets.
+//
+// Layout: reverse-chat. Messages anchor to the bottom of the chat
+// area; older turns push UP out of view as new ones land at the
+// bottom. Matches the mainstream chat-TUI shape (Claude Code, the
+// legacy haft TUI, opencode, etc.).
+//
+//   ┌───── session header (title · model · live spinner) ────────┐
+//   │                                                            │
+//   │ (chat area, flex-grow, justify-content=flex-end)           │
+//   │   ↑ older turns scroll up out of view                       │
+//   │   ↓ newest turn sits flush against the input row            │
+//   ├──── divider ──────                                          │
+//   │ InputArea (focused <input>, bordered)                       │
+//   │ ToastStack                                                  │
+//   │ KeyHintBar                                                  │
+//   └────────────────────────────────────────────────────────────┘
 
 import { type JSX, For, Show } from "solid-js";
 import { TextView } from "../primitives/text-view.js";
@@ -26,15 +42,6 @@ export interface AgentSessionRouteProps {
 }
 
 export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
-  // Every accessor below reads props.session() inside its body so
-  // Solid re-runs the computation whenever SessionStore.applyEvent
-  // installs a new Session value. Using `const s = props.session()`
-  // at the top of the route ONCE captures a stale reference and the
-  // chat feed never updates — that bug bit us when streams of
-  // turn.started / part.text.completed / turn.completed events
-  // reached SessionStore but the UI kept rendering the empty
-  // bootstrap session.
-
   const pending = (): PermissionPending | undefined => {
     const s = props.session();
     if (s === undefined) return undefined;
@@ -57,6 +64,7 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
 
   return (
     <BoxView flexGrow={1} paddingLeft={1} paddingRight={1}>
+      {/* Header — fixed at top */}
       <Show
         when={props.session()}
         fallback={
@@ -66,25 +74,36 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
           </BoxView>
         }
       >
-        <BoxView flexGrow={1}>
-          <BoxView flexDirection="row" paddingTop={1} paddingBottom={1}>
-            <TextView fg="toolName">▣ </TextView>
-            <TextView>{props.session()?.title ?? ""}</TextView>
+        <BoxView flexDirection="row" paddingTop={1} paddingBottom={1}>
+          <TextView fg="toolName">▣ </TextView>
+          <TextView>{props.session()?.title ?? ""}</TextView>
+          <TextView fg="fgDim"> · </TextView>
+          <TextView fg="toolName">
+            {(() => {
+              const s = props.session();
+              return s === undefined ? "" : modelLabel(s.model);
+            })()}
+          </TextView>
+          <Show when={inFlight()}>
             <TextView fg="fgDim"> · </TextView>
-            <TextView fg="toolName">
-              {(() => {
-                const s = props.session();
-                return s === undefined ? "" : modelLabel(s.model);
-              })()}
-            </TextView>
-            <Show when={inFlight()}>
-              <TextView fg="fgDim"> · </TextView>
-              <SpinnerView fg="caret" />
-              <TextView fg="fgDim"> turn in flight</TextView>
-            </Show>
-          </BoxView>
-          <Divider />
-          <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
+            <SpinnerView fg="caret" />
+            <TextView fg="fgDim"> turn in flight</TextView>
+          </Show>
+        </BoxView>
+      </Show>
+      <Divider />
+
+      {/*
+        Chat area. justifyContent="flex-end" pins content to the
+        bottom — when there are few turns, empty space sits above
+        them and the newest message hugs the input row. When the
+        feed exceeds available height, the <scrollbox> takes over
+        and stickyStart="bottom" keeps the newest message visible
+        while older ones slide up out of view.
+      */}
+      <BoxView flexGrow={1} justifyContent="flex-end">
+        <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
+          <BoxView justifyContent="flex-end" flexGrow={1}>
             <For each={turnList()}>
               {(t) => (
                 <TurnView
@@ -95,14 +114,14 @@ export function AgentSessionRoute(props: AgentSessionRouteProps): JSX.Element {
                 />
               )}
             </For>
-          </scrollbox>
-          <Show when={pending()}>
-            {(p) => (
-              <PermissionPrompt permission={p()} onResolve={props.dispatch} />
-            )}
-          </Show>
-        </BoxView>
+          </BoxView>
+        </scrollbox>
+      </BoxView>
+
+      <Show when={pending()}>
+        {(p) => <PermissionPrompt permission={p()} onResolve={props.dispatch} />}
       </Show>
+
       <Divider />
       <InputArea disabled={inFlight()} onSubmit={props.dispatch} />
       <ToastStack entries={props.toasts} />
