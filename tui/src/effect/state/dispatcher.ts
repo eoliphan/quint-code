@@ -95,29 +95,39 @@ const make: Effect.Effect<Dispatcher, never, Deps> = Effect.gen(function* () {
         );
       }
       case "CreateSession":
-        // Server publishes session.created over SSE; the SessionStore
-        // pump picks it up and the reducer transitions
-        // SessionIdle → SessionWithLiveTurn. The route hop happens here
-        // (rather than reactively on session.current()) because the
-        // SSE round-trip is what authorises the transition — flipping
-        // the route prematurely would surface the "connecting…"
-        // fallback for the duration of the network hop, which is
-        // visually identical to a broken boot.
-        return client
-          .sessionCreate({
-            project_id: "haft",
-            title: action.title,
-            model: {
-              provider: action.model.provider,
-              model: action.model.model,
-              credential_key: action.model.credentialKey,
-            },
-          })
-          .pipe(
-            Effect.tap(() => Effect.sync(() => route.navigate("agent.session"))),
-            Effect.asVoid,
-            Effect.catchAll(reportRpc("create session")),
-          );
+        // Navigate immediately so the agent.session route's focused
+        // <input> mounts before the operator finishes typing the next
+        // character. Awaiting the RPC before route.navigate leaves a
+        // ~50ms window where the home route is still active but
+        // there's nothing left to focus on the home side either — the
+        // first post-Enter keystroke gets dropped on the floor.
+        // The brief "connecting…" fallback the agent.session route
+        // renders while session() is still undefined is the correct
+        // visual signal for the in-flight RPC.
+        return Effect.sync(() => route.navigate("agent.session")).pipe(
+          Effect.flatMap(() =>
+            client.sessionCreate({
+              project_id: "haft",
+              title: action.title,
+              model: {
+                provider: action.model.provider,
+                model: action.model.model,
+                credential_key: action.model.credentialKey,
+              },
+            }),
+          ),
+          Effect.asVoid,
+          Effect.catchAll((err) =>
+            Effect.gen(function* () {
+              // RPC failed after we navigated forward — surface the
+              // error AND bounce back to home so the operator can
+              // retry. Without the route reset they're stranded on
+              // an agent.session that will never get a session.
+              yield* reportRpc("create session")(err);
+              yield* Effect.sync(() => route.navigate("home"));
+            }),
+          ),
+        );
       case "ResumeSession":
         return Effect.sync(() => {
           // Resume is a navigation + future-fetch; for v8.0 alpha we
