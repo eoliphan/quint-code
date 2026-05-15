@@ -17,6 +17,7 @@ import {
   type JSX,
   Switch,
   Match,
+  createEffect,
   createSignal,
   onCleanup,
   onMount,
@@ -63,12 +64,18 @@ export function AppShell(props: AppShellProps): JSX.Element {
       });
   });
 
-  onMount(() => {
+  // The global keypress listener MUST only be attached while the home
+  // route is active. A listener that stays attached on agent.session
+  // races the focused <input> for the first keystroke after the route
+  // transition and the operator sees a dropped char (the
+  // "cool cool!" → "ool cool!" bug). createEffect tracks
+  // props.activeRoute() and re-arms / tears down the listener
+  // accordingly. onCleanup also fires on shell unmount so we never
+  // leak the binding.
+  createEffect(() => {
+    if (props.activeRoute() !== "home") return;
     const renderer = useRenderer();
     const onKey = (ev: { name: string; ctrl: boolean }): void => {
-      // Only the home route needs a global Enter — agent.session has a
-      // focused <input> that owns its own keystroke loop.
-      if (props.activeRoute() !== "home") return;
       if (ev.name === "return" || ev.name === "enter") {
         const a = auth();
         if (a === undefined) {
@@ -88,16 +95,57 @@ export function AppShell(props: AppShellProps): JSX.Element {
         return;
       }
       if (ev.ctrl && ev.name === "c") {
-        // Ctrl+C on home cleanly exits the process — without an
-        // explicit handler the focused <input> would swallow it on
-        // other routes; on home there is no input, so we wire the
-        // exit directly.
         process.exit(0);
       }
     };
     renderer.keyInput.on("keypress", onKey);
     onCleanup(() => {
       renderer.keyInput.off("keypress", onKey);
+    });
+  });
+
+  // Process-level resume hook: tmux can deliver SIGCONT when a pane
+  // becomes visible again after being suspended; pure pane focus
+  // switches do NOT raise SIGCONT but if the operator detaches and
+  // reattaches a session the signal does fire. In both cases we
+  // want to re-arm the renderer so the input takes keystrokes again.
+  onMount(() => {
+    const handler = (): void => {
+      try {
+        useRenderer().resume();
+        useRenderer().requestRender();
+      } catch {
+        // best effort; resume on a running renderer is a no-op
+      }
+    };
+    process.on("SIGCONT", handler);
+    onCleanup(() => {
+      process.off("SIGCONT", handler);
+    });
+  });
+
+  // Terminal focus recovery for tmux pane switches and similar.
+  // When the operator focuses a different tmux pane and returns,
+  // OpenTUI's focusHandler restores terminal modes but does NOT
+  // re-arm a focused renderable. The <input> stays mounted but no
+  // keystrokes reach it because nothing reclaims the focus pointer.
+  // Listen to the renderer's "focus" event (emitted on \e[I) and
+  // request a full redraw so any focused child re-attaches its key
+  // bindings. Also force-resume the renderer in case tmux suspended
+  // the output frame between pane switches.
+  onMount(() => {
+    const renderer = useRenderer();
+    const onFocus = (): void => {
+      try {
+        renderer.resume();
+      } catch {
+        // resume is a no-op when the renderer is already running.
+      }
+      renderer.requestRender();
+    };
+    renderer.on("focus", onFocus);
+    onCleanup(() => {
+      renderer.off("focus", onFocus);
     });
   });
 
