@@ -2205,12 +2205,14 @@ func TestHaftDecisionTool_DecideRejectsIncompleteAntiSelfDeceptionRecord(t *test
 		t.Fatal("expected validation error for incomplete decision record")
 	}
 
+	// Validator now emits structured per-field rows; match by field
+	// name + " — " separator.
 	required := []string{
-		"selection_policy is required",
-		"counterargument is required",
-		"weakest_link is required",
-		"why_not_others is required",
-		"rollback.triggers is required",
+		"- selection_policy — ",
+		"- counterargument — ",
+		"- weakest_link — ",
+		"- why_not_others — ",
+		"- rollback — ",
 	}
 
 	for _, want := range required {

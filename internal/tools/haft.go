@@ -1279,6 +1279,12 @@ func (t *HaftDecisionTool) decide(ctx context.Context, args map[string]any) (age
 		return agent.ToolResult{}, err
 	}
 
+	skips := jsonStrArray(args, "_skips")
+	if len(skips) == 0 {
+		// Backward-compat alias: accept legacy "_skip" key too.
+		skips = jsonStrArray(args, "_skip")
+	}
+
 	input := artifact.DecideInput{
 		ProblemRef:      jsonStr(args, "problem_ref"),
 		ProblemRefs:     problemRefs,
@@ -1305,6 +1311,8 @@ func (t *HaftDecisionTool) decide(ctx context.Context, args map[string]any) (age
 		WhyNotOthers:    whyNotOthers,
 		Rollback:        rollback,
 		Predictions:     predictions,
+		Skips:           skips,
+		SkipReason:      jsonStr(args, "_skip_reason"),
 	}
 
 	gaps := t.coverageGaps(ctx, input.AffectedFiles)

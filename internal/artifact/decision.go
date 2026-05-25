@@ -51,6 +51,38 @@ type DecideInput struct {
 	// GovernanceMode is "module" | "exact" | "" (default "module"). Controls
 	// whether affected_files widen to module scope at baseline time.
 	GovernanceMode string `json:"governance_mode,omitempty"`
+
+	// Skips lists the DRR required fields the operator explicitly chose
+	// to bypass for this decision. Only valid in tactical mode — using
+	// Skips in standard/deep mode is rejected at validate time.
+	//
+	// Valid field names match the DRR required-field vocabulary:
+	// "selection_policy", "counterargument", "weakest_link",
+	// "why_not_others", "rollback", "predictions", "invariants",
+	// "evidence_requirements", "refresh_triggers", "affected_files".
+	//
+	// Persisted in DecisionRecord StructuredData so the skip is
+	// audit-visible after the fact (the operator acknowledged the gap
+	// rather than the gap being silently absent).
+	Skips      []string `json:"_skips,omitempty"`
+	SkipReason string   `json:"_skip_reason,omitempty"`
+}
+
+// validRequiredFieldSkips is the canonical set of fields a tactical
+// decision may explicitly skip. Names outside this set are rejected to
+// prevent typos from silently disabling validation.
+var validRequiredFieldSkips = map[string]bool{
+	"selection_policy":      true,
+	"counterargument":       true,
+	"weakest_link":          true,
+	"why_not_others":        true,
+	"rollback":              true,
+	"predictions":           true,
+	"invariants":            true,
+	"evidence_requirements": true,
+	"refresh_triggers":      true,
+	"affected_files":        true,
+	"why_selected":          true,
 }
 
 // PredictionInput is a testable claim that measure should verify.
@@ -214,50 +246,191 @@ func normalizeDecisionInput(input DecideInput) DecideInput {
 }
 
 func validateDecisionInput(input DecideInput) error {
-	var problems []string
+	// Build skip set + validate skip names + reject skips outside tactical mode.
+	skipSet, skipErr := buildSkipSet(input)
+	if skipErr != nil {
+		return skipErr
+	}
+
+	var missing []missingField
+
+	addMissing := func(field, hint string) {
+		if skipSet[field] {
+			return
+		}
+		missing = append(missing, missingField{Field: field, Hint: hint})
+	}
 
 	if input.SelectedTitle == "" {
-		problems = append(problems, "selected_title is required — what variant was chosen?")
+		// selected_title is not skippable — without it the decision has no
+		// identity. Other required fields can be acknowledged-skipped in
+		// tactical mode; this one cannot.
+		missing = append(missing, missingField{
+			Field: "selected_title",
+			Hint:  "what variant was chosen? Required regardless of mode — a decision without a selection has no identity.",
+		})
 	}
 	if input.WhySelected == "" {
-		problems = append(problems, "why_selected is required — rationale for the choice")
+		addMissing("why_selected", "rationale for the choice")
 	}
 	if input.SelectionPolicy == "" {
-		problems = append(problems, "selection_policy is required — state the explicit policy used to choose this option")
+		addMissing("selection_policy", "the explicit policy used to choose this option (FPF CMP-02: declared BEFORE scoring)")
 	}
 	if input.CounterArgument == "" {
-		problems = append(problems, "counterargument is required — record the strongest argument against this decision")
+		addMissing("counterargument", "the strongest argument against this decision (FPF DEC-08: self-deception check)")
 	}
 	if input.WeakestLink == "" {
-		problems = append(problems, "weakest_link is required — state the selected variant's weakest link")
+		addMissing("weakest_link", "what most plausibly breaks this choice (FPF X-WLNK)")
 	}
 	if len(input.WhyNotOthers) == 0 {
-		problems = append(problems, "why_not_others is required — record at least one rejected alternative and why it lost")
+		addMissing("why_not_others", "at least one rejected alternative and why it lost (FPF CMP-04)")
 	}
 	if input.Rollback == nil || len(input.Rollback.Triggers) == 0 {
-		problems = append(problems, "rollback.triggers is required — record at least one trigger that would force reversal")
+		addMissing("rollback", "at least one trigger that would force reversal (FPF DEC-05)")
 	}
 
+	// Structural checks on present fields — not subject to skip.
 	for i, rejection := range input.WhyNotOthers {
 		switch {
 		case rejection.Variant == "":
-			problems = append(problems, fmt.Sprintf("why_not_others[%d].variant is required — name the rejected alternative", i))
+			missing = append(missing, missingField{
+				Field: fmt.Sprintf("why_not_others[%d].variant", i),
+				Hint:  "name the rejected alternative",
+			})
 		case rejection.Reason == "":
-			problems = append(problems, fmt.Sprintf("why_not_others[%d].reason is required — explain why %q lost", i, rejection.Variant))
+			missing = append(missing, missingField{
+				Field: fmt.Sprintf("why_not_others[%d].reason", i),
+				Hint:  fmt.Sprintf("explain why %q lost", rejection.Variant),
+			})
 		case strings.EqualFold(rejection.Variant, input.SelectedTitle):
-			problems = append(problems, fmt.Sprintf("why_not_others[%d].variant must not repeat selected_title %q", i, input.SelectedTitle))
+			missing = append(missing, missingField{
+				Field: fmt.Sprintf("why_not_others[%d].variant", i),
+				Hint:  fmt.Sprintf("must not repeat selected_title %q", input.SelectedTitle),
+			})
 		}
 	}
 
 	for i, prediction := range input.Predictions {
-		problems = append(problems, predictionValidationProblems(i, prediction)...)
+		for _, hint := range predictionValidationProblems(i, prediction) {
+			missing = append(missing, missingField{
+				Field: fmt.Sprintf("predictions[%d]", i),
+				Hint:  hint,
+			})
+		}
 	}
 
-	if len(problems) == 0 {
+	if len(missing) == 0 {
 		return nil
 	}
 
-	return fmt.Errorf("decision record is incomplete:\n- %s", strings.Join(problems, "\n- "))
+	return formatStructuredValidationError(missing, input)
+}
+
+// missingField pairs a missing-field name with a one-line hint about
+// what the operator should supply.
+type missingField struct {
+	Field string
+	Hint  string
+}
+
+// buildSkipSet validates the operator-supplied skip list and returns
+// the set form for fast lookup. Returns a structured error when skips
+// are used in standard/deep mode, when a skip names an unknown field,
+// or when tactical-mode skips lack a reason.
+func buildSkipSet(input DecideInput) (map[string]bool, error) {
+	skipSet := map[string]bool{}
+	if len(input.Skips) == 0 {
+		return skipSet, nil
+	}
+
+	mode := strings.TrimSpace(input.Mode)
+	if mode != string(ModeTactical) && mode != string(ModeNote) {
+		return nil, fmt.Errorf(
+			"_skips is only valid in tactical or note mode (got mode=%q); "+
+				"standard and deep decisions cannot bypass required DRR fields; "+
+				"to skip fields, switch to tactical mode with _mode=\"tactical\"",
+			mode,
+		)
+	}
+	if strings.TrimSpace(input.SkipReason) == "" {
+		return nil, fmt.Errorf(
+			"_skip_reason is required when _skips is non-empty — explain why " +
+				"the operator chose to bypass required fields; the skip + reason " +
+				"is persisted in the DecisionRecord audit trail")
+	}
+
+	var unknown []string
+	for _, field := range input.Skips {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		if !validRequiredFieldSkips[field] {
+			unknown = append(unknown, field)
+			continue
+		}
+		skipSet[field] = true
+	}
+	if len(unknown) > 0 {
+		valid := make([]string, 0, len(validRequiredFieldSkips))
+		for f := range validRequiredFieldSkips {
+			valid = append(valid, f)
+		}
+		sort.Strings(valid)
+		return nil, fmt.Errorf(
+			"_skips contains unknown field(s): %s. Valid skippable fields: %s",
+			strings.Join(unknown, ", "),
+			strings.Join(valid, ", "),
+		)
+	}
+
+	return skipSet, nil
+}
+
+// formatStructuredValidationError builds the human+LLM-readable error
+// returned to MCP callers when validation fails. The shape carries:
+//   - the failed gate identity (decision DRR completeness)
+//   - the missing fields with per-field hints
+//   - how-to-proceed options (provide fields OR switch to tactical with skip)
+//   - FPF spec references the operator can look up
+//
+// Plain text on purpose — JSON-in-text hurts LLM readability and skill
+// bodies parse the human form just as well.
+func formatStructuredValidationError(missing []missingField, input DecideInput) error {
+	mode := strings.TrimSpace(input.Mode)
+	if mode == "" {
+		mode = string(ModeStandard)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "FPF discipline violation: decision in %s mode is incomplete.\n\n", mode)
+
+	b.WriteString("Missing required fields:\n")
+	for _, m := range missing {
+		fmt.Fprintf(&b, "- %s — %s\n", m.Field, m.Hint)
+	}
+
+	b.WriteString("\nHow to proceed:\n")
+	b.WriteString("- Option 1: Provide the missing fields and retry the call.\n")
+	if mode == string(ModeStandard) || mode == string(ModeDeep) {
+		b.WriteString("- Option 2: If this is a tactical change (<2-week reversible blast radius),\n")
+		b.WriteString("  switch to tactical mode and explicitly acknowledge the skip:\n")
+		b.WriteString("    \"_mode\": \"tactical\",\n")
+		b.WriteString("    \"_skips\": [\"<field1>\", \"<field2>\"],\n")
+		b.WriteString("    \"_skip_reason\": \"<why the operator accepts the gap>\"\n")
+		b.WriteString("  The skip + reason are persisted in the DecisionRecord audit trail.\n")
+	} else {
+		b.WriteString("- Option 2: Add the field name to _skips with a _skip_reason if the\n")
+		b.WriteString("  operator explicitly chooses to bypass it for this tactical change.\n")
+	}
+
+	b.WriteString("\nReferences:\n")
+	b.WriteString("- FPF E.9 — Design Rationale Record minimum kernel\n")
+	b.WriteString("- FPF C.11 — Decision Theory requirements\n")
+	b.WriteString("- haft_query(action=\"fpf\", query=\"E.9\") — full pattern text\n")
+	b.WriteString("- haft_query(action=\"fpf\", query=\"DEC-01\") — DRR structure micro-pattern\n")
+
+	return fmt.Errorf("%s", b.String())
 }
 
 func predictionValidationProblems(index int, prediction PredictionInput) []string {
