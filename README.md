@@ -2,18 +2,22 @@
 
 *formerly [quint-code](https://github.com/m0n0x41d/quint-code)*
 
-**True harness engineering for AI-assisted software delivery.**
+**FPF governance substrate for AI-assisted software delivery.**
 
-Your agents write code fast. Most repositories are not ready for serious
-harness engineering: the target system is underspecified, the enabling system
-is implicit, term maps are missing, and runtime evidence is detached from the
-spec. Haft makes the project harnessable before it scales execution.
+Your agents (Claude Code, Codex, etc.) write code fast. Most repositories are
+not ready for serious harness engineering: the target system is underspecified,
+the enabling system is implicit, term maps are missing, and runtime evidence is
+detached from the spec. Haft makes the project harnessable before it scales
+execution.
 
 ---
 
 ## What is Haft?
 
-Haft is the engineering governor that sits between your intentions and your agents' execution. It enforces the discipline that separates "we shipped fast" from "we shipped right": frame the problem before solving it, compare options under parity, record decisions as falsifiable contracts, and know the moment assumptions go stale.
+Haft is a **governance substrate** that makes a repository harnessable for
+principal-led FPF engineering work. It turns problem frames, comparisons,
+decisions, commissions, and evidence into auditable artifacts with structured
+enforcement at the kernel boundary.
 
 **Specify → Think → Run → Govern.**
 
@@ -22,14 +26,29 @@ tool and the hand — the part that turns raw capability into formal
 specification, governed decisions, bounded commissions, and evidence-backed
 engineering work.
 
-### Two production surfaces, one core
+### Three surfaces, one artifact graph
 
-- **MCP plugin** — embedded agent surface for Claude Code and Codex to reason, draft, query, and create commissions
-- **CLI Harness** — operator/runtime surface for prepare, run, status, result, apply, requeue, and cancel
+Haft is consumed via three surfaces sharing one `.haft/` artifact graph:
 
-Both surfaces compile into the same Haft Core artifact graph. MCP does not own long-running runtime lifecycle, and CLI does not become a second source of meaning.
+- **Skills + slash commands** in your AI coding agent (Claude Code, Codex, OpenCode, Cursor) — auto-trigger workflow skills + manual `/h-frame /h-decide /h-verify ...` commands
+- **CLI** (`haft problem`, `haft solution`, `haft decision`, ...) — direct manual access without an LLM in the loop
+- **MCP server** (`haft serve`) — programmatic access for any LLM agent through the Model Context Protocol
 
-> **Note:** The TUI (`haft agent`) and Desktop app exist as **alpha** tracks under active development. They are not part of the v7 production envelope and are not recommended for production use. The MCP plugin mode (`haft serve`) and `haft harness` CLI are the stable, proven interfaces.
+The kernel MCP server is the **cross-host enforcement surface**: it validates
+args server-side and returns structured errors for FPF discipline violations
+(missing required fields, parity gaps, weakest-link omissions, predictions
+without verify_after, etc.). Skills carry the procedural instructions; the
+kernel carries the gates.
+
+### What changed in v8 (governance substrate pivot)
+
+v8 dropped the standalone interactive agent (`haft agent`), the TUI, and the
+desktop wrappers. Per [dec-20260525-v8-architecture-pivot]
+(`.haft/decisions/dec-20260525-v8-architecture-pivot-from-standalone-agent-to-g-bbe45cb7.md`),
+haft no longer competes with general coding agents on the runtime surface —
+it adds governance discipline on top of whichever coding agent the operator
+already uses. See the pivot DRR for the full rationale, parity-compared
+variants, rollback plan, and falsifiable predictions.
 
 ---
 
@@ -241,7 +260,7 @@ For the repeatable local E2E smoke:
 task open-sleigh:smoke-real-haft
 ```
 
-The same loop is what alpha Desktop workflow buttons compile to. A button must
+A commission action — whether triggered manually or by an agent — must
 become a typed artifact transition, not a free prompt:
 
 ```text
@@ -290,27 +309,6 @@ haft harness run --drain --concurrency 4
 `AutonomyEnvelope` continues to gate creation, preflight, and execute; the apply step is purely policy + verdict per the V3 invariant. Stale claims older than the configurable cap (default 24h) are skipped at intake with a typed `lease_too_old` reason.
 
 Detailed guide, real-world flows, and known rough edges: see [`docs/7.x/harness-batch`](https://haft.dev/docs/7.0/harness-batch).
-
----
-
-## Desktop App (pre-alpha)
-
-> **Warning:** The desktop app is in pre-alpha. Use at your own risk.
-
-Built with Tauri v2 (Rust shell + React frontend). Launch with:
-
-```bash
-haft desktop        # finds Haft.app or falls back to dev build
-```
-
-Build from source (requires Rust toolchain + bun/npm for the frontend):
-
-```bash
-./scripts/build.sh --install   # builds Go binary + TUI bundle, installs locally
-cd desktop-tauri && cargo tauri build   # builds the desktop app bundle
-```
-
-Features: dashboard with governance findings, problem board, decision detail with evidence decomposition, portfolio comparison with Pareto front, task spawning, agent chat view, terminal panel, multi-project management, search (Cmd+K).
 
 ---
 
@@ -364,9 +362,18 @@ One proved cycle:
 The goal is not a better task runner. The goal is to turn an arbitrary repo
 into a harnessable engineering system.
 
-### v8 — Governor Signals
+### v8 — Governance Substrate Pivot (in progress 2026-05)
 
-Background detection loops (stale, drift, dependencies) with dashboard alerts. Autonomous actuation after trust is earned.
+Architectural pivot recorded in `dec-20260525-v8-architecture-pivot-from-standalone-agent-to-g-bbe45cb7`. Standalone interactive agent (`haft agent`), TUI, and desktop wrappers dropped. Haft becomes a kernel + CLI + MCP server + skills plugin shared across Claude Code, Codex, OpenCode, and Cursor.
+
+Replaces previously-planned v8 architecture (TS+Bun+OpenTUI+SolidJS standalone TUI, gradual deprecation in v8.0 + removal in v8.1 — both superseded). FPF reasoner critique 2026-05-25 confirmed BLP violation in the original direction.
+
+Three operator surfaces, one artifact graph:
+- **Skills + slash commands** in your AI coding agent (auto-trigger + manual `/h-*`)
+- **CLI** for direct manual access without an LLM
+- **MCP server** for programmatic access from any LLM agent
+
+Kernel MCP returns structured errors as hard enforcement gates (Transformer Mandate via manual-only `h-decide` / `h-commission` skills; standard/deep mode validation on required DRR fields with explicit skip mechanism for tactical work).
 
 ### Cross-repo harness — research track (post-v7.0)
 

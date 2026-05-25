@@ -1,3 +1,32 @@
+## v8 Architecture (governance substrate, post-pivot 2026-05-25)
+
+Haft is a **governance substrate** consumed via three surfaces sharing one
+`.haft/` artifact graph: skills + slash commands in the host AI coding agent
+(Claude Code, Codex, OpenCode, Cursor), this CLI for manual access, and the
+MCP server (`haft serve`) for programmatic access.
+
+Standalone interactive agent (`haft agent`), TUI, and desktop wrappers were
+**dropped in v8**. The full pivot rationale lives in
+`.haft/decisions/dec-20260525-v8-architecture-pivot-from-standalone-agent-to-g-bbe45cb7.md`
+with parity-compared variants, rollback plan, and falsifiable predictions.
+
+**FPF discipline placement**: skills are `U.MethodDescription` carriers
+(they route + scaffold + remind, they do not enforce). The kernel MCP server
+validates args server-side and returns structured errors. CLI gates mirror
+the same validation. Hooks are NOT used for haft-tool enforcement — MCP
+error responses are sufficient and cross-host.
+
+**Transformer Mandate**: `h-decide` and `h-commission` are manual-only
+(`disable-model-invocation: true`). Binding artifacts (DecisionRecord,
+WorkCommission) require explicit human invocation. Other workflow skills
+(h-frame, h-diagnose, h-explore, h-compare, h-verify, h-status, etc.) may
+auto-trigger by description but never commit binding artifacts without
+operator confirmation in their procedure bodies.
+
+Execution plan lives in `.context/v8_haft_governance_substrate_plan.md`.
+
+---
+
 ## Communication Style
 
 **Be a peer engineer, not a cheerleader:**
