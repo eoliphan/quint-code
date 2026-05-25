@@ -33,20 +33,18 @@ var (
 	}
 
 	// Surface and external packages — Core MUST NOT import any of these.
+	// Updated after v8 governance substrate pivot (dec-20260525-v8-architecture-pivot):
+	// agentloop / session / setup / desktop / desktop-tauri removed entirely;
+	// the boundary list shrinks to what actually still exists.
 	forbiddenForCorePrefixes = []string{
 		"github.com/m0n0x41d/haft/internal/cli",
 		"github.com/m0n0x41d/haft/internal/present",
 		"github.com/m0n0x41d/haft/internal/ui",
-		"github.com/m0n0x41d/haft/internal/setup",
 		"github.com/m0n0x41d/haft/internal/skills",
 		"github.com/m0n0x41d/haft/internal/provider",
 		"github.com/m0n0x41d/haft/internal/agent",
-		"github.com/m0n0x41d/haft/internal/agentloop",
 		"github.com/m0n0x41d/haft/internal/tasks",
-		"github.com/m0n0x41d/haft/internal/session",
 		"github.com/m0n0x41d/haft/internal/tools",
-		"github.com/m0n0x41d/haft/desktop",
-		"github.com/m0n0x41d/haft/desktop-tauri",
 		"github.com/m0n0x41d/haft/cmd/haft",
 	}
 )

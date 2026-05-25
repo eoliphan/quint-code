@@ -56,8 +56,8 @@ func setupProjectGraphFixture(t *testing.T) *projectGraphFixture {
 		{ID: "mod-present", Path: "internal/present", Name: "present"},
 		{ID: "mod-cli", Path: "internal/cli", Name: "cli"},
 		{ID: "mod-tools", Path: "internal/tools", Name: "tools"},
-		{ID: "mod-agentloop", Path: "internal/agentloop", Name: "agentloop"},
-		{ID: "mod-desktop", Path: "desktop", Name: "desktop"},
+		{ID: "mod-workcommission", Path: "internal/workcommission", Name: "workcommission"},
+		{ID: "mod-implementationplan", Path: "internal/implementationplan", Name: "implementationplan"},
 		{ID: "mod-cmd-haft", Path: "cmd/haft", Name: "cmd-haft"},
 	}
 
@@ -76,11 +76,9 @@ func setupProjectGraphFixture(t *testing.T) *projectGraphFixture {
 		{"mod-tools", "mod-artifact"},
 		{"mod-tools", "mod-codebase"},
 		{"mod-tools", "mod-present"},
-		{"mod-agentloop", "mod-artifact"},
-		{"mod-agentloop", "mod-codebase"},
-		{"mod-desktop", "mod-artifact"},
-		{"mod-desktop", "mod-graph"},
-		{"mod-desktop", "mod-codebase"},
+		{"mod-workcommission", "mod-artifact"},
+		{"mod-implementationplan", "mod-artifact"},
+		{"mod-implementationplan", "mod-workcommission"},
 		{"mod-cmd-haft", "mod-cli"},
 	}
 
@@ -169,7 +167,7 @@ func setupProjectGraphFixture(t *testing.T) *projectGraphFixture {
 			id:    "dec-cli-mcp-surface",
 			title: "CLI surfaces stay above Core",
 			invariants: []string{
-				"CLI surfaces operate through Core stores, not direct desktop calls",
+				"CLI surfaces operate through Core stores, not direct host shell calls",
 			},
 			files: []string{
 				"internal/cli/serve.go",
@@ -188,14 +186,14 @@ func setupProjectGraphFixture(t *testing.T) *projectGraphFixture {
 			},
 		},
 		{
-			id:    "dec-agentloop-core-orchestration",
-			title: "Agent loop uses Core stores",
+			id:    "dec-workcommission-commit-discipline",
+			title: "Work commissions reference active decisions only",
 			invariants: []string{
-				"Agent loop orchestration depends on Core stores, not projections",
+				"WorkCommissions must reference an active (non-stale, non-superseded, non-deprecated) decision",
 			},
 			files: []string{
-				"internal/agentloop/coordinator.go",
-				"internal/agentloop/overseer.go",
+				"internal/workcommission/lifecycle.go",
+				"internal/implementationplan/plan.go",
 			},
 		},
 		{
@@ -408,7 +406,7 @@ func TestComputeImpactSet_SeededProjectData(t *testing.T) {
 	}
 
 	expectedDecisionIDs := []string{
-		"dec-agentloop-core-orchestration",
+		"dec-workcommission-commit-discipline",
 		"dec-artifact-authority",
 		"dec-artifact-decision-structure",
 		"dec-cli-mcp-surface",
