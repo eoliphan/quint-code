@@ -14,20 +14,27 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "haft [goal]",
-	Short: "Engineering agent with FPF reasoning discipline",
-	Long: `Haft — an engineering agent that thinks before it acts.
+	Use:   "haft",
+	Short: "FPF governance substrate — kernel + CLI + MCP server + skills",
+	Long: `Haft — a governance substrate that makes a repository harnessable for
+principal-led FPF engineering work by turning problem frames, comparisons,
+decisions, commissions, and evidence into auditable artifacts.
 
-Run bare to launch the interactive agent. Use subcommands for specific tasks.
+Haft is consumed via three surfaces sharing one artifact graph:
+  - Skills + slash commands in your AI coding agent (Claude Code, Codex, etc.)
+  - This CLI for direct manual access without an LLM
+  - MCP server for programmatic access from any LLM agent
+
+Standalone interactive agent and TUI surfaces were dropped in v8.0 per
+the governance substrate pivot — operate haft through your existing
+coding agent (recommended) or via subcommands below.
 
 Examples:
-  haft                              # launch interactive agent
-  haft "fix the failing tests"      # agent with initial goal
-  haft init                         # initialize project
-  haft serve                        # start MCP server for other agents`,
+  haft init                         # install skills + MCP config, set up project
+  haft serve                        # start the MCP server for other agents
+  haft fpf search "B.5.2"           # search the FPF specification
+  haft doctor                       # check installation health`,
 	Version: Version,
-	Args:    cobra.ArbitraryArgs,
-	RunE:    runAgent, // bare haft = launch agent
 }
 
 var versionCmd = &cobra.Command{

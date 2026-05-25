@@ -210,17 +210,6 @@ func setupProjectGraphFixture(t *testing.T) *projectGraphFixture {
 			},
 		},
 		{
-			id:    "dec-desktop-surface-boundary",
-			title: "Desktop remains a surface",
-			invariants: []string{
-				"Desktop is a surface and does not become a source of truth",
-			},
-			files: []string{
-				"internal/cli/desktop_rpc.go",
-				"internal/cli/desktop_rpc_handlers.go",
-			},
-		},
-		{
 			id:    "dec-cmd-thin-entrypoint",
 			title: "cmd/haft stays a thin entrypoint",
 			invariants: []string{
@@ -228,6 +217,17 @@ func setupProjectGraphFixture(t *testing.T) *projectGraphFixture {
 			},
 			files: []string{
 				"cmd/haft/main.go",
+			},
+		},
+		{
+			id:    "dec-mcp-server-stays-thin",
+			title: "MCP server is the cross-host enforcement surface",
+			invariants: []string{
+				"haft MCP tools validate args server-side and return structured errors; skills never enforce, only route",
+			},
+			files: []string{
+				"internal/cli/serve.go",
+				"internal/tools/haft.go",
 			},
 		},
 	}
@@ -413,7 +413,7 @@ func TestComputeImpactSet_SeededProjectData(t *testing.T) {
 		"dec-artifact-decision-structure",
 		"dec-cli-mcp-surface",
 		"dec-cmd-thin-entrypoint",
-		"dec-desktop-surface-boundary",
+		"dec-mcp-server-stays-thin",
 		"dec-present-derived-views",
 		"dec-tools-thin-handlers",
 	}

@@ -221,15 +221,15 @@ func malformedActiveReadinessSpecSection(id string, kind string) string {
 }
 
 type readinessContractFixture struct {
-	Schema                 string   `json:"schema"`
-	CanonicalStatuses      []string `json:"canonical_statuses"`
-	UnknownStatusExamples  []string `json:"unknown_status_examples"`
+	Schema                string   `json:"schema"`
+	CanonicalStatuses     []string `json:"canonical_statuses"`
+	UnknownStatusExamples []string `json:"unknown_status_examples"`
 }
 
 func loadReadinessContractFixture(t *testing.T) readinessContractFixture {
 	t.Helper()
 
-	path := filepath.Join("..", "..", "desktop", "readiness-contract", "canonical-statuses.json")
+	path := filepath.Join("testdata", "canonical-statuses.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read readiness contract fixture: %v", err)
