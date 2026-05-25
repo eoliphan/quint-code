@@ -18,6 +18,45 @@ var embeddedHFPFSkill []byte
 //go:embed skill/h-decide/SKILL.md
 var embeddedHDecideSkill []byte
 
+//go:embed skill/h-frame/SKILL.md
+var embeddedHFrameSkill []byte
+
+//go:embed skill/h-diagnose/SKILL.md
+var embeddedHDiagnoseSkill []byte
+
+//go:embed skill/h-explore/SKILL.md
+var embeddedHExploreSkill []byte
+
+//go:embed skill/h-compare/SKILL.md
+var embeddedHCompareSkill []byte
+
+//go:embed skill/h-verify/SKILL.md
+var embeddedHVerifySkill []byte
+
+//go:embed skill/h-status/SKILL.md
+var embeddedHStatusSkill []byte
+
+//go:embed skill/h-onboard/SKILL.md
+var embeddedHOnboardSkill []byte
+
+//go:embed skill/h-spec-cover/SKILL.md
+var embeddedHSpecCoverSkill []byte
+
+//go:embed skill/h-note/SKILL.md
+var embeddedHNoteSkill []byte
+
+//go:embed skill/h-commission/SKILL.md
+var embeddedHCommissionSkill []byte
+
+//go:embed skill/h-abduct/SKILL.md
+var embeddedHAbductSkill []byte
+
+//go:embed skill/h-boundary-unpack/SKILL.md
+var embeddedHBoundaryUnpackSkill []byte
+
+//go:embed skill/h-semio-review/SKILL.md
+var embeddedHSemioReviewSkill []byte
+
 // skillManifest declares a haft skill to be installed by `haft init`.
 // AllowImplicit is the codex policy gate — false means the skill is
 // explicit-only (e.g., h-decide manual-only per Transformer Mandate).
@@ -38,8 +77,33 @@ type skillManifest struct {
 // h-abduct, h-boundary-unpack, h-semio-review). Operators who re-run
 // `haft init` after each phase land receive the expanding skill set.
 var allSkills = []skillManifest{
+	// Umbrella (narrow fallback for FPF-meta queries)
 	{Name: "h-fpf", Content: embeddedHFPFSkill, AllowImplicit: true},
+
+	// Manual-only Transformer Mandate skills (cannot auto-fire)
 	{Name: "h-decide", Content: embeddedHDecideSkill, AllowImplicit: false},
+
+	// Auto-triggering workflow skills (Phase 4 batch 1: framing + exploration)
+	{Name: "h-frame", Content: embeddedHFrameSkill, AllowImplicit: true},
+	{Name: "h-diagnose", Content: embeddedHDiagnoseSkill, AllowImplicit: true},
+	{Name: "h-explore", Content: embeddedHExploreSkill, AllowImplicit: true},
+	{Name: "h-compare", Content: embeddedHCompareSkill, AllowImplicit: true},
+
+	// Auto-triggering workflow skills (Phase 4 batch 2: verify + operate)
+	{Name: "h-verify", Content: embeddedHVerifySkill, AllowImplicit: true},
+	{Name: "h-status", Content: embeddedHStatusSkill, AllowImplicit: true},
+	{Name: "h-onboard", Content: embeddedHOnboardSkill, AllowImplicit: true},
+	{Name: "h-spec-cover", Content: embeddedHSpecCoverSkill, AllowImplicit: true},
+	{Name: "h-note", Content: embeddedHNoteSkill, AllowImplicit: true},
+
+	// Manual-only sacred skill (execution authority — Transformer Mandate)
+	{Name: "h-commission", Content: embeddedHCommissionSkill, AllowImplicit: false},
+
+	// Subroutine skills (explicit-only — typically called by other skills
+	// or by the operator when working a specific FPF sub-discipline)
+	{Name: "h-abduct", Content: embeddedHAbductSkill, AllowImplicit: false},
+	{Name: "h-boundary-unpack", Content: embeddedHBoundaryUnpackSkill, AllowImplicit: false},
+	{Name: "h-semio-review", Content: embeddedHSemioReviewSkill, AllowImplicit: false},
 }
 
 // deprecatedSkillDirs lists skill directory names that prior haft
