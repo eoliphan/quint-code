@@ -422,11 +422,12 @@ func runGoldenE2EHaftCLI(t *testing.T, sourceRoot string, root string, args ...s
 	commandArgs := append([]string{"run", "./cmd/haft"}, args...)
 	cmd := exec.Command("go", commandArgs...)
 	cmd.Dir = sourceRoot
+	cacheRoot := t.TempDir()
 	cmd.Env = append(
 		os.Environ(),
 		"HAFT_PROJECT_ROOT="+root,
-		"GOCACHE="+filepath.Join(os.TempDir(), "haft-golden-go-build"),
-		"GOMODCACHE="+filepath.Join(os.TempDir(), "haft-golden-go-mod"),
+		"GOCACHE="+filepath.Join(cacheRoot, "go-build"),
+		"GOMODCACHE="+filepath.Join(cacheRoot, "go-mod"),
 		"GOFLAGS=-modcacherw",
 	)
 

@@ -433,7 +433,70 @@ func (t *HaftSolutionTool) explore(ctx context.Context, args map[string]any) (ag
 			ArtifactRef: a.Meta.ID,
 			Operation:   "explore",
 		},
+		Warnings: detectExploreWarnings(input, jsonStr(args, "parity_rules")),
 	}, nil
+}
+
+// detectExploreWarnings runs FPF-discipline heuristics over an
+// ExploreInput and returns advisory strings. These are SOFT
+// violations: the artifact is still written, but the agent sees the
+// warnings on the next turn and can self-correct.
+//
+// Detected patterns:
+//   - Disguised duplicate variants (titles look like rewordings)
+//   - WLNK that repeats the variant title verbatim (no failure mode named)
+//   - Empty parity_rules with >=3 variants (parity at risk)
+//   - No stepping-stone variant flagged AND no rationale provided
+func detectExploreWarnings(input artifact.ExploreInput, parityRules string) []string {
+	var warnings []string
+
+	// Disguised duplicates: pairwise title similarity.
+	for i := range input.Variants {
+		for j := i + 1; j < len(input.Variants); j++ {
+			a := strings.ToLower(strings.TrimSpace(input.Variants[i].Title))
+			b := strings.ToLower(strings.TrimSpace(input.Variants[j].Title))
+			if a == "" || b == "" {
+				continue
+			}
+			if a == b || strings.HasPrefix(b, a) || strings.HasPrefix(a, b) {
+				warnings = append(warnings, fmt.Sprintf(
+					"variants %q and %q look like rewordings of the same approach — FPF requires variants that differ in kind, not degree",
+					input.Variants[i].Title, input.Variants[j].Title,
+				))
+			}
+		}
+	}
+
+	// WLNK repeats title (no failure mode named).
+	for _, v := range input.Variants {
+		title := strings.ToLower(strings.TrimSpace(v.Title))
+		wlnk := strings.ToLower(strings.TrimSpace(v.WeakestLink))
+		if title != "" && wlnk == title {
+			warnings = append(warnings, fmt.Sprintf(
+				"variant %q: WLNK repeats the title — name the specific failure mode, not the feature",
+				v.Title,
+			))
+		}
+	}
+
+	// Parity declaration missing on multi-variant portfolios.
+	if len(input.Variants) >= 3 && strings.TrimSpace(parityRules) == "" {
+		warnings = append(warnings, "parity_rules empty for 3+ variants — fair comparison requires explicit parity plan")
+	}
+
+	// No stepping stone flagged + no rationale.
+	hasStepping := false
+	for _, v := range input.Variants {
+		if v.SteppingStone {
+			hasStepping = true
+			break
+		}
+	}
+	if !hasStepping && strings.TrimSpace(input.NoSteppingStoneRationale) == "" {
+		warnings = append(warnings, "no stepping_stone variant declared and no rationale given — confirm none of the variants opens future search space")
+	}
+
+	return warnings
 }
 
 func (t *HaftSolutionTool) compare(ctx context.Context, args map[string]any) (agent.ToolResult, error) {
@@ -474,7 +537,49 @@ func (t *HaftSolutionTool) compare(ctx context.Context, args map[string]any) (ag
 			Operation:            "compare",
 			ComparedPortfolioRef: a.Meta.ID,
 		},
+		Warnings: detectCompareWarnings(input),
 	}, nil
+}
+
+// detectCompareWarnings runs FPF heuristics over a CompareInput.
+//
+// Detected patterns:
+//   - Single dimension (collapse to ranking — Anti-Goodhart)
+//   - Empty parity_plan with scores recorded
+//   - Selected variant absent from non_dominated_set (selecting a dominated option)
+//   - PolicyApplied empty (no declared selection policy)
+func detectCompareWarnings(input artifact.CompareInput) []string {
+	var warnings []string
+
+	if len(input.Results.Dimensions) == 1 {
+		warnings = append(warnings, "comparison uses 1 dimension — collapse to ranking risks Anti-Goodhart; add observation dims to widen the lens")
+	}
+
+	if input.Results.ParityPlan == nil && len(input.Results.Scores) > 0 {
+		warnings = append(warnings, "scores recorded without parity_plan — declare what was held equal across variants")
+	}
+
+	if strings.TrimSpace(input.Results.PolicyApplied) == "" {
+		warnings = append(warnings, "policy_applied empty — selection policy must be declared BEFORE scoring (Anti-Goodhart)")
+	}
+
+	if input.Results.SelectedRef != "" && len(input.Results.NonDominatedSet) > 0 {
+		inSet := false
+		for _, ref := range input.Results.NonDominatedSet {
+			if ref == input.Results.SelectedRef {
+				inSet = true
+				break
+			}
+		}
+		if !inSet {
+			warnings = append(warnings, fmt.Sprintf(
+				"selected %q is NOT in non_dominated_set — selecting a dominated variant requires explicit override rationale",
+				input.Results.SelectedRef,
+			))
+		}
+	}
+
+	return warnings
 }
 
 //nolint:unused // exercised by package tests as a compatibility seam
@@ -1223,7 +1328,57 @@ func (t *HaftDecisionTool) decide(ctx context.Context, args map[string]any) (age
 			ArtifactRef: a.Meta.ID,
 			Operation:   "decide",
 		},
+		Warnings: detectDecideWarnings(input),
 	}, nil
+}
+
+// detectDecideWarnings runs FPF heuristics on a DecideInput.
+//
+// Detected patterns:
+//   - WeakestLink empty on the decision itself (selected variant's WLNK
+//     is hidden — agent must name what most plausibly breaks the choice)
+//   - SelectionPolicy empty (no recorded policy means post-hoc justification risk)
+//   - CounterArgument empty (no strongest-attack recorded)
+//   - Predictions empty (no falsifiable claims — measure loop will be hollow)
+//   - All predictions lack verify_after (no automatic refresh hook)
+//   - Rollback steps empty (decision marked irreversible without explicit
+//     irreversibility justification)
+func detectDecideWarnings(input artifact.DecideInput) []string {
+	var warnings []string
+
+	if strings.TrimSpace(input.WeakestLink) == "" {
+		warnings = append(warnings, "weakest_link empty — name what most plausibly breaks this choice (Anti-self-deception)")
+	}
+
+	if strings.TrimSpace(input.SelectionPolicy) == "" {
+		warnings = append(warnings, "selection_policy empty — record the rule used to choose, BEFORE seeing future results (Anti-Goodhart)")
+	}
+
+	if strings.TrimSpace(input.CounterArgument) == "" {
+		warnings = append(warnings, "counterargument empty — record the strongest genuine attack on this option (self-deception check)")
+	}
+
+	if len(input.Predictions) == 0 {
+		warnings = append(warnings, "no predictions declared — measure loop will have nothing to verify; add falsifiable claims")
+	} else {
+		// Check verify_after coverage.
+		anyVerifyAfter := false
+		for _, p := range input.Predictions {
+			if strings.TrimSpace(p.VerifyAfter) != "" {
+				anyVerifyAfter = true
+				break
+			}
+		}
+		if !anyVerifyAfter {
+			warnings = append(warnings, "no prediction has verify_after — verification loop won't fire automatically; set dates on at least one prediction")
+		}
+	}
+
+	if input.Rollback == nil || len(input.Rollback.Steps) == 0 {
+		warnings = append(warnings, "rollback steps empty — decision recorded as irreversible by omission; either describe rollback or accept the irreversibility explicitly")
+	}
+
+	return warnings
 }
 
 func (t *HaftDecisionTool) evidence(ctx context.Context, args map[string]any) (agent.ToolResult, error) {
