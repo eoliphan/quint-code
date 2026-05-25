@@ -4,7 +4,71 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [Unreleased] — governance substrate pivot
+
+Architectural pivot recorded in
+`.haft/decisions/dec-20260525-v8-architecture-pivot-from-standalone-agent-to-g-bbe45cb7.md`.
+Standalone interactive agent (`haft agent`), TUI (Bun/OpenTUI/SolidJS package
+from the prior 8.0.0 release), and desktop wrappers (Tauri / Wails) **dropped**.
+Haft becomes a governance substrate: kernel + CLI + MCP server + 15 skills,
+plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
++ slash-command surfaces. See [MIGRATION-v8.md](MIGRATION-v8.md).
+
+### Removed
+
+- `haft agent` standalone interactive agent (all of `internal/agentcore`,
+  `internal/agentdriver`, `internal/agentproto`, `internal/agentserver`,
+  `internal/agentstore`)
+- v8 TUI package (`tui/` — Bun + OpenTUI + SolidJS bundle, ~46k LOC dropped)
+- Desktop wrappers (`desktop/` — Tauri v2, prior Wails artifacts)
+- v7 helper commands: `haft login`, `haft models`, `haft setup`
+- `/h-reason` umbrella skill — replaced by the 15-skill catalog
+- Prior `[8.0.0]` architecture (TS+Bun+OpenTUI+SolidJS standalone TUI,
+  gradual deprecation in 8.0 + removal in 8.1 plan) superseded by the
+  May 25 pivot DRR per FPF reasoner critique (BLP violation confirmed)
+
+### Added
+
+- **15-skill v8 catalog** installed by `haft init`:
+  `h-fpf`, `h-frame`, `h-diagnose`, `h-explore`, `h-compare`, `h-decide`,
+  `h-verify`, `h-status`, `h-onboard`, `h-spec-cover`, `h-note`,
+  `h-commission`, `h-abduct`, `h-boundary-unpack`, `h-semio-review`.
+  Auto-triggering skills fire on operator context. `h-decide` and
+  `h-commission` are manual-only (`disable-model-invocation: true`)
+  per Transformer Mandate.
+- **`haft check routing`** — CI-friendly golden-prompt routing reliability
+  check. 40 cases pairing operator-style prompts with expected skills;
+  enforces 70% pass threshold from pivot DRR prediction.
+- **Kernel MCP hard gates** — `haft_decision(action="decide")` validates
+  required DRR fields server-side and returns structured errors with
+  FPF spec references (CMP-02, DEC-08, X-WLNK, CMP-04, DEC-05) plus
+  how-to-proceed sections. Tactical mode supports explicit `_skips` +
+  `_skip_reason` field bypass.
+- **`h-diagnose` parallel hypothesis testing** — spawns one Agent
+  subagent per hypothesis to prevent the LLM's natural anchoring bias.
+  Forces 3+ rivals per FPF CC-B.5.2-2.
+- **`h-compare` dim-wise parallel scoring** — spawns one Agent subagent
+  per comparison dimension scoring all variants. Parity plan and
+  selection policy declared BEFORE scoring (Anti-Goodhart).
+- **MIGRATION-v8.md** — v7→v8 migration guide with upgrade checklist,
+  behavioral-change reference, and rollback procedure.
+- **`Warnings []string` on `ToolResult`** — Slice B warning detectors
+  for h-explore (diversity check), h-compare (parity hints), h-decide
+  (DRR completeness hints) preserved from pre-pivot work.
+
+### Changed
+
+- CLAUDE.md gained a top-level "v8 Architecture (governance substrate)"
+  section describing three surfaces (skills, CLI, MCP) sharing one
+  artifact graph, FPF placement (skills = MethodDescription, kernel =
+  enforcement), and Transformer Mandate placement on h-decide /
+  h-commission.
+- README header reframed to "FPF governance substrate". Skill catalog
+  table added with mode classification (auto / manual / subroutine).
+  Cookbook section added with common workflow walkthroughs.
+- Artifact-graph hygiene: superseded 4 prior decisions conflicting with
+  the pivot (dec-20260513-v8-architecture-retroactive, v8-sunset-retroactive,
+  v8-attribution-retroactive, dec-20260424-desktop-smart-add-rpc).
 
 ## [8.0.0] — 2026-05-14
 

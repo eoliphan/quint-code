@@ -50,6 +50,10 @@ it adds governance discipline on top of whichever coding agent the operator
 already uses. See the pivot DRR for the full rationale, parity-compared
 variants, rollback plan, and falsifiable predictions.
 
+**Upgrading from v7?** Read [MIGRATION-v8.md](MIGRATION-v8.md) — short upgrade
+checklist plus what was dropped (`haft agent`, TUI, desktop, `/h-reason`,
+v7 helper commands) and what replaced it.
+
 ---
 
 ## Install
@@ -102,21 +106,21 @@ haft init --opencode
 ### What init does per tool
 
 The binary is the same — only the MCP config and command/prompt installation
-locations differ. Supported v7 hosts:
+locations differ. Supported v8 hosts:
 
-| Tool | MCP Config | Commands / Prompts | Skill |
-|------|-----------|--------------------|-------|
-| Claude Code | `.mcp.json` (project root) | `~/.claude/commands/` or `.claude/commands/` with `--local` | `~/.claude/skills/h-reason/` or local install with `--local` |
-| Codex CLI / Codex App | `.codex/config.toml` | `~/.codex/prompts/` or `.codex/prompts/` with `--local` | `~/.agents/skills/h-reason/` |
+| Tool | MCP Config | Commands / Prompts | Skills |
+|------|-----------|--------------------|--------|
+| Claude Code | `.mcp.json` (project root) | `~/.claude/commands/` or `.claude/commands/` with `--local` | `~/.claude/skills/` (15 skills installed, see catalog below) |
+| Codex CLI / Codex App | `.codex/config.toml` | `~/.codex/prompts/` or `.codex/prompts/` with `--local` | `~/.agents/skills/` (15 skills + per-command skills) |
 
 Experimental/legacy hosts:
 
 | Tool | MCP Config | Commands / Prompts | Skill |
 |------|-----------|--------------------|-------|
-| Cursor | `.cursor/mcp.json` | `~/.cursor/commands/` or `.cursor/commands/` with `--local` | `~/.cursor/skills/h-reason/` or local install with `--local` |
-| Gemini CLI | `~/.gemini/settings.json` | `~/.gemini/commands/` or local install with `--local` | — |
-| OpenCode | `opencode.json` (project root) | `~/.config/opencode/commands/` or `.opencode/commands/` with `--local` | `~/.config/opencode/skills/h-reason/` or `.opencode/skills/h-reason/` with `--local` |
-| Air | `.codex/config.toml` | project `skills/` | project `skills/h-reason/` |
+| Cursor | `.cursor/mcp.json` | `~/.cursor/commands/` or `.cursor/commands/` with `--local` | `~/.cursor/skills/` (v8 skill set; some skills route via prompts on hosts that don't surface skills natively) |
+| Gemini CLI | `~/.gemini/settings.json` | `~/.gemini/commands/` or local install with `--local` | — (commands only) |
+| OpenCode | `opencode.json` (project root) | `~/.config/opencode/commands/` or `.opencode/commands/` with `--local` | `~/.config/opencode/skills/` (v8 skill set) |
+| Air | `.codex/config.toml` | project `skills/` | project `skills/` (v8 skill set) |
 
 **Important for Cursor:** After init, open Cursor Settings → MCP → find `haft` → enable the toggle. Cursor adds MCP servers as disabled by default.
 
@@ -158,18 +162,35 @@ product correctness, or make L3 runtime/evidence claims.
 | `haft_refresh` | Lifecycle management for all artifacts |
 | `haft_query` | Search, status dashboard, file-to-decision lookup, FPF spec search |
 
-### One command: `/h-reason`
+### Fifteen skills installed by `haft init`
 
-Describe your problem. The agent frames it, generates alternatives, compares them fairly, and records the decision — all in one command. It auto-selects the right depth.
+| Skill | Mode | What it does |
+|---|---|---|
+| **h-fpf** | auto (narrow fallback) | Umbrella for FPF-meta queries; routes to specific skills below |
+| **h-frame** | auto | Frame a problem with B.4.1 stabilize + problem typing + umbrella-word repair |
+| **h-diagnose** | auto | Diagnose a failure with parallel hypothesis testing (Agent subagents per hypothesis to prevent anchoring) |
+| **h-explore** | auto | Generate distinct candidate variants with NQD diversity discipline (parallel direction-assigned agents) |
+| **h-compare** | auto | Fair comparison with dim-wise parallel scoring + Pareto front (NOT a scalar winner) |
+| **h-decide** | **manual** | Record a binding DecisionRecord with full DRR — Transformer Mandate (`disable-model-invocation`) |
+| **h-verify** | auto | Baseline → measure → evidence loop with drift detection |
+| **h-status** | auto | Read-only project FPF state dashboard |
+| **h-onboard** | auto | First-frame ceremony for projects new to haft |
+| **h-spec-cover** | auto | Spec coverage check with blind/stale module triage |
+| **h-note** | auto | Lightweight micro-decision recording |
+| **h-commission** | **manual** | WorkCommission lifecycle — sacred per Transformer Mandate (`disable-model-invocation`) |
+| **h-abduct** | subroutine | Pure B.5.2 abductive four-step (frame prompt → ≥3 rivals → filters → prime) |
+| **h-boundary-unpack** | subroutine | A.6.B L/A/D/E decomposition of boundary statements |
+| **h-semio-review** | subroutine | X-FANOUT-AUDIT — concept rename / spec consistency audit |
 
-### Or drive each step manually
+Auto-triggering skills fire when their description matches operator context.
+Manual-only skills (h-decide, h-commission) require explicit `/h-skill-name`
+invocation per Transformer Mandate (binding artifacts come from the human
+principal, not the agent). Subroutines (h-abduct, h-boundary-unpack,
+h-semio-review) are typically called from other skills or invoked explicitly
+when working on a specific FPF sub-discipline.
 
-```
-/h-frame  → /h-char  → /h-explore → /h-compare → /h-decide
-  what's      what       genuinely     fair         engineering
-  broken?     matters?   different     comparison   contract
-                         options
-```
+The skill catalog plus their routing reliability is testable via
+`haft check routing` (40 golden prompts, current pass rate 82.5%).
 
 ### From decision to code: `haft run`
 
@@ -182,8 +203,11 @@ haft run dec-20260414-001
 Haft reads the decision's invariants, claims, affected files, and governing invariants from the knowledge graph — then spawns an agent (Codex or Claude) with full reasoning context. After execution, takes a baseline snapshot automatically.
 
 ```
-/h-reason "redesign the caching layer"
-  ↓ frame → explore → compare → decide
+operator: "let's think about the caching layer"
+  ↓ h-frame auto-triggers in Claude Code / Codex
+  ↓ h-explore generates variants
+  ↓ h-compare produces Pareto front
+  ↓ operator picks → /h-decide records DRR (manual, per Transformer Mandate)
   ↓
 haft run dec-20260414-001 --agent codex
   ↓ reads decision → builds prompt → spawns agent
@@ -275,6 +299,63 @@ Use `haft_decision(action="measure", ...)` for post-implementation verification.
 
 ---
 
+## Cookbook — common v8 workflows
+
+### Recording an architectural choice
+
+```text
+operator (to Claude Code): "we need to pick a queue for the new ingestion path"
+↓ h-explore auto-triggers, generates 3+ distinct variants with NQD diversity
+↓ h-compare auto-triggers, scores dim-wise in parallel, surfaces Pareto front
+↓ operator picks variant, then explicitly types:
+/h-decide
+↓ kernel validates required DRR fields; missing fields → structured error
+↓ on pass: DRR written to .haft/decisions/, ready for `haft run`
+```
+
+### Diagnosing a failure with rival hypotheses
+
+```text
+operator: "tests are failing on the schema migration after the deploy"
+↓ h-diagnose auto-triggers, spawns 3+ parallel Agent subagents per hypothesis
+↓ each subagent reads only what its hypothesis needs (no anchoring)
+↓ results merged; ranked by FPF B.5.2 filter chain
+↓ if confirmed: /h-note records the diagnosis; if architectural: /h-frame
+```
+
+### Verifying a decision is still valid
+
+```text
+operator: "did the dec-20260420-cache-redesign actually work"
+↓ h-verify auto-triggers
+↓ reads decision predictions + valid_until + baseline file hashes
+↓ measures observable claims (test output, metric query, etc.)
+↓ writes evidence with CL/freshness; updates R_eff
+↓ if R_eff < 0.5 → marks stale; if predictions failed → reopens problem
+```
+
+### Auditing a concept rename
+
+```text
+operator: "rename Service to EnablingSystem across the project"
+↓ explicit: /h-semio-review (manual-only; subroutine)
+↓ enumerates carriers (prose, code, manifests, filenames, test fixtures)
+↓ classifies hits by statement type (rule / promise / decision / evidence)
+↓ flags same-name/different-thing collisions for operator approval
+↓ produces ordered repair plan; iterates to fixed-point per X-FANOUT-AUDIT
+```
+
+### Quick operator status
+
+```bash
+haft check         # CI-friendly governance verification (exit 0/1)
+haft check routing # sanity-check skill description routing reliability
+```
+
+From the host AI: `/h-status` for the full dashboard.
+
+---
+
 ## What Makes It Different
 
 - **Decisions are live** — computed trust scores (R_eff) degrade as evidence ages
@@ -316,9 +397,11 @@ Detailed guide, real-world flows, and known rough edges: see [`docs/7.x/harness-
 
 [FPF](https://github.com/ailev/FPF) by [Anatoly Levenchuk](https://www.linkedin.com/in/ailev/) — a rigorous, transdisciplinary architecture for thinking.
 
-`/h-reason` gives your AI agent an FPF-native operating system for engineering decisions: problem framing before solutions, characterization before comparison, parity enforcement, evidence with congruence penalties, weakest-link assurance, and the lemniscate cycle that closes itself when evidence ages or measurements fail.
+The v8 skill set (`h-frame`, `h-explore`, `h-compare`, `h-decide`, `h-verify`, plus the catalog above) gives your AI agent an FPF-native operating system for engineering decisions: problem framing before solutions, characterization before comparison, parity enforcement, evidence with congruence penalties, weakest-link assurance, and the lemniscate cycle that closes itself when evidence ages or measurements fail.
 
-`haft fpf search` gives access to the indexed FPF specification with tiered retrieval: exact pattern id → route-aware concept matching → keyword fallback.
+The h-frame/h-explore/h-compare skills auto-trigger when operator context matches. The binding step (h-decide, h-commission) is manual-only per Transformer Mandate — agents may frame and compare, but the human principal records the binding choice.
+
+`haft fpf search` (and `haft_query(action="fpf")` from MCP) gives access to the indexed FPF specification with tiered retrieval: exact pattern id → route-aware concept matching → keyword fallback.
 
 ---
 

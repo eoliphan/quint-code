@@ -104,7 +104,7 @@ When reasoning through problems, apply these principles:
 
 ### 4. Plan the Solution (Collaborative)
 
-- **For significant changes: use `/h-reason` or `/h-frame`**
+- **For significant changes: use `/h-frame` to scope, then `/h-explore` + `/h-compare`; bind with manual `/h-decide`**
 - Break fix into manageable, incremental steps
 - Each step should be specific, simple, and verifiable
 - Actually execute each step (don't just say "I will do X" - DO X)
@@ -176,30 +176,38 @@ RECOMMENDATION: [Which + why, or "need your input on X"]
 - Easily reversible decisions
 - Time-critical situations where overhead isn't justified
 
-**Activation:** Run `/h-reason` and describe the problem. The agent auto-selects depth.
+**Activation:** Describe the problem to your AI coding agent. Workflow
+skills (h-frame, h-diagnose, h-explore, h-compare, etc.) auto-trigger
+based on operator context. Binding artifacts (h-decide, h-commission) are
+manual-only per Transformer Mandate — explicitly type `/h-decide`.
 
-**Five modes:**
+**v8 skill catalog:**
 
-| Mode | Command | What it does |
-|------|---------|-------------|
-| Understand | `/h-frame` | Frame the problem — signal, constraints, acceptance |
-| Explore | `/h-char` | Define comparison dimensions (constraint/target/observation) |
-| Explore | `/h-explore` | Generate genuinely distinct variants with weakest link |
-| Choose | `/h-compare` | Fair comparison with parity enforcement |
-| Execute | `/h-decide` | Decision contract — invariants, DO/DON'T, rollback |
-| Verify | `/h-verify` | Check stale artifacts, code drift, pending claims |
-| — | `/h-note` | Micro-decision with rationale validation |
-| — | `/h-status` | Dashboard — decisions, problems, module coverage |
-| — | `/h-search` | Full-text search across all artifacts |
-| — | `/h-problems` | List problems with readiness + complexity signals |
+| Surface | Skill | When |
+|------|---------|------|
+| auto | `/h-frame` | Frame the problem — signal, constraints, acceptance |
+| auto | `/h-diagnose` | Parallel hypothesis testing for failures |
+| auto | `/h-explore` | Generate genuinely distinct variants with weakest link |
+| auto | `/h-compare` | Fair comparison with parity, dim-wise parallel scoring |
+| **manual** | `/h-decide` | Binding DRR (`disable-model-invocation`) |
+| **manual** | `/h-commission` | WorkCommission lifecycle (`disable-model-invocation`) |
+| auto | `/h-verify` | Check stale artifacts, code drift, pending claims |
+| auto | `/h-status` | Dashboard — decisions, problems, module coverage |
+| auto | `/h-onboard` | First-frame ceremony for projects new to haft |
+| auto | `/h-spec-cover` | Spec coverage check with blind/stale module triage |
+| auto | `/h-note` | Micro-decision with rationale validation |
+| auto | `/h-fpf` | Umbrella for generic FPF-meta queries; routes to specifics |
+| subroutine | `/h-abduct` | B.5.2 four-step abductive reasoning |
+| subroutine | `/h-boundary-unpack` | A.6.B L/A/D/E decomposition |
+| subroutine | `/h-semio-review` | X-FANOUT-AUDIT rename / consistency check |
 
 **Recommended protocol (for best results):**
 
 ```
-/h-frame → /h-char → /h-explore → /h-compare → /h-decide
-  what's      what       genuinely     fair         engineering
-  broken?     matters?   different     comparison   contract
-                         options
+/h-frame → /h-explore → /h-compare → /h-decide
+  what's     genuinely     fair         engineering
+  broken?    different     comparison   contract (manual-only)
+             options
 ```
 
 **Key Concepts:**
@@ -217,7 +225,7 @@ RECOMMENDATION: [Which + why, or "need your input on X"]
 
 ## Critical Reminders
 
-1. **Decision Framework vs FPF**: Quick decisions → inline framework. Complex/persistent → `/h-reason`
+1. **Decision Framework vs FPF**: Quick decisions → inline framework. Complex/persistent → workflow skills (`/h-frame` → `/h-explore` → `/h-compare` → manual `/h-decide`)
 3. **Actually Do Work**: When you say "I will do X", DO X
 4. **No Commits Without Permission**: Only commit when explicitly asked
 5. **Test Contracts**: Test behavior through public interfaces, not implementation
