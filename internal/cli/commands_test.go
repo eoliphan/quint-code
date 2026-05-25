@@ -11,24 +11,36 @@ func TestInstallSkillAirUsesProjectSkillsDir(t *testing.T) {
 	projectRoot := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
 
+	// Multi-skill installer returns the skills ROOT (parent of each skill
+	// folder), not a per-skill subdir. Each skill in allSkills lands as
+	// `<root>/<skill-name>/SKILL.md`.
 	displayPath, err := installSkill("air", false, projectRoot)
 	if err != nil {
 		t.Fatalf("installSkill returned error: %v", err)
 	}
 
-	wantDir := filepath.Join(projectRoot, "skills", "h-reason")
-	if displayPath != wantDir {
-		t.Fatalf("display path = %q, want %q", displayPath, wantDir)
+	wantRoot := filepath.Join(projectRoot, "skills")
+	if displayPath != wantRoot {
+		t.Fatalf("display path = %q, want %q", displayPath, wantRoot)
 	}
 
-	skillPath := filepath.Join(wantDir, "SKILL.md")
-	content, err := os.ReadFile(skillPath)
-	if err != nil {
-		t.Fatalf("failed to read installed skill: %v", err)
+	// Each governance-substrate skill should land at <root>/<name>/SKILL.md.
+	for _, sk := range allSkills {
+		skillPath := filepath.Join(wantRoot, sk.Name, "SKILL.md")
+		content, err := os.ReadFile(skillPath)
+		if err != nil {
+			t.Fatalf("failed to read installed skill %q: %v", sk.Name, err)
+		}
+		if string(content) != string(sk.Content) {
+			t.Fatalf("installed skill %q content mismatch", sk.Name)
+		}
 	}
 
-	if string(content) != string(embeddedHReasonSkill) {
-		t.Fatalf("installed skill content mismatch")
+	// Deprecated h-reason directory MUST NOT exist after install — the
+	// migration is part of the install step so re-running haft init
+	// always lands a clean post-pivot state.
+	if _, err := os.Stat(filepath.Join(wantRoot, "h-reason")); !os.IsNotExist(err) {
+		t.Fatalf("h-reason should be removed by deprecation cleanup; got err=%v", err)
 	}
 }
 
@@ -43,8 +55,12 @@ func TestInstallCodexSkillsWritesExplicitCommandSkills(t *testing.T) {
 	}
 
 	commandCount := embeddedCommandCount(t)
-	if count != commandCount+1 {
-		t.Fatalf("installed skill count = %d, want %d", count, commandCount+1)
+	// Codex installer writes allSkills (governance substrate skills) +
+	// one skill per embedded command. Count = len(allSkills) + commandCount.
+	wantCount := len(allSkills) + commandCount
+	if count != wantCount {
+		t.Fatalf("installed skill count = %d, want %d (allSkills=%d + commands=%d)",
+			count, wantCount, len(allSkills), commandCount)
 	}
 	if displayPath != "~/.agents/skills" {
 		t.Fatalf("display path = %q, want %q", displayPath, "~/.agents/skills")
@@ -98,13 +114,31 @@ func TestInstallCodexSkillsWritesExplicitCommandSkills(t *testing.T) {
 		t.Fatalf("h-frame should be explicit-only, got:\n%s", string(explicitPolicy))
 	}
 
-	reasonPolicyPath := filepath.Join(skillsRoot, "h-reason", "agents", "openai.yaml")
-	reasonPolicy, err := os.ReadFile(reasonPolicyPath)
+	// h-fpf is the v8 umbrella replacement for the deprecated h-reason
+	// skill. It auto-triggers (narrow fallback) — verify policy reflects.
+	fpfPolicyPath := filepath.Join(skillsRoot, "h-fpf", "agents", "openai.yaml")
+	fpfPolicy, err := os.ReadFile(fpfPolicyPath)
 	if err != nil {
-		t.Fatalf("failed to read h-reason policy: %v", err)
+		t.Fatalf("failed to read h-fpf policy: %v", err)
 	}
-	if !strings.Contains(string(reasonPolicy), "allow_implicit_invocation: true") {
-		t.Fatalf("h-reason should allow implicit invocation, got:\n%s", string(reasonPolicy))
+	if !strings.Contains(string(fpfPolicy), "allow_implicit_invocation: true") {
+		t.Fatalf("h-fpf should allow implicit invocation, got:\n%s", string(fpfPolicy))
+	}
+
+	// h-decide is manual-only (Transformer Mandate via codex policy +
+	// disable-model-invocation in claude frontmatter).
+	decidePolicyPath := filepath.Join(skillsRoot, "h-decide", "agents", "openai.yaml")
+	decidePolicy, err := os.ReadFile(decidePolicyPath)
+	if err != nil {
+		t.Fatalf("failed to read h-decide policy: %v", err)
+	}
+	if !strings.Contains(string(decidePolicy), "allow_implicit_invocation: false") {
+		t.Fatalf("h-decide must be explicit-only per Transformer Mandate, got:\n%s", string(decidePolicy))
+	}
+
+	// Deprecated h-reason directory must be removed (migration step).
+	if _, err := os.Stat(filepath.Join(skillsRoot, "h-reason")); !os.IsNotExist(err) {
+		t.Fatalf("h-reason must be removed by deprecation cleanup; got err=%v", err)
 	}
 }
 
@@ -184,18 +218,43 @@ func embeddedCommandCount(t *testing.T) int {
 	return count
 }
 
-func TestEmbeddedHReasonSkill_Path5RequiresAutonomousMode(t *testing.T) {
-	content := string(embeddedHReasonSkill)
+// TestHDecideSkill_IsManualOnlyTransformerMandate verifies that the
+// h-decide skill carries the structural Transformer Mandate enforcement
+// (disable-model-invocation) so the agent cannot auto-fire a binding
+// DecisionRecord write. Per v8 governance substrate pivot.
+func TestHDecideSkill_IsManualOnlyTransformerMandate(t *testing.T) {
+	content := string(embeddedHDecideSkill)
 
 	required := []string{
-		`ONLY when autonomous mode is already enabled for the session`,
-		`If autonomous mode is OFF, phrases like "figure out the best approach and do it" or "fix everything" are NOT enough`,
+		`disable-model-invocation: true`,
+		`MANUAL ONLY`,
+		`Transformer Mandate`,
 	}
 
 	for _, want := range required {
 		if !strings.Contains(content, want) {
-			t.Fatalf("embedded skill missing %q", want)
+			t.Fatalf("h-decide skill missing %q — Transformer Mandate enforcement broken", want)
 		}
+	}
+}
+
+// TestHFPFSkill_IsNarrowUmbrella verifies that the h-fpf umbrella does
+// not absorb the entire FPF procedural body. It must point to specific
+// skills + the spec search rather than recreating h-reason-style
+// encyclopedia (per plan §3 and FPF reasoner critique 2026-05-25).
+func TestHFPFSkill_IsNarrowUmbrella(t *testing.T) {
+	content := string(embeddedHFPFSkill)
+
+	// Must reference the specific skills it routes to.
+	for _, sk := range []string{"h-frame", "h-diagnose", "h-explore", "h-compare", "h-decide", "h-verify"} {
+		if !strings.Contains(content, sk) {
+			t.Fatalf("h-fpf must list %q in its routing table", sk)
+		}
+	}
+	// Must point at the spec-search MCP path so the agent can retrieve
+	// pattern text without h-fpf having to inline it.
+	if !strings.Contains(content, `haft_query(action="fpf"`) {
+		t.Fatal("h-fpf must point at haft_query(action=\"fpf\", ...) for spec lookups")
 	}
 }
 

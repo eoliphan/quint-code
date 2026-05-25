@@ -15,16 +15,21 @@ func TestReasoningSourcesShareCanonicalInteractionMatrix(t *testing.T) {
 		Cwd:         "/repo",
 		Lemniscate:  true,
 	})
-	skill := string(embeddedHReasonSkill)
 	commandBytes, err := embeddedCommands.ReadFile("commands/h-compare.md")
 	if err != nil {
 		t.Fatalf("read embedded compare command: %v", err)
 	}
 	command := string(commandBytes)
 
+	// Drift detector across the two interaction-matrix carriers: the
+	// agent system prompt and the canonical /h-compare command body.
+	// The previous third source (embedded h-reason skill) was dropped
+	// in the v8 governance substrate pivot — h-fpf is narrow umbrella,
+	// h-decide carries decision-specific procedure, and per-skill body
+	// content diverges by design. The interaction matrix lives in the
+	// prompt; commands cite it to stay coherent.
 	sources := map[string]string{
 		"prompt":    prompt,
-		"skill":     skill,
 		"h-compare": command,
 	}
 
@@ -52,16 +57,21 @@ func TestReasoningSourcesRejectKnownContradictoryPhrases(t *testing.T) {
 		Cwd:         "/repo",
 		Lemniscate:  true,
 	})
-	skill := string(embeddedHReasonSkill)
 	commandBytes, err := embeddedCommands.ReadFile("commands/h-compare.md")
 	if err != nil {
 		t.Fatalf("read embedded compare command: %v", err)
 	}
 	command := string(commandBytes)
 
+	// Drift detector across the two interaction-matrix carriers: the
+	// agent system prompt and the canonical /h-compare command body.
+	// The previous third source (embedded h-reason skill) was dropped
+	// in the v8 governance substrate pivot — h-fpf is narrow umbrella,
+	// h-decide carries decision-specific procedure, and per-skill body
+	// content diverges by design. The interaction matrix lives in the
+	// prompt; commands cite it to stay coherent.
 	sources := map[string]string{
 		"prompt":    prompt,
-		"skill":     skill,
 		"h-compare": command,
 	}
 

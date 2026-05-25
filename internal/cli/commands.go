@@ -12,8 +12,47 @@ import (
 //go:embed commands/*.md
 var embeddedCommands embed.FS
 
-//go:embed skill/h-reason/SKILL.md
-var embeddedHReasonSkill []byte
+//go:embed skill/h-fpf/SKILL.md
+var embeddedHFPFSkill []byte
+
+//go:embed skill/h-decide/SKILL.md
+var embeddedHDecideSkill []byte
+
+// skillManifest declares a haft skill to be installed by `haft init`.
+// AllowImplicit is the codex policy gate — false means the skill is
+// explicit-only (e.g., h-decide manual-only per Transformer Mandate).
+type skillManifest struct {
+	Name          string
+	Content       []byte
+	AllowImplicit bool
+}
+
+// allSkills is the v8 governance substrate skill set. Order in this
+// slice is the install order; first-failure semantics return the
+// partial path so the operator sees which skill broke.
+//
+// Phase 3 ships h-fpf (umbrella fallback, narrow) + h-decide
+// (manual-only Transformer Mandate enforcement). Phase 4 adds the
+// remaining workflow skills (h-frame, h-diagnose, h-explore, h-compare,
+// h-verify, h-status, h-onboard, h-spec-cover, h-note, h-commission,
+// h-abduct, h-boundary-unpack, h-semio-review). Operators who re-run
+// `haft init` after each phase land receive the expanding skill set.
+var allSkills = []skillManifest{
+	{Name: "h-fpf", Content: embeddedHFPFSkill, AllowImplicit: true},
+	{Name: "h-decide", Content: embeddedHDecideSkill, AllowImplicit: false},
+}
+
+// deprecatedSkillDirs lists skill directory names that prior haft
+// versions installed but the current v8 governance substrate has
+// replaced. `installSkill` removes them on every install so operators
+// who re-run `haft init` get a clean post-pivot state without manual
+// cleanup. Add older deprecated skill names here as the skill set
+// evolves; do NOT remove entries (operators who skip versions need
+// the cumulative cleanup list).
+var deprecatedSkillDirs = []string{
+	"q-reason", // pre-rename ancestor of h-reason
+	"h-reason", // replaced by narrow h-fpf umbrella in v8 governance pivot
+}
 
 func installCommands(projectRoot string, platform string, local bool) (string, int, error) {
 	entries, err := embeddedCommands.ReadDir("commands")
@@ -117,10 +156,20 @@ func installCodexSkills(projectRoot string, local bool) (string, int, error) {
 	}
 
 	cleanupOldCodexSkills(skillsRoot)
+	// Remove deprecated skill dirs (q-reason, h-reason) on every install.
+	for _, name := range deprecatedSkillDirs {
+		_ = os.RemoveAll(filepath.Join(skillsRoot, name))
+	}
 
-	reasonSkill := transformCodexSkillReferences(string(embeddedHReasonSkill))
-	if err := writeCodexSkill(skillsRoot, "h-reason", reasonSkill, true); err != nil {
-		return "", 0, err
+	// Install v8 governance substrate skills (h-fpf, h-decide, ...) with
+	// per-skill codex policy gates.
+	skillCount := 0
+	for _, sk := range allSkills {
+		body := transformCodexSkillReferences(string(sk.Content))
+		if err := writeCodexSkill(skillsRoot, sk.Name, body, sk.AllowImplicit); err != nil {
+			return "", 0, err
+		}
+		skillCount++
 	}
 
 	entries, err := embeddedCommands.ReadDir("commands")
@@ -128,7 +177,10 @@ func installCodexSkills(projectRoot string, local bool) (string, int, error) {
 		return "", 0, fmt.Errorf("failed to read embedded commands: %w", err)
 	}
 
-	count := 1
+	// Start count at the number of governance-substrate skills we just
+	// wrote so the per-command-as-codex-skill loop below extends rather
+	// than overwrites the total reported back to the operator.
+	count := skillCount
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
@@ -378,69 +430,88 @@ func escapeTomlMultiline(s string) string {
 	return s
 }
 
-func installSkill(platform string, local bool, projectRoot string) (string, error) {
+// skillsRoot returns the per-platform parent directory under which
+// individual skill folders live (one folder per skill name).
+func skillsRoot(platform string, local bool, projectRoot string) (string, bool) {
 	homeDir, _ := os.UserHomeDir()
-
-	var skillDir string
 	switch platform {
 	case "claude":
 		if local {
-			skillDir = filepath.Join(projectRoot, ".claude", "skills", "h-reason")
-		} else {
-			skillDir = filepath.Join(homeDir, ".claude", "skills", "h-reason")
+			return filepath.Join(projectRoot, ".claude", "skills"), true
 		}
+		return filepath.Join(homeDir, ".claude", "skills"), true
 	case "cursor":
 		if local {
-			skillDir = filepath.Join(projectRoot, ".cursor", "skills", "h-reason")
-		} else {
-			skillDir = filepath.Join(homeDir, ".cursor", "skills", "h-reason")
+			return filepath.Join(projectRoot, ".cursor", "skills"), true
 		}
+		return filepath.Join(homeDir, ".cursor", "skills"), true
 	case "air":
-		skillDir = filepath.Join(projectRoot, "skills", "h-reason")
+		return filepath.Join(projectRoot, "skills"), true
 	case "codex":
 		if local {
-			skillDir = filepath.Join(projectRoot, ".agents", "skills", "h-reason")
-		} else {
-			skillDir = filepath.Join(homeDir, ".agents", "skills", "h-reason")
+			return filepath.Join(projectRoot, ".agents", "skills"), true
 		}
+		return filepath.Join(homeDir, ".agents", "skills"), true
 	case "opencode":
-		// OpenCode reads .opencode/skills/ in the project root, with global
-		// override at ~/.config/opencode/skills/.
 		if local {
-			skillDir = filepath.Join(projectRoot, ".opencode", "skills", "h-reason")
-		} else {
-			skillDir = filepath.Join(homeDir, ".config", "opencode", "skills", "h-reason")
+			return filepath.Join(projectRoot, ".opencode", "skills"), true
 		}
-	default:
+		return filepath.Join(homeDir, ".config", "opencode", "skills"), true
+	}
+	return "", false
+}
+
+// installSkill installs all v8 governance substrate skills under the
+// platform-appropriate skills directory and removes deprecated skill
+// folders that prior haft versions left behind. Returns the display
+// path of the skills root + count of skills installed.
+//
+// Per skill: SKILL.md is the markdown body; codex writes an additional
+// `agents/openai.yaml` policy controlling implicit invocation. Operator
+// invocation behavior is governed by frontmatter (`disable-model-invocation`
+// on Claude Code; `policy.allow_implicit_invocation` on Codex).
+func installSkill(platform string, local bool, projectRoot string) (string, error) {
+	root, ok := skillsRoot(platform, local, projectRoot)
+	if !ok {
 		return "", nil
 	}
 
-	if err := os.MkdirAll(skillDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create skill directory: %w", err)
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return "", fmt.Errorf("failed to create skills root %q: %w", root, err)
 	}
 
-	// Remove old q-reason skill if it exists (migration)
-	oldSkillDir := strings.Replace(skillDir, "h-reason", "q-reason", 1)
-	if oldSkillDir != skillDir {
-		_ = os.RemoveAll(oldSkillDir)
+	// Remove deprecated skill directories (q-reason, h-reason, etc.)
+	// so operators who re-run `haft init` land on the current v8 set
+	// without manual cleanup.
+	for _, name := range deprecatedSkillDirs {
+		_ = os.RemoveAll(filepath.Join(root, name))
 	}
 
-	destPath := filepath.Join(skillDir, "SKILL.md")
-	content := embeddedHReasonSkill
-	if platform == "codex" {
-		content = []byte(transformCodexSkillReferences(string(embeddedHReasonSkill)))
-	}
-	if err := os.WriteFile(destPath, content, 0644); err != nil {
-		return "", fmt.Errorf("failed to write skill: %w", err)
-	}
+	for _, sk := range allSkills {
+		skillDir := filepath.Join(root, sk.Name)
+		if err := os.MkdirAll(skillDir, 0755); err != nil {
+			return "", fmt.Errorf("create skill dir %q: %w", skillDir, err)
+		}
 
-	if platform == "codex" {
-		if err := writeCodexSkillPolicy(skillDir, true); err != nil {
-			return "", fmt.Errorf("failed to write skill policy: %w", err)
+		content := sk.Content
+		if platform == "codex" {
+			content = []byte(transformCodexSkillReferences(string(sk.Content)))
+		}
+
+		destPath := filepath.Join(skillDir, "SKILL.md")
+		if err := os.WriteFile(destPath, content, 0644); err != nil {
+			return "", fmt.Errorf("write skill %q: %w", sk.Name, err)
+		}
+
+		if platform == "codex" {
+			if err := writeCodexSkillPolicy(skillDir, sk.AllowImplicit); err != nil {
+				return "", fmt.Errorf("write codex policy %q: %w", sk.Name, err)
+			}
 		}
 	}
 
-	return displayHomePath(skillDir, homeDir), nil
+	homeDir, _ := os.UserHomeDir()
+	return displayHomePath(root, homeDir), nil
 }
 
 func writeCodexSkillPolicy(skillDir string, allowImplicit bool) error {

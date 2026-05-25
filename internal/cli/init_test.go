@@ -291,17 +291,27 @@ func TestRunInit_OpencodeWritesMcpConfigAndCommands(t *testing.T) {
 		t.Errorf("h-frame.md not installed: %v", err)
 	}
 
-	// Skill install for opencode lands in .opencode/skills/h-reason
+	// Skill install for opencode lands in .opencode/skills (root); each
+	// v8 governance-substrate skill lands as <root>/<name>/SKILL.md.
 	skillPath, err := installSkill("opencode", true, tmpDir)
 	if err != nil {
 		t.Fatalf("installSkill opencode: %v", err)
 	}
-	wantSkillDir := filepath.Join(tmpDir, ".opencode", "skills", "h-reason")
-	if skillPath != wantSkillDir {
-		t.Errorf("skillPath = %q, want %q", skillPath, wantSkillDir)
+	wantSkillRoot := filepath.Join(tmpDir, ".opencode", "skills")
+	if skillPath != wantSkillRoot {
+		t.Errorf("skillPath = %q, want %q", skillPath, wantSkillRoot)
 	}
-	if _, err := os.Stat(filepath.Join(wantSkillDir, "SKILL.md")); err != nil {
-		t.Errorf("SKILL.md not installed: %v", err)
+	// h-fpf (v8 umbrella replacement for h-reason) must land.
+	if _, err := os.Stat(filepath.Join(wantSkillRoot, "h-fpf", "SKILL.md")); err != nil {
+		t.Errorf("h-fpf SKILL.md not installed: %v", err)
+	}
+	// h-decide (manual-only, Transformer Mandate) must land.
+	if _, err := os.Stat(filepath.Join(wantSkillRoot, "h-decide", "SKILL.md")); err != nil {
+		t.Errorf("h-decide SKILL.md not installed: %v", err)
+	}
+	// Deprecated h-reason must be removed by deprecation cleanup.
+	if _, err := os.Stat(filepath.Join(wantSkillRoot, "h-reason")); !os.IsNotExist(err) {
+		t.Errorf("h-reason should be removed; got err=%v", err)
 	}
 }
 
