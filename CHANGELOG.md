@@ -39,6 +39,23 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 
 ### Added
 
+- **`haft init` installs/updates project `CLAUDE.md` haft section** — new
+  step in the init flow. Writes a haft-managed section delimited by
+  `<!-- haft:start -->` / `<!-- haft:end -->` HTML-comment markers.
+  Idempotent: re-running `haft init` replaces content inside the markers
+  and preserves any operator-authored content outside. Opt-out via
+  `haft init --no-claude-md`. Template embedded into the binary from
+  `internal/cli/claude_md_template.md`; the same content is mirrored
+  between haft markers in repo-root `CLAUDE.md`, with drift caught by
+  `TestClaudeMDTemplateInSyncWithRepoRoot`.
+- **CLAUDE.md showcase template** carries the new "Description ≠ Work"
+  core rule, a self-check pattern before long responses, friction-tradeoff
+  explainer (why kernel-persistence is worth the in-the-moment cost),
+  canonical FPF flow diagram, skill catalog with mode classification,
+  Quick Decision Framework for small reversible choices, Communication
+  Style calibration table, Thinking Principles, Critical Reminders, and
+  FPF Glossary. End-users get this on `haft init`; haft maintainers see
+  the same content between markers in repo-root CLAUDE.md.
 - **15-skill v8 catalog** installed by `haft init`:
   `h-fpf`, `h-frame`, `h-diagnose`, `h-explore`, `h-compare`, `h-decide`,
   `h-verify`, `h-status`, `h-onboard`, `h-spec-cover`, `h-note`,
@@ -68,6 +85,36 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 
 ### Changed
 
+- **Skill descriptions rewritten per Anthropic SOTA best practices** —
+  third-person, pushy ("Make sure to use this skill whenever..."), verbatim
+  user trigger phrases instead of FPF pattern IDs. Counters Claude's
+  documented tendency to undertrigger skills (per Anthropic's
+  skill-creator playbook). Particular focus on `h-frame`, which now
+  catches the high-value moment when an operator proposes a refactor /
+  rewrite / migration without first naming the problem or acceptance
+  criteria. Subroutines (`h-abduct`, `h-boundary-unpack`,
+  `h-semio-review`) marked `INTERNAL SUBROUTINE` in description so the
+  model knows not to surface them directly to operators.
+- **`h-onboard` procedure refactored — agent drafts, operator reviews.**
+  Previous procedure pushed operators to author the three spec carriers
+  (`target-system.md`, `enabling-system.md`, `term-map.md`) themselves,
+  with the rationale "they need to feel it." This misinterpreted
+  Transformer Mandate (which only governs binding choices, not
+  descriptive observation) and defeated the purpose of having an AI
+  agent. The new procedure: agent reads README, project-config files
+  (`package.json` / `pyproject.toml` / `Cargo.toml` / `go.mod`), source
+  entry points, CI files, and drafts initial spec carriers directly to
+  disk via the `Write` tool. Each file starts with a `DRAFT` HTML
+  comment so the operator sees it as a starting point, not authoritative.
+  Operator reviews and edits where the agent inferred wrong. The
+  "autonomy default" question was also removed — that belongs at
+  `/h-commission`, not onboarding.
+- **Repo-root `CLAUDE.md` restructured as single source of truth** —
+  maintainer-only prelude (haft v8 architecture notes, preserved across
+  `haft init`) followed by haft markers wrapping the same showcase
+  template that ships to end users. The bracketed section is the
+  canonical good-engineering config; the prelude is haft-specific
+  context for AI agents working on haft itself.
 - CLAUDE.md gained a top-level "v8 Architecture (governance substrate)"
   section describing three surfaces (skills, CLI, MCP) sharing one
   artifact graph, FPF placement (skills = MethodDescription, kernel =

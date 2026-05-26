@@ -17,14 +17,15 @@ import (
 )
 
 var (
-	initClaude   bool
-	initCursor   bool
-	initGemini   bool
-	initCodex    bool
-	initAir      bool
-	initOpencode bool
-	initAll      bool
-	initLocal    bool
+	initClaude     bool
+	initCursor     bool
+	initGemini     bool
+	initCodex      bool
+	initAir        bool
+	initOpencode   bool
+	initAll        bool
+	initLocal      bool
+	initNoClaudeMD bool
 )
 
 type initHostOptions struct {
@@ -69,6 +70,7 @@ func init() {
 	initCmd.Flags().BoolVar(&initAir, "air", false, "Configure experimental JetBrains Air integration")
 	initCmd.Flags().BoolVar(&initAll, "all", false, "Configure all supported host agents")
 	initCmd.Flags().BoolVar(&initLocal, "local", false, "Install commands in project directory instead of global")
+	initCmd.Flags().BoolVar(&initNoClaudeMD, "no-claude-md", false, "Skip installing/updating the project CLAUDE.md haft section")
 
 	rootCmd.AddCommand(initCmd)
 }
@@ -292,6 +294,27 @@ func runInit(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  ⚠ Failed to install skills: %v\n", err)
 		} else if skillPath != "" {
 			fmt.Printf("  ✓ Installed %d skills (%s)\n", count, skillPath)
+		}
+	}
+
+	if !initNoClaudeMD {
+		if path, action, err := installClaudeMD(cwd); err != nil {
+			fmt.Printf("  ⚠ Failed to install CLAUDE.md haft section: %v\n", err)
+		} else {
+			relPath := path
+			if rel, relErr := filepath.Rel(cwd, path); relErr == nil {
+				relPath = rel
+			}
+			switch action {
+			case claudeMDCreated:
+				fmt.Printf("  ✓ Created CLAUDE.md with haft section (%s)\n", relPath)
+			case claudeMDUpdated:
+				fmt.Printf("  ✓ Updated CLAUDE.md haft section (%s)\n", relPath)
+			case claudeMDAppended:
+				fmt.Printf("  ✓ Appended haft section to existing CLAUDE.md (%s)\n", relPath)
+			case claudeMDUnchanged:
+				fmt.Printf("  ✓ CLAUDE.md haft section OK (%s)\n", relPath)
+			}
 		}
 	}
 

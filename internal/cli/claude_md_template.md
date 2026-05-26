@@ -1,49 +1,3 @@
-# Haft — Project CLAUDE.md
-
-This is haft's own project CLAUDE.md. It serves two roles in one file:
-
-1. **Maintainer notes** for AI agents working on haft itself live in the
-   prelude below (outside the haft markers). These are preserved by
-   `haft init` across re-runs.
-2. **The showcase template** — the content between the haft HTML-comment
-   markers — is the canonical good-engineering config that `haft init`
-   installs into end-user projects. The same content is mirrored in
-   `internal/cli/claude_md_template.md` (the Go-embedded source), kept in
-   sync with this file.
-
-When you edit haft itself, treat the bracketed section as authoritative —
-edits there flow to every haft user on next `haft init`.
-
-## Haft Architecture Notes (Maintainer-Only)
-
-Haft is a **governance substrate** consumed via three surfaces sharing one
-`.haft/` artifact graph: skills + slash commands in the host AI coding agent
-(Claude Code, Codex, OpenCode, Cursor), this CLI for manual access, and the
-MCP server (`haft serve`) for programmatic access.
-
-Standalone interactive agent (`haft agent`), TUI, and desktop wrappers were
-**dropped in v8**. The full pivot rationale lives in
-`.haft/decisions/dec-20260525-v8-architecture-pivot-from-standalone-agent-to-g-bbe45cb7.md`
-with parity-compared variants, rollback plan, and falsifiable predictions.
-
-**FPF discipline placement**: skills are `U.MethodDescription` carriers
-(they route + scaffold + remind, they do not enforce). The kernel MCP server
-validates args server-side and returns structured errors. CLI gates mirror
-the same validation. Hooks are NOT used for haft-tool enforcement — MCP
-error responses are sufficient and cross-host.
-
-**Transformer Mandate**: `h-decide` and `h-commission` are manual-only
-(`disable-model-invocation: true`). Binding artifacts (DecisionRecord,
-WorkCommission) require explicit human invocation. Other workflow skills
-(h-frame, h-diagnose, h-explore, h-compare, h-verify, h-status, etc.) may
-auto-trigger by description but never commit binding artifacts without
-operator confirmation in their procedure bodies.
-
-Execution plan lives in `.context/v8_haft_governance_substrate_plan.md`.
-
----
-
-<!-- haft:start -->
 # Haft Project Discipline
 
 This section is installed and maintained by `haft init`. Edits **inside** the
@@ -235,4 +189,3 @@ agents document. Autonomous architectural decisions = protocol violation.
 
 **State location:** `.haft/` directory (markdown projections, git-tracked).
 Database in `~/.haft/projects/<id>/`.
-<!-- haft:end -->
