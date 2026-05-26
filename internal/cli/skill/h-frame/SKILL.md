@@ -48,6 +48,8 @@ What's in-scope AND what's out-of-scope. Prevents silent scope inflation downstr
 
 What observable condition signals "solved"? "Better" is not acceptance; "p95 webhook retry rate < 3% measured over 7-day window" is.
 
+**Draft inline — do not delegate authorship back to the operator.** Read the signal carefully, propose a concrete observable acceptance condition based on the metric/behavior most directly tied to the signal. Then surface the draft to the operator with "I'm using this acceptance — edit if it's wrong". Operator review is the gate; operator authorship is not. Asking "what's your acceptance?" instead of drafting one defeats the value of the agent.
+
 ### Step 6 — Declare constraints (hard limits)
 
 What no candidate variant may violate. Constraint role per FPF CHR-01.
@@ -93,7 +95,7 @@ Kernel returns ProblemCard ID (e.g. `prob-20260525-...`). Present to operator wi
 - Do not jump from signal to solution; frame first.
 - Do not record an assumed cause as the signal ("we need X" is the proposed solution, not the problem).
 - Do not skip problem typing — it determines which exploration method applies.
-- Do not invent acceptance criteria the operator didn't agree to; ask if unclear.
+- Do not silently substitute an acceptance you invented as if the operator chose it — DRAFT it explicitly and let them review. Drafting and labeling as DRAFT is the correct move; asking "what acceptance?" instead of drafting is delegation back, which defeats the agent's value.
 - Do not record the problem if the operator's intent looks like a tactical edit — recommend `/h-note` or direct action instead.
 - Do not auto-trigger when the operator is clearly already framing in chat without asking to record — wait for explicit intent to persist.
 

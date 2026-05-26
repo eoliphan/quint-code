@@ -12,13 +12,14 @@ allowed-tools: Agent mcp__haft__haft_problem mcp__haft__haft_solution mcp__haft_
 
 You are running the FPF exploration workflow. The point is rivalrous candidate generation: 3-5 variants that differ in KIND, each with a named weakest_link, and at least one stepping-stone (or an explicit rationale for not having one).
 
-## Step 1 — Ensure the problem is framed
+## Step 1 — Ensure the problem is framed (agent infers first, asks only on real ambiguity)
 
 If no `problem_ref` is in the operator's request:
-- If they describe a problem inline: call `mcp__haft__haft_problem(action="frame", ...)` first per the h-frame procedure
-- If a recent problem exists: ask the operator which one to explore against, or look it up via `mcp__haft__haft_query(action="status")`
+- **First**: call `mcp__haft__haft_query(action="status")` and read recent active problems. If exactly one matches the operator's current topic, use it and tell the operator "exploring against prob-XXX (the recent X problem) — say so if you meant a different one."
+- **Second**: if multiple plausible matches exist, surface 2-3 candidates and ask which one (legitimate ambiguity).
+- **Third**: if the operator describes a problem inline and no recent match exists, call `mcp__haft__haft_problem(action="frame", ...)` first per the h-frame procedure — the agent does the framing, then proceeds to explore.
 
-Without a problem reference the exploration floats.
+Without a problem reference the exploration floats. But asking the operator to pick from a list before trying inference is delegation back; default is infer-then-act.
 
 ## Step 2 — Generate variants in parallel for diversity (optional but recommended)
 

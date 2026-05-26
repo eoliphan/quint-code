@@ -20,9 +20,9 @@ If no `portfolio_ref` is given:
 
 The kernel auto-detects when only one active portfolio exists, but explicit reference is safer.
 
-## Step 2 — Characterize dimensions (if not already declared on the ProblemCard)
+## Step 2 — Characterize dimensions (agent drafts, operator reviews)
 
-If the portfolio's problem has no dimensions, declare them now:
+If the portfolio's problem has no dimensions, **the agent drafts them** based on the variants and the problem signal. Do not delegate dimension authorship back to the operator — that defeats the value of the agent. Read the variants, identify the axes on which they actually differ, draft 2-5 dimensions inline, then call the kernel. Surface the drafted dimensions to the operator with "Drafted these dimensions — edit if any are wrong before scoring." Operator review is the gate, not operator authorship.
 
 ```
 mcp__haft__haft_problem(
@@ -154,7 +154,7 @@ This skill STOPS at presentation. The binding choice is /h-decide (manual-only p
 - Do not pre-collapse to a scalar winner. The Pareto front IS the result. The decide step picks from it.
 - Do not score per-variant (one agent scores all dimensions of one variant) — different scorers + different scales = uncomparable scores. SCORE DIM-WISE.
 - Do not declare selection policy AFTER seeing scores. That's post-hoc rationalization (FPF CMP-02 violation).
-- Do not invent dimensions the operator hasn't agreed to.
+- Do not silently substitute dimensions the operator hasn't reviewed. DRAFT them inline (Step 2) and surface for review — that's the correct pattern. Asking "what dimensions matter?" instead of drafting is delegation back, which defeats the agent's value.
 - Do not skip parity_plan in deep mode — kernel rejects.
 - Do not let a variant that violates a constraint dimension survive into the Pareto computation. Constraints eliminate first.
 - Do not silently pick a dominated variant as "selected" — the operator must explicitly override with rationale if so.
