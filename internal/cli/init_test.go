@@ -286,17 +286,19 @@ func TestRunInit_OpencodeWritesMcpConfigAndCommands(t *testing.T) {
 	if skillPath != wantSkillRoot {
 		t.Errorf("skillPath = %q, want %q", skillPath, wantSkillRoot)
 	}
-	// h-fpf (v8 umbrella replacement for h-reason) must land.
-	if _, err := os.Stat(filepath.Join(wantSkillRoot, "h-fpf", "SKILL.md")); err != nil {
-		t.Errorf("h-fpf SKILL.md not installed: %v", err)
+	// h-reason (umbrella entry point, carries full FPF reasoning palette)
+	// must land.
+	if _, err := os.Stat(filepath.Join(wantSkillRoot, "h-reason", "SKILL.md")); err != nil {
+		t.Errorf("h-reason SKILL.md not installed: %v", err)
 	}
 	// h-decide (manual-only, Transformer Mandate) must land.
 	if _, err := os.Stat(filepath.Join(wantSkillRoot, "h-decide", "SKILL.md")); err != nil {
 		t.Errorf("h-decide SKILL.md not installed: %v", err)
 	}
-	// Deprecated h-reason must be removed by deprecation cleanup.
-	if _, err := os.Stat(filepath.Join(wantSkillRoot, "h-reason")); !os.IsNotExist(err) {
-		t.Errorf("h-reason should be removed; got err=%v", err)
+	// Deprecated h-fpf must be removed by deprecation cleanup (renamed
+	// to h-reason and expanded into the full umbrella).
+	if _, err := os.Stat(filepath.Join(wantSkillRoot, "h-fpf")); !os.IsNotExist(err) {
+		t.Errorf("h-fpf should be removed; got err=%v", err)
 	}
 }
 

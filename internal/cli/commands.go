@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-//go:embed skill/h-fpf/SKILL.md
-var embeddedHFPFSkill []byte
+//go:embed skill/h-reason/SKILL.md
+var embeddedHReasonSkill []byte
 
 //go:embed skill/h-decide/SKILL.md
 var embeddedHDecideSkill []byte
@@ -67,8 +67,12 @@ type skillManifest struct {
 // this slice is the install order; first-failure semantics return the
 // partial path so the operator sees which skill broke.
 var allSkills = []skillManifest{
-	// Umbrella (narrow fallback for FPF-meta queries)
-	{Name: "h-fpf", Content: embeddedHFPFSkill, AllowImplicit: true},
+	// Umbrella reasoning entry — carries full FPF reasoning palette
+	// (frame, explore, compare, verify, note, slideument patterns).
+	// Operators can type /h-reason explicitly; the description is broad
+	// enough to also fire as fallback on ambiguous "let's think about X"
+	// signals where no specialized skill clearly matches.
+	{Name: "h-reason", Content: embeddedHReasonSkill, AllowImplicit: true},
 
 	// Manual-only Transformer Mandate skills (cannot auto-fire)
 	{Name: "h-decide", Content: embeddedHDecideSkill, AllowImplicit: false},
@@ -110,7 +114,7 @@ var allSkills = []skillManifest{
 // rollback window closes cleanly, the migration entries here can drop.
 var deprecatedSkillDirs = []string{
 	"q-reason",
-	"h-reason",
+	"h-fpf",
 }
 
 // cleanupLegacySlashCommands removes any legacy haft slash-command
@@ -343,7 +347,7 @@ var deprecatedCommands = []string{
 	"h-problems", // covered by h-status
 	"h-search",   // covered by haft_query(action="search")
 	"h-view",     // covered by mcp projection tools
-	"h-reason",   // umbrella replaced by the current skill catalog + h-fpf fallback
+	"h-reason",   // legacy slash-command file cleanup — h-reason now ships as a skill, not a commands/ file
 	// Slash-command files dropped — skills are the primary surface; in
 	// Claude Code typing /skill-name fires the skill directly, so a
 	// parallel slash-command file would either duplicate the skill body

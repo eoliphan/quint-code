@@ -166,7 +166,7 @@ product correctness, or make L3 runtime/evidence claims.
 
 | Skill | Mode | What it does |
 |---|---|---|
-| **h-fpf** | auto (narrow fallback) | Umbrella for FPF-meta queries; routes to specific skills below |
+| **h-reason** | auto (umbrella) | Full FPF reasoning palette in one entry — framing, exploration, comparison, verification, notes, plus slideument patterns (Goldilocks, NQD, BLP, Scaling-Law Lens). Manual `/h-reason` always works; auto-fires on broad "let's think this through" signals where no specialized skill matches sharply. |
 | **h-frame** | auto | Frame a problem with B.4.1 stabilize + problem typing + umbrella-word repair |
 | **h-diagnose** | auto | Diagnose a failure with parallel hypothesis testing (Agent subagents per hypothesis to prevent anchoring) |
 | **h-explore** | auto | Generate distinct candidate variants with NQD diversity discipline (parallel direction-assigned agents) |

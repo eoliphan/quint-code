@@ -81,7 +81,7 @@ compare with a kernel error.
 | auto | `/h-onboard` | First-setup for a project without `.haft/` |
 | auto | `/h-spec-cover` | Coverage check — uncovered files in modules with decisions |
 | auto | `/h-note` | Micro-decision with rationale, lighter than a DRR |
-| auto | `/h-fpf` | Narrow fallback for FPF-meta queries |
+| auto | `/h-reason` | Umbrella — full FPF reasoning palette in one entry. Also the fallback for ambiguous "let's think about X" signals. |
 
 `h-abduct`, `h-boundary-unpack`, `h-semio-review` are **internal subroutines** —
 invoked from other skills, not user-facing. Do not select them directly.

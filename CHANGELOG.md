@@ -57,8 +57,8 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
   FPF Glossary. End-users get this on `haft init`; haft maintainers see
   the same content between markers in repo-root CLAUDE.md.
 - **15-skill v8 catalog** installed by `haft init`:
-  `h-fpf`, `h-frame`, `h-diagnose`, `h-explore`, `h-compare`, `h-decide`,
-  `h-verify`, `h-status`, `h-onboard`, `h-spec-cover`, `h-note`,
+  `h-reason` (umbrella), `h-frame`, `h-diagnose`, `h-explore`, `h-compare`,
+  `h-decide`, `h-verify`, `h-status`, `h-onboard`, `h-spec-cover`, `h-note`,
   `h-commission`, `h-abduct`, `h-boundary-unpack`, `h-semio-review`.
   Auto-triggering skills fire on operator context. `h-decide` and
   `h-commission` are manual-only (`disable-model-invocation: true`)
@@ -85,6 +85,26 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 
 ### Changed
 
+- **`/h-fpf` renamed to `/h-reason` and expanded into a full FPF
+  reasoning umbrella.** The v8 pivot had split the old `/h-reason` into
+  15 specialized skills + a narrow `/h-fpf` fallback, betting that
+  description-based auto-trigger would route reliably. Session-data
+  analysis showed that bet was partly wrong: in practice operators
+  invoke skills via explicit slash commands (`/h-status`, `/h-verify`,
+  `/h-explore`) more than auto-trigger ever fires from natural language,
+  and the umbrella entry point was missed by users with v6/v7 muscle
+  memory. The new `/h-reason` carries the full reasoning palette in one
+  place — framing, exploration, comparison, verification, notes, plus
+  the slideument patterns that don't have dedicated skills (Goldilocks
+  problem selection, NQD discipline, Bitter-Lesson Preference,
+  Scaling-Law Lens, stepping stones, Anti-Goodhart indicator roles).
+  Description is broad enough to also fire as fallback on ambiguous
+  "let's think this through" / "structured approach" / "apply FPF here"
+  signals. Specialized skills remain — they auto-trigger on sharper
+  signals and carry deeper procedures; `/h-reason` covers their
+  compressed inline versions and delegates to them for thoroughness.
+  Old `/h-fpf` skill directory is now in `deprecatedSkillDirs` and gets
+  cleaned up on `haft init`.
 - **Skill descriptions rewritten per Anthropic SOTA best practices** —
   third-person, pushy ("Make sure to use this skill whenever..."), verbatim
   user trigger phrases instead of FPF pattern IDs. Counters Claude's

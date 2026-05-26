@@ -39,11 +39,12 @@ func TestInstallSkillAirUsesProjectSkillsDir(t *testing.T) {
 		}
 	}
 
-	// Deprecated h-reason directory MUST NOT exist after install — the
-	// migration is part of the install step so re-running haft init
-	// always lands a clean post-pivot state.
-	if _, err := os.Stat(filepath.Join(wantRoot, "h-reason")); !os.IsNotExist(err) {
-		t.Fatalf("h-reason should be removed by deprecation cleanup; got err=%v", err)
+	// Deprecated h-fpf directory MUST NOT exist after install — h-fpf
+	// was the v8 narrow-fallback name; it's been superseded by the
+	// h-reason umbrella. Re-running haft init always lands the clean
+	// post-rename state.
+	if _, err := os.Stat(filepath.Join(wantRoot, "h-fpf")); !os.IsNotExist(err) {
+		t.Fatalf("h-fpf should be removed by deprecation cleanup; got err=%v", err)
 	}
 }
 
@@ -123,15 +124,17 @@ func TestInstallCodexSkillsWritesExplicitCommandSkills(t *testing.T) {
 		t.Fatalf("h-frame should allow implicit invocation, got:\n%s", string(framePolicy))
 	}
 
-	// h-fpf is the v8 umbrella replacement for the deprecated h-reason
-	// skill. It auto-triggers (narrow fallback) — verify policy reflects.
-	fpfPolicyPath := filepath.Join(skillsRoot, "h-fpf", "agents", "openai.yaml")
-	fpfPolicy, err := os.ReadFile(fpfPolicyPath)
+	// h-reason is the umbrella entry — broad auto-trigger description
+	// plus manual /h-reason invocation. Carries the full FPF reasoning
+	// palette (frame, explore, compare, verify, note, slideument
+	// patterns). Verify policy allows implicit invocation.
+	reasonPolicyPath := filepath.Join(skillsRoot, "h-reason", "agents", "openai.yaml")
+	reasonPolicy, err := os.ReadFile(reasonPolicyPath)
 	if err != nil {
-		t.Fatalf("failed to read h-fpf policy: %v", err)
+		t.Fatalf("failed to read h-reason policy: %v", err)
 	}
-	if !strings.Contains(string(fpfPolicy), "allow_implicit_invocation: true") {
-		t.Fatalf("h-fpf should allow implicit invocation, got:\n%s", string(fpfPolicy))
+	if !strings.Contains(string(reasonPolicy), "allow_implicit_invocation: true") {
+		t.Fatalf("h-reason should allow implicit invocation, got:\n%s", string(reasonPolicy))
 	}
 
 	// h-decide is manual-only (Transformer Mandate via codex policy +
@@ -145,9 +148,11 @@ func TestInstallCodexSkillsWritesExplicitCommandSkills(t *testing.T) {
 		t.Fatalf("h-decide must be explicit-only per Transformer Mandate, got:\n%s", string(decidePolicy))
 	}
 
-	// Deprecated h-reason directory must be removed (migration step).
-	if _, err := os.Stat(filepath.Join(skillsRoot, "h-reason")); !os.IsNotExist(err) {
-		t.Fatalf("h-reason must be removed by deprecation cleanup; got err=%v", err)
+	// Deprecated h-fpf directory must be removed (migration step —
+	// h-fpf was the v8 narrow-fallback name; it's been replaced by the
+	// h-reason umbrella).
+	if _, err := os.Stat(filepath.Join(skillsRoot, "h-fpf")); !os.IsNotExist(err) {
+		t.Fatalf("h-fpf must be removed by deprecation cleanup; got err=%v", err)
 	}
 }
 
@@ -229,22 +234,35 @@ func TestHDecideSkill_IsManualOnlyTransformerMandate(t *testing.T) {
 	}
 }
 
-// TestHFPFSkill_IsNarrowUmbrella verifies that the h-fpf umbrella does
-// not absorb the entire FPF procedural body. It must point to specific
-// skills + the spec search rather than recreating h-reason-style
-// encyclopedia (per plan §3 and FPF reasoner critique 2026-05-25).
-func TestHFPFSkill_IsNarrowUmbrella(t *testing.T) {
-	content := string(embeddedHFPFSkill)
+// TestHReasonSkill_IsFullUmbrella verifies that the h-reason umbrella
+// carries the full FPF reasoning palette (frame, explore, compare,
+// verify, note, slideument patterns) rather than acting as a narrow
+// fallback. It must reference specialized skills as "heavy versions"
+// to delegate to, and point at the spec-search MCP path for deep
+// references.
+func TestHReasonSkill_IsFullUmbrella(t *testing.T) {
+	content := string(embeddedHReasonSkill)
 
-	// Must reference the specific skills it routes to.
+	// Must reference specialized skills it can delegate heavy versions to.
 	for _, sk := range []string{"h-frame", "h-diagnose", "h-explore", "h-compare", "h-decide", "h-verify"} {
 		if !strings.Contains(content, sk) {
-			t.Fatalf("h-fpf must list %q in its routing table", sk)
+			t.Fatalf("h-reason must reference %q as a heavy-version delegate", sk)
 		}
 	}
 	// Must point at the spec-search MCP path so the agent can retrieve
-	// pattern text without h-fpf having to inline it.
+	// pattern text without h-reason having to inline the full spec.
 	if !strings.Contains(content, `haft_query(action="fpf"`) {
-		t.Fatal("h-fpf must point at haft_query(action=\"fpf\", ...) for spec lookups")
+		t.Fatal("h-reason must point at haft_query(action=\"fpf\", ...) for spec lookups")
+	}
+	// Must carry the "Description != Work" rule — the core anti-pattern
+	// that this umbrella is designed to NOT fall into.
+	if !strings.Contains(content, "Description ≠ Work") {
+		t.Fatal("h-reason must carry the Description ≠ Work core rule")
+	}
+	// Must cover the slideument patterns that don't have dedicated skills.
+	for _, pat := range []string{"Goldilocks", "NQD", "stepping", "Anti-Goodhart"} {
+		if !strings.Contains(content, pat) {
+			t.Fatalf("h-reason must cover slideument pattern %q", pat)
+		}
 	}
 }
