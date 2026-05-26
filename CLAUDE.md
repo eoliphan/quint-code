@@ -263,10 +263,18 @@ manual-only per Transformer Mandate — explicitly type `/h-decide`.
 
 ### Artifact Lifecycle
 ```
-/h-frame → /h-char → /h-explore → /h-compare → /h-decide
-  problem    dims       variants     fair check    DRR contract
+/h-frame → /h-explore → /h-compare → /h-decide
+  problem    variants    char+parity   DRR contract
+                         + scoring     (manual-only)
 
 Problems: Backlog → In Progress → Addressed
 Decisions: Pending Implementation → Shipped
 Artifacts: active → refresh_due → superseded/deprecated
 ```
+
+**Characterization note**: characterization (declaring dimensions with
+indicator roles + valid_until) is a kernel action, not a separate skill.
+It happens **inside `/h-compare` Step 1** via
+`mcp__haft__haft_problem(action="characterize", ...)`. Optionally `/h-frame`
+can declare dimensions inline at ProblemCard creation. Stale dimensions are
+blocked by kernel error on compare.
