@@ -1,9 +1,9 @@
 ---
 name: h-verify
 description: |
-  Verify a recorded decision still holds: baseline → measure → evidence loop with drift detection. Use when the operator signals verification intent — "did it work", "is dec-X still valid", "check if Y holds", "measure that decision", "did the prediction come true". Implements FPF B.3 (Trust & Assurance) + B.3.4 (Evidence Decay) + the canonical measurement protocol per /h-decide's predictions.
+  Verifies that a recorded DecisionRecord still holds — baseline-vs-measure evidence loop with drift detection per FPF Evidence Decay. Make sure to use this skill whenever the user asks "did dec-X work", "is decision Y still valid", "did the prediction come true", "check if the migration held", "is X stale", "measure that decision against reality", "did we actually fix Z", "is our caching decision still right" — or whenever a shipped decision needs a post-implementation reality-check before further work relies on it. Also use when /h-status surfaces a refresh-due decision. NOT for ad-hoc sanity checks (just run the tests directly). NOT for re-framing the underlying problem (use h-frame).
 when_to_use: |
-  A DecisionRecord exists and needs post-implementation verification. NOT for ad-hoc sanity checks (just run the tests yourself). NOT for re-framing problems (that's h-frame).
+  A shipped DecisionRecord needs reality check, OR refresh-due artifact surfaced. Skip for one-off sanity checks where you can just run the test.
 argument-hint: "[decision-ref or 'what's stale' for full project verification]"
 allowed-tools: Bash Read Grep Glob mcp__haft__haft_decision mcp__haft__haft_query mcp__haft__haft_refresh
 ---

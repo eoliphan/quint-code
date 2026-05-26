@@ -1,9 +1,9 @@
 ---
 name: h-status
 description: |
-  Project FPF state dashboard. Use when the operator wants situational awareness — "where are we", "what's stale", "what's pending", "project status", "show me the FPF state", "what needs attention". Read-only surface that consolidates active problems, decisions, refresh-due artifacts, work commissions, recent notes, and module coverage.
+  Project state dashboard for haft — read-only consolidation of active problems, pending decisions, refresh-due artifacts, open work commissions, recent notes, and module coverage. Make sure to use this skill whenever the user asks "where are we", "what's pending", "what's stale", "project status", "what needs attention", "show me the state", "what's in flight", "what did we decide on X recently", "haft status" — or whenever a session resumes after a break and situational awareness is needed before deciding what to work on. Cheap, read-only, zero commitments. For verifying a single decision use h-verify. For managing commission lifecycle use h-commission.
 when_to_use: |
-  Operator wants to see the FPF state at a glance. Cheap and read-only — no commitments. For deep history use h-search; for verifying a single decision use h-verify; for managing commission lifecycle use h-commission.
+  Operator wants situational awareness or session-resume context. Cheap and read-only, fire freely.
 argument-hint: "[optional: context name to filter]"
 allowed-tools: mcp__haft__haft_query
 ---

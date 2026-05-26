@@ -1,9 +1,9 @@
 ---
 name: h-note
 description: |
-  Record a micro-decision with rationale. Use when the operator signals lightweight persistence intent — "remember that", "FYI for later", "side note", "let's note that we chose X", "remember we ruled out Y". The kernel validates the rationale (rejects content-free notes) and persists into the artifact graph so future sessions and conflict-detection can surface the note.
+  Records a micro-decision with rationale into the haft artifact graph — lighter than a full DecisionRecord but persisted so future sessions and conflict detection can surface it. Make sure to use this skill whenever the user says "remember that", "FYI for later", "note that we chose X", "side note", "let's record we ruled out Y", "remember we decided X", "for the record", "worth noting", "TIL", "important caveat", "save this thought" — or whenever a small choice with stated rationale belongs in project memory but does not justify the full DRR ceremony. The kernel rejects content-free notes — rationale is required. For binding choices use h-decide (manual-only). For framing problems use h-frame.
 when_to_use: |
-  Operator wants to persist a small fact, choice, or observation that doesn't deserve a full DecisionRecord ceremony. For binding choices use h-decide (manual-only). For observations during diagnosis use h-diagnose. For framing problems use h-frame.
+  Small choice or observation with rationale, worth persisting across sessions, but lighter than a binding DecisionRecord.
 argument-hint: "[note text — what + why]"
 allowed-tools: mcp__haft__haft_problem mcp__haft__haft_query
 ---

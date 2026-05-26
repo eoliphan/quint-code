@@ -1,9 +1,9 @@
 ---
 name: h-decide
 description: |
-  Record a binding DecisionRecord with full FPF discipline (E.9 DRR). MANUAL ONLY — the operator must explicitly type /h-decide. This skill must NOT be auto-invoked: per FPF X-TRANSFORMER (Transformer Mandate), the human principal records binding choices, not the agent.
+  Records a binding DecisionRecord with full FPF DRR discipline — problem frame, decision/contract, rationale, consequences. MANUAL ONLY — the operator must explicitly type /h-decide. Never auto-invoked: per Transformer Mandate, the human principal records binding choices, not the agent. Use after framing, exploring, and comparing are done and a chosen variant is ready to commit. For tactical reversible changes (under 2-week blast radius) pass _mode="tactical" with explicit _skips and _skip_reason. For irreversible / security / cross-team / public-API / data-migration changes pass _mode="deep" — all DRR fields required, no skips accepted.
 when_to_use: |
-  Operator has finished framing/exploring/comparing and is committing to a chosen variant. For tactical reversible changes (<2-week blast radius), pass _mode="tactical" with explicit _skips and _skip_reason. For irreversible/security/cross-team changes, pass _mode="deep" — all DRR fields required, no skips accepted.
+  Operator typed /h-decide explicitly and is committing to a chosen variant. Never auto-fire.
 argument-hint: "[selected variant title or short choice text]"
 disable-model-invocation: true
 allowed-tools: mcp__haft__haft_decision mcp__haft__haft_query

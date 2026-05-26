@@ -1,9 +1,9 @@
 ---
 name: h-boundary-unpack
 description: |
-  Decompose a boundary statement into L/A/D/E quadrants per FPF A.6.B (Boundary Norm Square). Subroutine skill — invoked when the operator works with API/contract/service statements that mix Laws (definitions), Admissibility (gates), Deontics (commitments), and Evidence (claims/observations) in one prose blob. Splits the statement into typed atomic claims with quadrant labels so each part can be reviewed and routed appropriately.
+  INTERNAL SUBROUTINE — decomposes a boundary statement (API contract, service definition, policy text, SLA prose) into Laws / Admissibility / Deontics / Evidence quadrants per FPF A.6.B. Use only on specific boundary statements that mix statement types and need quadrant-by-quadrant cleanup. Do not auto-select for general work — for code review use Claude Code review; for problem framing use h-frame; for spec consistency audits use h-semio-review.
 when_to_use: |
-  Operator writes or reviews an API contract / service definition / policy statement / compliance text and the prose mixes statement types. NOT for general code review (use Claude Code review). NOT for problem framing (use h-frame).
+  Internal subroutine only. Manual invocation on a specific contract/policy fragment that mixes definitions, gates, commitments, and evidence in one prose blob.
 argument-hint: "[boundary statement text or path to spec section]"
 disable-model-invocation: true
 allowed-tools: Read mcp__haft__haft_query

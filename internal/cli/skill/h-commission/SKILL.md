@@ -1,9 +1,9 @@
 ---
 name: h-commission
 description: |
-  Create a WorkCommission (bounded permission to execute) from an active DecisionRecord. MANUAL ONLY — operator must explicitly type /h-commission. Commissions are execution-authority grants and must stay sacred per FPF reasoner critique: freshness check, scope check, ImplementationPlan derivation, autonomy envelope snapshot, then STOP before execution unless explicit execute authority is granted.
+  Creates a WorkCommission — bounded execution authority — from an active DecisionRecord. MANUAL ONLY: operator must explicitly type /h-commission. Never auto-invoked: commissions are execution-authority grants under Transformer Mandate. Runs freshness check, scope check, derives an ImplementationPlan, snapshots the autonomy envelope, then STOPS before execution unless explicit execute authority is granted. NOT for the decision itself (use /h-decide first). NOT for running tests or one-off tasks (the operator's coding agent handles those directly).
 when_to_use: |
-  Operator wants to commission autonomous work against an active decision. NOT for the decision itself (use /h-decide first). NOT for running tests or one-off tasks (operator's coding agent handles those directly). MANUAL ONLY — disable-model-invocation: true.
+  Operator typed /h-commission explicitly and an approved DecisionRecord is ready to authorize for bounded autonomous execution. Never auto-fire.
 argument-hint: "[decision-ref to commission from]"
 disable-model-invocation: true
 allowed-tools: mcp__haft__haft_commission mcp__haft__haft_query mcp__haft__haft_refresh

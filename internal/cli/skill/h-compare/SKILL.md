@@ -1,9 +1,9 @@
 ---
 name: h-compare
 description: |
-  Compare candidate variants under parity discipline and produce a Pareto front (NOT a scalar winner). Use when the operator signals comparison intent — "compare A and B", "trade-off between X and Y", "which is better", "Pareto for these options". Per FPF CMP-01/CMP-02: selection policy declared BEFORE scoring, parity_plan stated explicitly, dim-wise scoring (one evaluator per dimension applies one scale to all variants) prevents anchoring bias and produces fair comparison.
+  Compares 2+ candidate variants under parity discipline and returns a Pareto front (not a scalar winner) — declares the selection policy and parity plan BEFORE scoring, then scores each dimension across all variants in parallel to prevent anchoring bias. Make sure to use this skill whenever the user asks "A or B", "which is better", "compare X and Y", "trade-off between X and Y", "should we pick X or Y", "Pareto for these options", "PostgreSQL vs MySQL", "NATS vs Kafka", "library A vs library B" — anywhere two or more viable approaches are on the table and a fair, recorded comparison is wanted before committing. Also use when /h-explore has just produced a SolutionPortfolio. NOT for generating new variants (use h-explore first). NOT for committing to the winner — that requires manual /h-decide per Transformer Mandate.
 when_to_use: |
-  A SolutionPortfolio exists with ≥2 variants and the operator wants to evaluate. For generating variants first use h-explore. For committing to the winner use h-decide (manual-only per Transformer Mandate).
+  ≥2 viable variants on the table and the operator wants a fair comparison. For new variants use h-explore. For binding the winner use /h-decide (manual-only).
 argument-hint: "[portfolio-ref or comparison topic]"
 allowed-tools: Agent mcp__haft__haft_problem mcp__haft__haft_solution mcp__haft__haft_query
 ---

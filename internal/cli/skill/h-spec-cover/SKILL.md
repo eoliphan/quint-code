@@ -1,9 +1,9 @@
 ---
 name: h-spec-cover
 description: |
-  Spec coverage check — surface uncovered files in spec'ed modules and suggest decisions for gaps. Use when the operator works in a module that should have spec coverage or asks "what's covered", "is X documented", "spec coverage", "drift detection". Calls the kernel's coverage analysis to map files to decisions and identify gaps before unrecorded changes accumulate.
+  Surfaces uncovered files in modules that already have recorded decisions — highlights drift before it accumulates and suggests where new decisions are needed. Make sure to use this skill whenever the user asks "is X documented", "what's covered", "spec coverage", "drift detection", "what decisions apply here", "are we tracking this module", "what's undecided in X" — or whenever they are about to modify code in a module with existing DecisionRecords and should be reminded which decisions apply. Also use when /h-status flags large counts of undecided files in a module. NOT for looking up decisions affecting one specific file (use mcp__haft__haft_query action=related). NOT for verifying one decision's predictions (use h-verify).
 when_to_use: |
-  Operator works in a module where decisions exist, or asks about spec coverage explicitly. NOT for file-level decision lookup of one file (use mcp__haft__haft_query action=related instead). NOT for verifying a single decision's predictions (use h-verify).
+  Working in a module with existing decisions, OR explicit coverage question. For single-file lookup use haft_query action=related.
 argument-hint: "[optional: module path]"
 allowed-tools: Bash Read Grep Glob mcp__haft__haft_query mcp__haft__haft_problem
 ---

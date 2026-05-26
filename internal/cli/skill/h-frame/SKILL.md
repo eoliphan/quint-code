@@ -1,9 +1,9 @@
 ---
 name: h-frame
 description: |
-  Frame a problem with FPF discipline before exploring solutions. Use when the operator signals problem-framing intent — "let me think about", "the problem is", "before we solve this", "what's actually going on", "I want to understand X first". B.4.1 stabilize signal + problem typing (optimization/diagnosis/search/synthesis) + umbrella-word repair before recording a ProblemCard.
+  Frames an engineering problem before any solution is explored — stabilizes the signal, names what is actually broken, declares acceptance criteria, and records a ProblemCard. Make sure to use this skill whenever the user proposes a refactor, rewrite, redesign, restructure, or rebuild without first naming the underlying problem or what acceptance looks like; whenever they say "let's rebuild X", "switch from Y to Z", "we should restructure", "I want to change A to B", "refactor this", "let's redo this" without stating success criteria; whenever a proposed solution arrives before the problem is defined; whenever scope is fuzzy and acceptance is unstated. Also catches explicit framing intent — "let me think about X", "before we solve this", "what's actually going on", "I want to understand X first". For broken tests or failing code with unclear cause prefer h-diagnose. For micro-decisions with rationale use h-note.
 when_to_use: |
-  Operator wants to set up a problem properly before jumping to solutions. If the signal is specifically about something broken, prefer h-diagnose (B.4.1 + B.5.2 with parallel hypothesis testing). For micro-decisions use h-note.
+  Operator is about to commit to a direction before the problem is honestly named, OR is explicitly framing. If the signal is a concrete failure with unclear cause, prefer h-diagnose. For one-line micro-decisions use h-note.
 argument-hint: "[problem signal text — what's anomalous, broken, or needs changing]"
 allowed-tools: mcp__haft__haft_problem mcp__haft__haft_query
 ---

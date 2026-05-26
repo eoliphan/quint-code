@@ -1,9 +1,9 @@
 ---
 name: h-semio-review
 description: |
-  Semiotic / fanout audit on rename or spec consistency check. Use when the operator renames a concept, aligns docs, removes an old concept, or asks "is this spec consistent" / "audit the prompt/spec/dashboard" / "fanout check". Per FPF X-FANOUT-AUDIT and semiotics_slideument, semio failures hide in carriers (filenames, manifests, stale refs, review surfaces) — one-shot text cleanup creates rework. This skill walks the carriers systematically until fixed-point clean.
+  INTERNAL SUBROUTINE — semiotic / fanout audit on a concept rename, deprecation sweep, or doc-vs-code consistency check. Walks all carriers (filenames, manifests, stale refs, review surfaces, dashboards, prompts) until fixed-point clean, because one-shot text replacement creates rework when carriers diverge. Manual invocation only. Do not auto-select for general work — for code review use Claude Code review; for FPF reasoning about decisions use h-frame / h-decide.
 when_to_use: |
-  Concept rename, deprecation cleanup, doc-vs-code alignment, prompt or spec consistency review. NOT for code review (use Claude Code review). NOT for FPF reasoning about decisions (use h-frame / h-decide).
+  Internal subroutine only. Manual invocation on a specific concept rename, deprecation cleanup, or spec consistency audit where carriers may have drifted.
 argument-hint: "[concept being renamed or audit target]"
 disable-model-invocation: true
 allowed-tools: Bash Read Grep Glob mcp__haft__haft_query

@@ -1,9 +1,9 @@
 ---
 name: h-fpf
 description: |
-  Use as fallback ONLY when the operator references FPF in general terms ("let's think FPF-style", "what does FPF say about X", "which haft skill should I use", "explore the FPF spec"). Do NOT use for concrete tasks where a specific haft skill applies — those go to h-frame, h-diagnose, h-explore, h-compare, h-decide, h-verify, h-status, h-onboard, h-spec-cover, h-note, h-abduct, h-boundary-unpack, h-semio-review, or h-commission.
+  Narrow fallback for FPF-meta queries — use ONLY when the user references FPF in general terms with no concrete task that a specific haft skill already covers. Triggers: "what is FPF", "use FPF in your thinking", "what does FPF say about X", "which haft skill should I use", "explore the FPF spec", "look up FPF pattern Y", "FPF reasoning in general". For concrete tasks the specific skills ALWAYS take precedence: h-frame (problem framing), h-diagnose (failure investigation), h-explore (variants), h-compare (comparison), h-decide (binding choice — manual), h-verify (post-decision check), h-status (state dashboard), h-onboard (first setup), h-spec-cover (drift check), h-note (micro-decision), h-commission (execution authority — manual). Do not fire this skill if any specific skill matches.
 when_to_use: |
-  Fallback for FPF-meta queries. Specific haft skills always take precedence.
+  Only when no specific haft skill applies and the user is asking about FPF in general terms.
 argument-hint: "[FPF topic, pattern id, or 'which haft skill for X?']"
 ---
 

@@ -1,9 +1,9 @@
 ---
 name: h-explore
 description: |
-  Generate distinct candidate solution variants with NQD diversity discipline. Use when the operator signals exploration intent — "what are our options", "brainstorm approaches", "how could we", "different ways to do X". Each variant must differ in KIND not degree (FPF EXP-08), carry an explicit weakest_link (FPF EXP-04), and optionally mark stepping-stones (FPF EXP-05) that open future search space.
+  Generates 3–5 genuinely distinct candidate solution variants for a framed problem — each variant differs in KIND (not just degree), carries an explicit weakest-link so weak options surface before implementation, and optionally marks stepping-stones that open future search space. Make sure to use this skill whenever the user asks "what are our options", "how could we do X", "brainstorm approaches", "give me alternatives", "different ways to X", "what variants should we consider", "what else could we try", or whenever they are about to commit to one approach without having generated alternatives. Also use when a problem is framed but only one solution sits on the table. NOT for comparing existing options head-to-head (use h-compare). NOT for hypothesis testing on a failure (use h-diagnose).
 when_to_use: |
-  Operator already has a framed problem (or you'll frame one inline) and wants candidate solutions before choosing. NOT for comparing existing options (that's h-compare). NOT for hypothesis testing on a failure (that's h-diagnose).
+  Problem is framed (or frame inline) and only one approach is on the table, OR the user explicitly asks for options. For evaluating existing variants use h-compare.
 argument-hint: "[exploration topic or problem reference]"
 allowed-tools: Agent mcp__haft__haft_problem mcp__haft__haft_solution mcp__haft__haft_query
 ---

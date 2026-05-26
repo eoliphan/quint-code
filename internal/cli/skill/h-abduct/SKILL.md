@@ -1,9 +1,9 @@
 ---
 name: h-abduct
 description: |
-  Generate typed candidate hypotheses (B.5.2 four-step abductive cycle) for a typed AbductivePrompt. Subroutine skill — typically invoked by h-diagnose for parallel hypothesis testing, but operator can invoke manually for explicit abductive work like "generate rival explanations for X", "what could plausibly account for Y".
+  INTERNAL SUBROUTINE — used by h-diagnose for parallel rival-hypothesis generation. Manual invocation possible but the right user-facing entry point is almost always h-diagnose (which uses h-abduct internally with parallel testing). Generates ≥3 typed rival explanations for an observed signal per FPF B.5.2 abductive cycle. Do not auto-select this skill — when failure investigation is needed, select h-diagnose; when problem framing is needed, select h-frame.
 when_to_use: |
-  Operator wants pure abduction — generating ≥3 typed rival hypotheses for an observed signal — without immediately running the parallel-test infrastructure h-diagnose provides. For full diagnosis with parallel testing use h-diagnose. For framing a problem use h-frame.
+  Internal subroutine only. Use h-diagnose for failures; use h-frame for problem framing.
 argument-hint: "[abductive prompt: signal or observation requiring explanation]"
 disable-model-invocation: true
 allowed-tools: mcp__haft__haft_problem mcp__haft__haft_solution mcp__haft__haft_query

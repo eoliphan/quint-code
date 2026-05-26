@@ -1,9 +1,9 @@
 ---
 name: h-diagnose
 description: |
-  Diagnose a failure with parallel hypothesis testing. Use when the operator reports something broken and the root cause is unclear — "tests fail", "X doesn't work", "why is Y happening", "investigate this", "what's causing", "the bug is unclear". Implements FPF B.4.1 (Observe → Notice → Stabilize → Route) + B.5.2 (Abductive four-step) with multiple parallel read-only subagents testing distinct hypotheses, then ranks by evidence weight and keeps rivals visible (CC-B.5.2-2).
+  Diagnoses a failure with parallel rival-hypothesis testing — multiple read-only subagents test distinct explanations in parallel, then rank by evidence weight while keeping losing rivals visible so the root cause is found honestly, not just plausibly. Make sure to use this skill whenever the user reports something broken with an unclear cause — "tests fail", "test is failing", "X doesn't work", "Y crashes", "why is Z happening", "investigate this bug", "what's causing this", "the bug is unclear", "something's wrong with X", "X used to work and now doesn't", "this is flaky" — or any failure report where the next diagnostic step isn't already obvious to the user. NOT for feature requests (use h-frame). NOT for performance work with a known bottleneck (use h-frame). NOT for verifying a hypothesis already recorded in a DecisionRecord (use h-verify).
 when_to_use: |
-  Operator describes a failure mode with unclear root cause. NOT for feature requests (use h-frame with type=synthesis), NOT for performance optimization with known-bottleneck (use h-frame with type=optimization), NOT for already-formed hypothesis verification (use h-verify on a recorded decision).
+  Concrete failure with unclear root cause. Skip if next diagnostic step is obvious and the user just wants you to run it. For framing a new design problem use h-frame.
 argument-hint: "[symptom or failure description]"
 allowed-tools: Bash Read Grep Glob Agent mcp__haft__haft_problem mcp__haft__haft_solution mcp__haft__haft_query
 ---
