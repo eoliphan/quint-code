@@ -14,9 +14,12 @@ func TestInstallSkillAirUsesProjectSkillsDir(t *testing.T) {
 	// Multi-skill installer returns the skills ROOT (parent of each skill
 	// folder), not a per-skill subdir. Each skill in allSkills lands as
 	// `<root>/<skill-name>/SKILL.md`.
-	displayPath, err := installSkill("air", false, projectRoot)
+	displayPath, count, err := installSkill("air", false, projectRoot)
 	if err != nil {
 		t.Fatalf("installSkill returned error: %v", err)
+	}
+	if count != len(allSkills) {
+		t.Errorf("installSkill installed %d skills, expected %d", count, len(allSkills))
 	}
 
 	wantRoot := filepath.Join(projectRoot, "skills")
@@ -54,41 +57,44 @@ func TestInstallCodexSkillsWritesExplicitCommandSkills(t *testing.T) {
 		t.Fatalf("installCodexSkills returned error: %v", err)
 	}
 
-	commandCount := embeddedCommandCount(t)
-	// Codex installer writes allSkills (governance substrate skills) +
-	// one skill per embedded command. Count = len(allSkills) + commandCount.
-	wantCount := len(allSkills) + commandCount
-	if count != wantCount {
-		t.Fatalf("installed skill count = %d, want %d (allSkills=%d + commands=%d)",
-			count, wantCount, len(allSkills), commandCount)
+	// Codex installer writes exactly allSkills — no embedded commands
+	// path. Skills are the primary surface; slash commands are not
+	// shipped with haft.
+	if count != len(allSkills) {
+		t.Fatalf("installed skill count = %d, want %d (len(allSkills))",
+			count, len(allSkills))
 	}
 	if displayPath != "~/.agents/skills" {
 		t.Fatalf("display path = %q, want %q", displayPath, "~/.agents/skills")
 	}
 
 	skillsRoot := filepath.Join(homeDir, ".agents", "skills")
+
+	// h-frame is an auto-triggering workflow skill — its SKILL.md is the
+	// raw skill body (frontmatter has the description for routing), NOT
+	// the command-wrapper variant that prefixes "This skill is explicit-
+	// only". Slash-command-style $h-X references must still be rewritten
+	// from /h-X.
 	frameSkillPath := filepath.Join(skillsRoot, "h-frame", "SKILL.md")
 	frameSkill, err := os.ReadFile(frameSkillPath)
 	if err != nil {
 		t.Fatalf("failed to read h-frame skill: %v", err)
 	}
-
 	frameContent := string(frameSkill)
 	for _, want := range []string{
 		"name: h-frame",
-		"This skill is explicit-only",
-		"Use the user's explicit skill invocation text as the request context.",
-		"$h-decide",
+		"$h-explore",
 	} {
 		if !strings.Contains(frameContent, want) {
 			t.Fatalf("h-frame skill missing %q:\n%s", want, frameContent)
 		}
 	}
-	for _, banned := range []string{"/h-", "/q-", "$ARGUMENTS", "Quint"} {
+	for _, banned := range []string{"/h-", "/q-", "Quint"} {
 		if strings.Contains(frameContent, banned) {
 			t.Fatalf("h-frame skill contains stale token %q:\n%s", banned, frameContent)
 		}
 	}
+
 	skillFiles, err := filepath.Glob(filepath.Join(skillsRoot, "h-*", "SKILL.md"))
 	if err != nil {
 		t.Fatalf("glob installed skills: %v", err)
@@ -105,13 +111,16 @@ func TestInstallCodexSkillsWritesExplicitCommandSkills(t *testing.T) {
 		}
 	}
 
-	explicitPolicyPath := filepath.Join(skillsRoot, "h-frame", "agents", "openai.yaml")
-	explicitPolicy, err := os.ReadFile(explicitPolicyPath)
+	// h-frame is an auto-triggering workflow skill — policy must reflect
+	// that. Manual-only skills (h-decide, h-commission) get asserted
+	// below.
+	framePolicyPath := filepath.Join(skillsRoot, "h-frame", "agents", "openai.yaml")
+	framePolicy, err := os.ReadFile(framePolicyPath)
 	if err != nil {
 		t.Fatalf("failed to read h-frame policy: %v", err)
 	}
-	if !strings.Contains(string(explicitPolicy), "allow_implicit_invocation: false") {
-		t.Fatalf("h-frame should be explicit-only, got:\n%s", string(explicitPolicy))
+	if !strings.Contains(string(framePolicy), "allow_implicit_invocation: true") {
+		t.Fatalf("h-frame should allow implicit invocation, got:\n%s", string(framePolicy))
 	}
 
 	// h-fpf is the v8 umbrella replacement for the deprecated h-reason
@@ -200,24 +209,6 @@ func TestCleanupCodexPromptCommandsRemovesOnlyHaftPrompts(t *testing.T) {
 	}
 }
 
-func embeddedCommandCount(t *testing.T) int {
-	t.Helper()
-
-	entries, err := embeddedCommands.ReadDir("commands")
-	if err != nil {
-		t.Fatalf("read embedded commands: %v", err)
-	}
-
-	count := 0
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		count++
-	}
-	return count
-}
-
 // TestHDecideSkill_IsManualOnlyTransformerMandate verifies that the
 // h-decide skill carries the structural Transformer Mandate enforcement
 // (disable-model-invocation) so the agent cannot auto-fire a binding
@@ -255,142 +246,5 @@ func TestHFPFSkill_IsNarrowUmbrella(t *testing.T) {
 	// pattern text without h-fpf having to inline it.
 	if !strings.Contains(content, `haft_query(action="fpf"`) {
 		t.Fatal("h-fpf must point at haft_query(action=\"fpf\", ...) for spec lookups")
-	}
-}
-
-func TestV7EmbeddedCommandPromptsDescribeSpecFirstSurfaceContracts(t *testing.T) {
-	cases := []struct {
-		name     string
-		path     string
-		required []string
-	}{
-		{
-			name: "h-onboard",
-			path: "commands/h-onboard.md",
-			required: []string{
-				"TargetSystemSpec",
-				"EnablingSystemSpec",
-				"TermMap",
-				"SpecCoverage",
-				"haft spec check",
-				"needs_onboard",
-				"Claude Code and Codex",
-				`haft_spec_section(action="next_step"`,
-				`haft_spec_section(action="approve"`,
-				`haft_spec_section(action="rebaseline"`,
-				`haft_spec_section(action="reopen"`,
-				`haft_query(action="check")`,
-				"spec_section_needs_baseline",
-				"spec_section_drifted",
-				"enabling.architecture.draft",
-				"enabling.work_methods.draft",
-				"enabling.effect_boundaries.draft",
-				"enabling.agent_policy.draft",
-				"enabling.commission_policy.draft",
-				"enabling.runtime_policy.draft",
-				"enabling.evidence_policy.draft",
-				"haft spec onboard --json",
-				`haft_query(action="fpf"`,
-				"FRAME-09",
-				"CHR-10",
-				"CHR-12",
-				"X-STATEMENT-TYPE",
-				"statement_type",
-				"claim_layer",
-				"valid_until",
-				"target_refs",
-				"guard location",
-				"never write",
-			},
-		},
-		{
-			name: "h-status",
-			path: "commands/h-status.md",
-			required: []string{
-				"needs_onboard",
-				"haft spec check",
-				"WorkCommissions",
-				"stale, blocked, or running-too-long WorkCommissions",
-				`haft_commission(action="show"`,
-				"do not start Open-Sleigh",
-				`haft_query(action="check")`,
-			},
-		},
-		{
-			name: "h-verify",
-			path: "commands/h-verify.md",
-			required: []string{
-				`haft_query(action="check")`,
-				"spec_section_drifted",
-				"spec_section_stale",
-				"spec_section_needs_baseline",
-				`haft_spec_section(action="rebaseline"`,
-				`haft_spec_section(action="reopen"`,
-				`haft_spec_section(action="approve"`,
-			},
-		},
-		{
-			name: "h-commission",
-			path: "commands/h-commission.md",
-			required: []string{
-				"authorization step only",
-				"must not start Open-Sleigh",
-				"does not own runtime lifecycle",
-				"WorkCommission = bounded permission to execute",
-				"Do not requeue a commission whose `valid_until` has expired",
-				"Do not physically delete WorkCommissions",
-			},
-		},
-		{
-			name: "h-frame",
-			path: "commands/h-frame.md",
-			required: []string{
-				"Project readiness",
-				"needs_onboard",
-				"/h-onboard",
-				"tactical",
-				"Investigation-first discipline",
-				`haft_query(action="resolve_term"`,
-				"bounded context",
-			},
-		},
-		{
-			name: "h-decide",
-			path: "commands/h-decide.md",
-			required: []string{
-				"Project readiness",
-				"needs_onboard",
-				"SpecSection refs",
-				"haft_commission(create_from_decision)",
-				"/h-onboard",
-				"Investigation-first discipline",
-				`haft_query(action="resolve_term"`,
-			},
-		},
-		{
-			name: "h-note",
-			path: "commands/h-note.md",
-			required: []string{
-				"Investigation-first discipline",
-				`haft_query(action="resolve_term"`,
-				"bounded context",
-			},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			contentBytes, err := embeddedCommands.ReadFile(tc.path)
-			if err != nil {
-				t.Fatalf("read command %s: %v", tc.path, err)
-			}
-
-			content := string(contentBytes)
-			for _, required := range tc.required {
-				if !strings.Contains(content, required) {
-					t.Fatalf("%s missing %q:\n%s", tc.path, required, content)
-				}
-			}
-		})
 	}
 }

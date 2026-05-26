@@ -2,15 +2,12 @@ package cli
 
 import (
 	"bufio"
-	"embed"
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
-
-//go:embed commands/*.md
-var embeddedCommands embed.FS
 
 //go:embed skill/h-fpf/SKILL.md
 var embeddedHFPFSkill []byte
@@ -66,16 +63,9 @@ type skillManifest struct {
 	AllowImplicit bool
 }
 
-// allSkills is the v8 governance substrate skill set. Order in this
-// slice is the install order; first-failure semantics return the
+// allSkills is the haft skill set installed by `haft init`. Order in
+// this slice is the install order; first-failure semantics return the
 // partial path so the operator sees which skill broke.
-//
-// Phase 3 ships h-fpf (umbrella fallback, narrow) + h-decide
-// (manual-only Transformer Mandate enforcement). Phase 4 adds the
-// remaining workflow skills (h-frame, h-diagnose, h-explore, h-compare,
-// h-verify, h-status, h-onboard, h-spec-cover, h-note, h-commission,
-// h-abduct, h-boundary-unpack, h-semio-review). Operators who re-run
-// `haft init` after each phase land receive the expanding skill set.
 var allSkills = []skillManifest{
 	// Umbrella (narrow fallback for FPF-meta queries)
 	{Name: "h-fpf", Content: embeddedHFPFSkill, AllowImplicit: true},
@@ -83,13 +73,13 @@ var allSkills = []skillManifest{
 	// Manual-only Transformer Mandate skills (cannot auto-fire)
 	{Name: "h-decide", Content: embeddedHDecideSkill, AllowImplicit: false},
 
-	// Auto-triggering workflow skills (Phase 4 batch 1: framing + exploration)
+	// Auto-triggering workflow skills (framing + exploration)
 	{Name: "h-frame", Content: embeddedHFrameSkill, AllowImplicit: true},
 	{Name: "h-diagnose", Content: embeddedHDiagnoseSkill, AllowImplicit: true},
 	{Name: "h-explore", Content: embeddedHExploreSkill, AllowImplicit: true},
 	{Name: "h-compare", Content: embeddedHCompareSkill, AllowImplicit: true},
 
-	// Auto-triggering workflow skills (Phase 4 batch 2: verify + operate)
+	// Auto-triggering workflow skills (verify + operate)
 	{Name: "h-verify", Content: embeddedHVerifySkill, AllowImplicit: true},
 	{Name: "h-status", Content: embeddedHStatusSkill, AllowImplicit: true},
 	{Name: "h-onboard", Content: embeddedHOnboardSkill, AllowImplicit: true},
@@ -107,29 +97,36 @@ var allSkills = []skillManifest{
 }
 
 // deprecatedSkillDirs lists skill directory names that prior haft
-// versions installed but the current v8 governance substrate has
-// replaced. `installSkill` removes them on every install so operators
-// who re-run `haft init` get a clean post-pivot state without manual
-// cleanup. Add older deprecated skill names here as the skill set
-// evolves; do NOT remove entries (operators who skip versions need
-// the cumulative cleanup list).
+// versions installed but the current skill set has replaced.
+// `installSkill` removes them on every install so operators who re-run
+// `haft init` get a clean state without manual cleanup. Add older
+// deprecated skill names here as the skill set evolves; do NOT remove
+// entries (operators who skip versions need the cumulative cleanup
+// list).
+//
+// TODO(future release): once enough time has passed that no live install
+// could still carry these directories, prune the list. Track via
+// `dec-20260525-v8-architecture-pivot` predictions — when its
+// rollback window closes cleanly, the migration entries here can drop.
 var deprecatedSkillDirs = []string{
-	"q-reason", // pre-rename ancestor of h-reason
-	"h-reason", // replaced by narrow h-fpf umbrella in v8 governance pivot
+	"q-reason",
+	"h-reason",
 }
 
-func installCommands(projectRoot string, platform string, local bool) (string, int, error) {
-	entries, err := embeddedCommands.ReadDir("commands")
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to read embedded commands: %w", err)
-	}
-
+// cleanupLegacySlashCommands removes any legacy haft slash-command
+// files left behind by prior installs. Skills are the primary surface
+// in this haft version; slash commands of the same names would
+// duplicate the skill bodies. Returns the display path of the
+// commands directory + number of files removed.
+//
+// TODO(future release): once enough time has passed that no live
+// install could still carry these files, this function and the call
+// sites in init.go can be deleted. Track the supersedence window of
+// dec-20260525-v8-architecture-pivot.
+func cleanupLegacySlashCommands(projectRoot, platform string, local bool) (string, int) {
 	homeDir, _ := os.UserHomeDir()
 
-	var destDir string
-	var transformer func(string, string) (string, string)
-	var ext string
-
+	var destDir, ext string
 	switch platform {
 	case "claude":
 		if local {
@@ -137,7 +134,6 @@ func installCommands(projectRoot string, platform string, local bool) (string, i
 		} else {
 			destDir = filepath.Join(homeDir, ".claude", "commands")
 		}
-		transformer = transformClaude
 		ext = ".md"
 	case "cursor":
 		if local {
@@ -145,7 +141,6 @@ func installCommands(projectRoot string, platform string, local bool) (string, i
 		} else {
 			destDir = filepath.Join(homeDir, ".cursor", "commands")
 		}
-		transformer = transformCursor
 		ext = ".md"
 	case "gemini":
 		if local {
@@ -153,62 +148,33 @@ func installCommands(projectRoot string, platform string, local bool) (string, i
 		} else {
 			destDir = filepath.Join(homeDir, ".gemini", "commands")
 		}
-		transformer = transformGemini
 		ext = ".toml"
 	case "codex":
-		// Codex only supports global prompts in ~/.codex/prompts/
 		destDir = filepath.Join(homeDir, ".codex", "prompts")
-		transformer = transformCodex
 		ext = ".md"
 	case "opencode":
-		// OpenCode looks at .opencode/commands/ in the project root, with
-		// global override at ~/.config/opencode/commands/. Markdown command
-		// files are passed through unchanged — OpenCode parses the same
-		// frontmatter shape as Claude / Codex.
 		if local {
 			destDir = filepath.Join(projectRoot, ".opencode", "commands")
 		} else {
 			destDir = filepath.Join(homeDir, ".config", "opencode", "commands")
 		}
-		transformer = transformOpencode
 		ext = ".md"
 	default:
-		return "", 0, fmt.Errorf("unknown platform: %s", platform)
+		return "", 0
 	}
 
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return "", 0, err
+	if _, err := os.Stat(destDir); err != nil {
+		return displayHomePath(destDir, homeDir), 0
 	}
 
-	cleanupOldCommands(destDir, ext)
-
-	count := 0
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
+	removed := 0
+	for _, cmd := range deprecatedCommands {
+		path := filepath.Join(destDir, cmd+ext)
+		if err := os.Remove(path); err == nil {
+			removed++
 		}
-
-		content, err := embeddedCommands.ReadFile("commands/" + entry.Name())
-		if err != nil {
-			continue
-		}
-
-		newName, newContent := transformer(entry.Name(), string(content))
-		destPath := filepath.Join(destDir, newName)
-
-		if err := os.WriteFile(destPath, []byte(newContent), 0644); err != nil {
-			continue
-		}
-		count++
 	}
-
-	// Make path relative for display
-	displayPath := destDir
-	if strings.HasPrefix(destDir, homeDir) {
-		displayPath = "~" + strings.TrimPrefix(destDir, homeDir)
-	}
-
-	return displayPath, count, nil
+	return displayHomePath(destDir, homeDir), removed
 }
 
 func installCodexSkills(projectRoot string, local bool) (string, int, error) {
@@ -225,40 +191,12 @@ func installCodexSkills(projectRoot string, local bool) (string, int, error) {
 		_ = os.RemoveAll(filepath.Join(skillsRoot, name))
 	}
 
-	// Install v8 governance substrate skills (h-fpf, h-decide, ...) with
-	// per-skill codex policy gates.
-	skillCount := 0
+	// Install the haft skills with per-skill codex policy gates.
+	count := 0
 	for _, sk := range allSkills {
 		body := transformCodexSkillReferences(string(sk.Content))
 		if err := writeCodexSkill(skillsRoot, sk.Name, body, sk.AllowImplicit); err != nil {
 			return "", 0, err
-		}
-		skillCount++
-	}
-
-	entries, err := embeddedCommands.ReadDir("commands")
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to read embedded commands: %w", err)
-	}
-
-	// Start count at the number of governance-substrate skills we just
-	// wrote so the per-command-as-codex-skill loop below extends rather
-	// than overwrites the total reported back to the operator.
-	count := skillCount
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-
-		content, err := embeddedCommands.ReadFile("commands/" + entry.Name())
-		if err != nil {
-			continue
-		}
-
-		name := strings.TrimSuffix(entry.Name(), ".md")
-		skill := transformCodexCommandSkill(name, string(content))
-		if err := writeCodexSkill(skillsRoot, name, skill, false); err != nil {
-			continue
 		}
 		count++
 	}
@@ -378,17 +316,43 @@ func yamlDoubleQuote(value string) string {
 	return `"` + replacer.Replace(value) + `"`
 }
 
+// deprecatedCommands lists slash-command names that prior haft versions
+// installed but the current command set no longer ships. `cleanupOldCommands`
+// removes them on every install so re-running `haft init` leaves the
+// host's command directory clean. Keep entries cumulative — operators
+// who skip versions need the full list to migrate forward.
+//
+// TODO(future release): prune the oldest entries (q0-init through the
+// q-prefix block) once enough time has passed that no live install
+// could still carry them. Track via the supersedence window of
+// `dec-20260525-v8-architecture-pivot`.
 var deprecatedCommands = []string{
-	// v4 commands
+	// Pre-rename q-prefix commands
 	"q0-init", "q-decay", "q-actualize", "q1-add", "q-implement",
 	"q-internalize", "q-query", "q-reset", "q-resolve",
 	"q1-hypothesize", "q2-verify", "q3-validate", "q4-audit", "q5-decide",
-	// v5 q-prefix (renamed to h-prefix)
+	// q-prefix renamed to h-prefix
 	"q-apply", "q-char", "q-compare", "q-decide", "q-explore",
 	"q-frame", "q-note", "q-onboard", "q-problems", "q-refresh",
 	"q-reason", "q-search", "q-status",
-	// v6 h-refresh replaced by h-verify
+	// h-refresh replaced by h-verify
 	"h-refresh",
+	// Folded into the current skill set — functionality moved to
+	// h-frame, h-status, mcp__haft__haft_query, or projection MCP tools.
+	"h-char",     // characterization folded into h-frame
+	"h-problems", // covered by h-status
+	"h-search",   // covered by haft_query(action="search")
+	"h-view",     // covered by mcp projection tools
+	"h-reason",   // umbrella replaced by the current skill catalog + h-fpf fallback
+	// Slash-command files dropped — skills are the primary surface; in
+	// Claude Code typing /skill-name fires the skill directly, so a
+	// parallel slash-command file would either duplicate the skill body
+	// or shadow it. Operators upgrading from a prior install need these
+	// names wiped from their commands directory.
+	"h-frame", "h-explore", "h-compare", "h-decide", "h-verify",
+	"h-status", "h-onboard", "h-note", "h-commission",
+	"h-diagnose", "h-fpf", "h-spec-cover", "h-abduct",
+	"h-boundary-unpack", "h-semio-review",
 }
 
 func cleanupOldCommands(destDir string, ext string) {
@@ -402,21 +366,12 @@ func cleanupCodexPromptCommands() (string, int, error) {
 	homeDir, _ := os.UserHomeDir()
 	destDir := filepath.Join(homeDir, ".codex", "prompts")
 
-	entries, err := embeddedCommands.ReadDir("commands")
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to read embedded commands: %w", err)
-	}
-
-	names := append([]string{}, deprecatedCommands...)
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		names = append(names, strings.TrimSuffix(entry.Name(), ".md"))
+	if _, err := os.Stat(destDir); err != nil {
+		return displayHomePath(destDir, homeDir), 0, nil
 	}
 
 	removed := 0
-	for _, name := range names {
+	for _, name := range deprecatedCommands {
 		path := filepath.Join(destDir, name+".md")
 		if _, err := os.Stat(path); err != nil {
 			continue
@@ -525,7 +480,7 @@ func skillsRoot(platform string, local bool, projectRoot string) (string, bool) 
 	return "", false
 }
 
-// installSkill installs all v8 governance substrate skills under the
+// installSkill installs all skills in `allSkills` under the
 // platform-appropriate skills directory and removes deprecated skill
 // folders that prior haft versions left behind. Returns the display
 // path of the skills root + count of skills installed.
@@ -534,27 +489,27 @@ func skillsRoot(platform string, local bool, projectRoot string) (string, bool) 
 // `agents/openai.yaml` policy controlling implicit invocation. Operator
 // invocation behavior is governed by frontmatter (`disable-model-invocation`
 // on Claude Code; `policy.allow_implicit_invocation` on Codex).
-func installSkill(platform string, local bool, projectRoot string) (string, error) {
+func installSkill(platform string, local bool, projectRoot string) (string, int, error) {
 	root, ok := skillsRoot(platform, local, projectRoot)
 	if !ok {
-		return "", nil
+		return "", 0, nil
 	}
 
 	if err := os.MkdirAll(root, 0755); err != nil {
-		return "", fmt.Errorf("failed to create skills root %q: %w", root, err)
+		return "", 0, fmt.Errorf("failed to create skills root %q: %w", root, err)
 	}
 
-	// Remove deprecated skill directories (q-reason, h-reason, etc.)
-	// so operators who re-run `haft init` land on the current v8 set
-	// without manual cleanup.
+	// Remove deprecated skill directories so operators who re-run
+	// `haft init` land on the current set without manual cleanup.
 	for _, name := range deprecatedSkillDirs {
 		_ = os.RemoveAll(filepath.Join(root, name))
 	}
 
+	installed := 0
 	for _, sk := range allSkills {
 		skillDir := filepath.Join(root, sk.Name)
 		if err := os.MkdirAll(skillDir, 0755); err != nil {
-			return "", fmt.Errorf("create skill dir %q: %w", skillDir, err)
+			return "", 0, fmt.Errorf("create skill dir %q: %w", skillDir, err)
 		}
 
 		content := sk.Content
@@ -564,18 +519,19 @@ func installSkill(platform string, local bool, projectRoot string) (string, erro
 
 		destPath := filepath.Join(skillDir, "SKILL.md")
 		if err := os.WriteFile(destPath, content, 0644); err != nil {
-			return "", fmt.Errorf("write skill %q: %w", sk.Name, err)
+			return "", 0, fmt.Errorf("write skill %q: %w", sk.Name, err)
 		}
 
 		if platform == "codex" {
 			if err := writeCodexSkillPolicy(skillDir, sk.AllowImplicit); err != nil {
-				return "", fmt.Errorf("write codex policy %q: %w", sk.Name, err)
+				return "", 0, fmt.Errorf("write codex policy %q: %w", sk.Name, err)
 			}
 		}
+		installed++
 	}
 
 	homeDir, _ := os.UserHomeDir()
-	return displayHomePath(root, homeDir), nil
+	return displayHomePath(root, homeDir), installed, nil
 }
 
 func writeCodexSkillPolicy(skillDir string, allowImplicit bool) error {

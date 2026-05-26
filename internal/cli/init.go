@@ -198,15 +198,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 		} else {
 			fmt.Println("  ✓ Configured MCP for Claude Code (.mcp.json)")
 		}
-		if destPath, count, err := installCommands(cwd, "claude", initLocal); err != nil {
-			fmt.Printf("  ⚠ Failed to install Claude commands: %v\n", err)
-		} else {
-			fmt.Printf("  ✓ Installed %d slash commands (%s)\n", count, destPath)
+		if destPath, removed := cleanupLegacySlashCommands(cwd, "claude", initLocal); removed > 0 {
+			fmt.Printf("  ✓ Removed %d legacy slash commands (%s)\n", removed, destPath)
 		}
-		if skillPath, err := installSkill("claude", initLocal, cwd); err != nil {
-			fmt.Printf("  ⚠ Failed to install FPF skill: %v\n", err)
+		if skillPath, count, err := installSkill("claude", initLocal, cwd); err != nil {
+			fmt.Printf("  ⚠ Failed to install skills: %v\n", err)
 		} else if skillPath != "" {
-			fmt.Printf("  ✓ Installed /h-reason skill (%s)\n", skillPath)
+			fmt.Printf("  ✓ Installed %d skills (%s)\n", count, skillPath)
 		}
 	}
 
@@ -217,15 +215,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 			fmt.Println("  ✓ Configured MCP for Cursor (.cursor/mcp.json)")
 			fmt.Println("    Note: Make sure haft MCP is enabled in Cursor settings")
 		}
-		if destPath, count, err := installCommands(cwd, "cursor", initLocal); err != nil {
-			fmt.Printf("  ⚠ Failed to install Cursor commands: %v\n", err)
-		} else {
-			fmt.Printf("  ✓ Installed %d slash commands (%s)\n", count, destPath)
+		if destPath, removed := cleanupLegacySlashCommands(cwd, "cursor", initLocal); removed > 0 {
+			fmt.Printf("  ✓ Removed %d legacy slash commands (%s)\n", removed, destPath)
 		}
-		if skillPath, err := installSkill("cursor", initLocal, cwd); err != nil {
-			fmt.Printf("  ⚠ Failed to install FPF skill: %v\n", err)
+		if skillPath, count, err := installSkill("cursor", initLocal, cwd); err != nil {
+			fmt.Printf("  ⚠ Failed to install skills: %v\n", err)
 		} else if skillPath != "" {
-			fmt.Printf("  ✓ Installed /h-reason skill (%s)\n", skillPath)
+			fmt.Printf("  ✓ Installed %d skills (%s)\n", count, skillPath)
 		}
 	}
 
@@ -235,10 +231,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 		} else {
 			fmt.Printf("  ✓ Configured MCP for Gemini CLI (project: %s)\n", cwd)
 		}
-		if destPath, count, err := installCommands(cwd, "gemini", initLocal); err != nil {
-			fmt.Printf("  ⚠ Failed to install Gemini commands: %v\n", err)
-		} else {
-			fmt.Printf("  ✓ Installed %d slash commands (%s)\n", count, destPath)
+		if destPath, removed := cleanupLegacySlashCommands(cwd, "gemini", initLocal); removed > 0 {
+			fmt.Printf("  ✓ Removed %d legacy slash commands (%s)\n", removed, destPath)
 		}
 	}
 
@@ -269,21 +263,18 @@ func runInit(cmd *cobra.Command, args []string) error {
 				fmt.Printf("  ⚠ Failed to install Codex skills: %v\n", err)
 			} else {
 				fmt.Printf("  ✓ Installed %d Codex skills (%s)\n", count, skillPath)
-				fmt.Println("    Note: Use $h-reason for reasoning; other $h-* skills are explicit-only")
+				fmt.Println("    Note: $h-frame/$h-diagnose/$h-explore/$h-compare/$h-verify auto-trigger; $h-decide and $h-commission are explicit-only")
 			}
 		}
 		if hosts.air {
 			// Air currently uses the same Codex prompt/MCP bootstrap.
-			if destPath, count, err := installCommands(cwd, "codex", false); err != nil {
-				fmt.Printf("  ⚠ Failed to install Air prompts: %v\n", err)
-			} else {
-				fmt.Printf("  ✓ Installed %d Air prompts (%s)\n", count, destPath)
-				fmt.Println("    Note: Use /prompts:h-note to invoke in Air-compatible clients")
+			if destPath, removed := cleanupLegacySlashCommands(cwd, "codex", false); removed > 0 {
+				fmt.Printf("  ✓ Removed %d legacy Air prompts (%s)\n", removed, destPath)
 			}
-			if skillPath, err := installSkill("air", true, cwd); err != nil {
-				fmt.Printf("  ⚠ Failed to install Air skill: %v\n", err)
+			if skillPath, count, err := installSkill("air", true, cwd); err != nil {
+				fmt.Printf("  ⚠ Failed to install Air skills: %v\n", err)
 			} else if skillPath != "" {
-				fmt.Printf("  ✓ Installed Air skill h-reason (%s)\n", skillPath)
+				fmt.Printf("  ✓ Installed %d Air skills (%s)\n", count, skillPath)
 			}
 		}
 	}
@@ -294,15 +285,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 		} else {
 			fmt.Printf("  ✓ Configured MCP for OpenCode (opencode.json, project: %s)\n", cwd)
 		}
-		if destPath, count, err := installCommands(cwd, "opencode", initLocal); err != nil {
-			fmt.Printf("  ⚠ Failed to install OpenCode commands: %v\n", err)
-		} else {
-			fmt.Printf("  ✓ Installed %d OpenCode commands (%s)\n", count, destPath)
+		if destPath, removed := cleanupLegacySlashCommands(cwd, "opencode", initLocal); removed > 0 {
+			fmt.Printf("  ✓ Removed %d legacy OpenCode commands (%s)\n", removed, destPath)
 		}
-		if skillPath, err := installSkill("opencode", initLocal, cwd); err != nil {
-			fmt.Printf("  ⚠ Failed to install FPF skill: %v\n", err)
+		if skillPath, count, err := installSkill("opencode", initLocal, cwd); err != nil {
+			fmt.Printf("  ⚠ Failed to install skills: %v\n", err)
 		} else if skillPath != "" {
-			fmt.Printf("  ✓ Installed /h-reason skill (%s)\n", skillPath)
+			fmt.Printf("  ✓ Installed %d skills (%s)\n", count, skillPath)
 		}
 	}
 
@@ -324,7 +313,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Println("\nThis looks like an existing project. Run /h-onboard to discover")
 		fmt.Println("existing decisions, architecture docs, ADRs, and build a knowledge map.")
 	} else {
-		fmt.Println("Use /h-note to capture decisions, /h-reason for structured reasoning.")
+		fmt.Println("Use /h-note for micro-decisions, /h-frame to start framing a problem.")
 	}
 	return nil
 }

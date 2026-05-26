@@ -16,11 +16,21 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 
 ### Removed
 
-- `haft agent` standalone interactive agent (all of `internal/agentcore`,
+- `haft agent` standalone interactive agent — all of `internal/agentcore`,
   `internal/agentdriver`, `internal/agentproto`, `internal/agentserver`,
-  `internal/agentstore`)
+  `internal/agentstore`
 - v8 TUI package (`tui/` — Bun + OpenTUI + SolidJS bundle, ~46k LOC dropped)
-- Desktop wrappers (`desktop/` — Tauri v2, prior Wails artifacts)
+- Wails-era desktop frontend (`desktop/frontend/` — React app for the
+  prior Wails wrapper). `desktop-tauri/` and `tui-react/` trees are
+  dead-code but still git-tracked pending operator decision on full
+  removal (no Go code launches either of them in v8).
+- Orphan packages post v7-agent removal: `internal/agentloop`
+  (coordinator, overseer, spawn — ~5400 LOC), `internal/protocol`
+  (bus, commands, events), `internal/session` (sqlite store +
+  migrations + tests), `internal/setup`, plus CLI helpers:
+  `login.go`, `models.go`, `setup.go`, `session_mode.go`,
+  `message_projection.go`, `files.go`, `term_echo_*.go`,
+  `internal/tools/ask_user.go`
 - v7 helper commands: `haft login`, `haft models`, `haft setup`
 - `/h-reason` umbrella skill — replaced by the 15-skill catalog
 - Prior `[8.0.0]` architecture (TS+Bun+OpenTUI+SolidJS standalone TUI,
@@ -69,6 +79,25 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 - Artifact-graph hygiene: superseded 4 prior decisions conflicting with
   the pivot (dec-20260513-v8-architecture-retroactive, v8-sunset-retroactive,
   v8-attribution-retroactive, dec-20260424-desktop-smart-add-rpc).
+- `task install` simplified — drops legacy React+Ink TUI build,
+  drops v8 OpenTUI bun-install step, drops desktop install hint. Now
+  installs only the Go binary + Open-Sleigh runtime. `task install`
+  was broken after the pivot (referenced deleted `tui/package.json`);
+  this fixes it. Vars `TUI_DIR`, `TUI_BUNDLE`, `TUI_INSTALL_DIR`,
+  `TUI_V8_DIR`, `TUI_V8_BUNDLE` removed. Tasks `tui`, `tui-v8-install`,
+  `tui-v8-build`, `tui-v8-test`, `tui-v8-typecheck` removed.
+  `repomix` include/ignore globs purged of `tui/`, `tui-react/`,
+  `desktop/`, `desktop-tauri/`. Desktop vars kept and `desktop:*`
+  tasks reachable pending operator decision on full tree removal.
+- `task lint` no longer typechecks the deleted legacy TUI TypeScript;
+  runs `go vet` only.
+- FPF spec refreshed to `04dd733 result of semio evidence campaign`
+  (was `7f8a04c`). Picked up upstream: C.29 (mathematical lens
+  adequacy), TGA refresh campaign result (10 patterns), SEMIO-3
+  campaign results, C.22.2 ProblemCard@Context, "first principles
+  in C.29 and pillars", E.10.SEMIO cleanup + corrections, plain-text
+  preservation. Embedded SQLite index (`internal/cli/fpf.db`)
+  rebuilt — 5244 chunks (5178 spec + 66 patterns).
 
 ## [8.0.0] — 2026-05-14
 

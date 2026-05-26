@@ -79,7 +79,7 @@ Make explicit to the operator:
 - DO NOT auto-author `.haft/specs/*.md` files. Those are operator authorship.
 - DO NOT commit decisions during onboarding — onboarding produces ONE ProblemCard (in tactical mode), not a DecisionRecord.
 - DO NOT skip the first acceptance signal — without it the project has no observable success criterion to bind future decisions to.
-- DO NOT recommend `haft agent` (removed in v8) or `haft desktop` (removed in v8). The agent layer is the operator's Claude Code / Codex.
+- DO NOT recommend `haft agent` or `haft desktop` — those surfaces do not exist. The agent layer is the operator's Claude Code / Codex.
 
 ## FPF spec references
 

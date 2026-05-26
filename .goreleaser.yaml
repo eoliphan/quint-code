@@ -3,10 +3,7 @@ version: 2
 project_name: haft
 
 before:
-  hooks:
-    - sh -c "cd desktop/frontend && rm -rf node_modules package-lock.json && npm install --no-audit --no-fund && npm run build"
-    - sh -c "cd tui-react && rm -rf node_modules package-lock.json && npm install --no-audit --no-fund && npm run build"
-    - sh -c "cd tui && rm -rf node_modules && bun install && bun run build"
+  hooks: []
 
 builds:
   - id: haft
@@ -36,12 +33,6 @@ archives:
       - README*
       - LICENSE*
       - CHANGELOG*
-      - src: tui-react/dist/tui.mjs
-        dst: tui
-        strip_parent: true
-      - src: tui/dist/haft-tui.js
-        dst: tui-v8
-        strip_parent: true
 
 checksum:
   name_template: 'checksums.txt'
@@ -53,7 +44,7 @@ release:
   header: |
     ## Haft {{ .Tag }}
 
-    FPF-native engineering reasoning runtime. MCP plugin + Desktop app.
+    FPF governance substrate. CLI + MCP server + 15 skills for Claude Code / Codex / OpenCode / Cursor.
 
     ### Install
 

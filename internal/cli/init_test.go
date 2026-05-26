@@ -273,29 +273,14 @@ func TestRunInit_OpencodeWritesMcpConfigAndCommands(t *testing.T) {
 		t.Errorf("HAFT_PROJECT_ROOT = %v, want %s", env["HAFT_PROJECT_ROOT"], tmpDir)
 	}
 
-	// Local commands install lands in .opencode/commands
-	displayPath, count, err := installCommands(tmpDir, "opencode", true)
-	if err != nil {
-		t.Fatalf("installCommands opencode: %v", err)
-	}
-	if count == 0 {
-		t.Errorf("expected commands installed, got 0")
-	}
-	wantPath := filepath.Join(tmpDir, ".opencode", "commands")
-	if displayPath != wantPath {
-		t.Errorf("displayPath = %q, want %q", displayPath, wantPath)
-	}
-
-	// At least one well-known command landed
-	if _, err := os.Stat(filepath.Join(wantPath, "h-frame.md")); err != nil {
-		t.Errorf("h-frame.md not installed: %v", err)
-	}
-
 	// Skill install for opencode lands in .opencode/skills (root); each
 	// v8 governance-substrate skill lands as <root>/<name>/SKILL.md.
-	skillPath, err := installSkill("opencode", true, tmpDir)
+	skillPath, count, err := installSkill("opencode", true, tmpDir)
 	if err != nil {
 		t.Fatalf("installSkill opencode: %v", err)
+	}
+	if count != len(allSkills) {
+		t.Errorf("installSkill installed %d skills, expected %d", count, len(allSkills))
 	}
 	wantSkillRoot := filepath.Join(tmpDir, ".opencode", "skills")
 	if skillPath != wantSkillRoot {
