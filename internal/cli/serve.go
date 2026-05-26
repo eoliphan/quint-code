@@ -1100,7 +1100,10 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		return present.SearchResponse(results, query) + navStrip, nil
 
 	case "status":
-		data, err := artifact.FetchStatusData(ctx, store, contextName)
+		// H1 (dec-20260526-9fdd33ed): pass projectRoot so /h-status
+		// surfaces drift via FetchStatusData → CheckDrift → StatusData.Drift.
+		projectRoot := filepath.Dir(haftDir)
+		data, err := artifact.FetchStatusData(ctx, store, contextName, projectRoot)
 		if err != nil {
 			return "", err
 		}

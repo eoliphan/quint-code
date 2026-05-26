@@ -1684,7 +1684,9 @@ func (t *HaftQueryTool) Execute(ctx context.Context, argsJSON string) (agent.Too
 		return agent.PlainResult(b.String()), nil
 
 	case "status":
-		data, err := artifact.FetchStatusData(ctx, t.store, contextName)
+		// HaftQueryTool doesn't carry projectRoot — drift surfacing skipped.
+		// Production /h-status path is cli/serve.go which passes projectRoot.
+		data, err := artifact.FetchStatusData(ctx, t.store, contextName, "")
 		if err != nil {
 			return agent.ToolResult{}, err
 		}

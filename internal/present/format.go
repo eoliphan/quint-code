@@ -677,6 +677,48 @@ func StatusResponse(data artifact.StatusData) string {
 		sb.WriteString("\n")
 	}
 
+	// Drift section (H1 of V2 — dec-20260526-9fdd33ed). Summary-mode
+	// against noise overload per the DRR weakest_link mitigation:
+	// top-3 drifted decisions with counts; full detail via /h-refresh
+	// scan or /h-verify.
+	if len(data.Drift) > 0 {
+		sb.WriteString(fmt.Sprintf("### Drift Detected (%d decision(s))\n\n", len(data.Drift)))
+		cap := 3
+		for i, r := range data.Drift {
+			if i >= cap {
+				sb.WriteString(fmt.Sprintf("- ... and %d more (use /h-refresh scan or /h-verify for details)\n", len(data.Drift)-cap))
+				break
+			}
+			mod, added, missing := 0, 0, 0
+			for _, f := range r.Files {
+				switch f.Status {
+				case artifact.DriftModified:
+					mod++
+				case artifact.DriftAdded:
+					added++
+				case artifact.DriftMissing:
+					missing++
+				}
+			}
+			parts := []string{}
+			if mod > 0 {
+				parts = append(parts, fmt.Sprintf("%d modified", mod))
+			}
+			if added > 0 {
+				parts = append(parts, fmt.Sprintf("%d added", added))
+			}
+			if missing > 0 {
+				parts = append(parts, fmt.Sprintf("%d missing", missing))
+			}
+			summary := strings.Join(parts, ", ")
+			if summary == "" {
+				summary = "no file changes"
+			}
+			sb.WriteString(fmt.Sprintf("- **%s** `%s` — %s\n", r.DecisionTitle, r.DecisionID, summary))
+		}
+		sb.WriteString("\n→ Run /h-verify on a drifted decision to gather evidence; /h-refresh scan for full file-level diff.\n\n")
+	}
+
 	if len(data.CommissionAttention) > 0 {
 		sb.WriteString(fmt.Sprintf("### WorkCommissions Need Attention (%d)\n\n", len(data.CommissionAttention)))
 		cap := 5
@@ -752,6 +794,7 @@ func StatusResponse(data artifact.StatusData) string {
 		len(data.PendingDecisions) > 0 ||
 		len(data.UnassessedDecisions) > 0 ||
 		len(data.StaleItems) > 0 ||
+		len(data.Drift) > 0 ||
 		len(data.OpenCommissions) > 0 ||
 		len(data.CommissionAttention) > 0 ||
 		len(data.InProgressProblems) > 0 ||

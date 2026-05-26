@@ -110,10 +110,23 @@ type StatusData struct {
 	AddressedProblems   []*Artifact
 	AddressedBy         map[string]string // problem ID -> decision ID
 	RecentNotes         []*Artifact
+
+	// Drift reports for active decisions whose baselined affected_files
+	// have moved since baseline (H1 of V2 — reality-aware decisions).
+	// Populated when FetchStatusData is called with a non-empty
+	// projectRoot. Otherwise nil (drift surfacing skipped, kernel computes
+	// nothing). See dec-20260526-9fdd33ed (PRIME of sol-20260526-744c6381).
+	Drift []DriftReport
 }
 
 // FetchStatusData gathers all dashboard data without formatting.
-func FetchStatusData(ctx context.Context, store ArtifactStore, contextFilter string) (StatusData, error) {
+//
+// projectRoot, when non-empty, triggers drift detection via CheckDrift —
+// drift reports for active baselined decisions are returned in StatusData.Drift.
+// Callers that don't have project-root context (tests, attention scans) pass ""
+// and Drift stays nil. The production MCP path (cli/serve.go status case)
+// passes filepath.Dir(haftDir).
+func FetchStatusData(ctx context.Context, store ArtifactStore, contextFilter string, projectRoot string) (StatusData, error) {
 	var data StatusData
 	data.InProgressBy = make(map[string]string)
 	data.AddressedBy = make(map[string]string)
@@ -211,6 +224,33 @@ func FetchStatusData(ctx context.Context, store ArtifactStore, contextFilter str
 			data.InProgressProblems = append(data.InProgressProblems, p)
 		} else {
 			data.BacklogProblems = append(data.BacklogProblems, p)
+		}
+	}
+
+	// Drift detection (H1 of V2) — only when projectRoot is known.
+	// CheckDrift compares baselined affected_files against current state
+	// and returns per-decision reports. Kept best-effort: errors are
+	// swallowed so /h-status remains responsive even if drift compute
+	// fails (drift is informational, not gating).
+	if strings.TrimSpace(projectRoot) != "" {
+		if reports, err := CheckDrift(ctx, store, projectRoot); err == nil {
+			if contextFilter == "" {
+				for _, r := range reports {
+					if r.HasBaseline && len(r.Files) > 0 {
+						data.Drift = append(data.Drift, r)
+					}
+				}
+			} else {
+				// Filter to decisions in the matching context
+				for _, r := range reports {
+					if !r.HasBaseline || len(r.Files) == 0 {
+						continue
+					}
+					if a, err := store.Get(ctx, r.DecisionID); err == nil && a.Meta.Context == contextFilter {
+						data.Drift = append(data.Drift, r)
+					}
+				}
+			}
 		}
 	}
 

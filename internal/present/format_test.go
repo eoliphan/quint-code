@@ -302,6 +302,69 @@ func TestSearchResponse_PreservesQueryTitleAndBodyVerbatim(t *testing.T) {
 	}
 }
 
+// TestStatusResponse_RendersDriftSection — H1 of V2
+// (dec-20260526-9fdd33ed). /h-status must surface drift summary when
+// CheckDrift returned non-empty reports via StatusData.Drift.
+func TestStatusResponse_RendersDriftSection(t *testing.T) {
+	data := artifact.StatusData{
+		Drift: []artifact.DriftReport{
+			{
+				DecisionID:    "dec-foo",
+				DecisionTitle: "Foo decision",
+				HasBaseline:   true,
+				Files: []artifact.DriftItem{
+					{Path: "internal/foo/a.go", Status: artifact.DriftModified},
+					{Path: "internal/foo/b.go", Status: artifact.DriftModified},
+					{Path: "internal/foo/new.go", Status: artifact.DriftAdded},
+				},
+			},
+			{
+				DecisionID:    "dec-bar",
+				DecisionTitle: "Bar decision",
+				HasBaseline:   true,
+				Files: []artifact.DriftItem{
+					{Path: "internal/bar/gone.go", Status: artifact.DriftMissing},
+				},
+			},
+		},
+	}
+
+	response := present.StatusResponse(data)
+
+	wants := []string{
+		"### Drift Detected (2 decision(s))",
+		"Foo decision",
+		"dec-foo",
+		"2 modified",
+		"1 added",
+		"Bar decision",
+		"1 missing",
+		"/h-verify",
+		"/h-refresh scan",
+	}
+	for _, w := range wants {
+		if !strings.Contains(response, w) {
+			t.Errorf("StatusResponse drift section missing %q\nfull response:\n%s", w, response)
+		}
+	}
+}
+
+// TestStatusResponse_NoDriftSectionWhenEmpty — drift section MUST NOT
+// appear when StatusData.Drift is nil/empty. Avoids noise in solo-dev
+// sessions where projectRoot wasn't passed (e.g., test fixtures) or
+// where CheckDrift returned zero drifted decisions.
+func TestStatusResponse_NoDriftSectionWhenEmpty(t *testing.T) {
+	data := artifact.StatusData{
+		HealthyDecisions: []*artifact.Artifact{
+			{Meta: artifact.Meta{ID: "dec-x", Title: "Some decision"}},
+		},
+	}
+	response := present.StatusResponse(data)
+	if strings.Contains(response, "Drift Detected") {
+		t.Errorf("Drift section should not appear when StatusData.Drift is empty; got:\n%s", response)
+	}
+}
+
 func TestStatusResponse_ShowsDerivedDecisionHealth(t *testing.T) {
 	data := artifact.StatusData{
 		HealthyDecisions: []*artifact.Artifact{
