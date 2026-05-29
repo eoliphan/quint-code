@@ -27,6 +27,13 @@ type ModuleCoverage struct {
 	Status        CoverageStatus
 	DecisionCount int
 	DecisionIDs   []string
+
+	// ImpactScore is the number of governed (Covered or Partial) modules
+	// that depend on this module — i.e., how many decision-covered places
+	// would be at risk if this module changes. Computed in ComputeCoverage
+	// via Scanner.GetDependents reverse-graph traversal (dec-20260527-e4b86938).
+	// Zero means no governed dependents (isolated utility, low priority).
+	ImpactScore int
 }
 
 // CoverageReport is the full coverage report for a project.
@@ -131,6 +138,37 @@ func ComputeCoverage(ctx context.Context, db *sql.DB) (*CoverageReport, error) {
 		report.Modules = append(report.Modules, mc)
 	}
 
+	// Impact-ranking pass (dec-20260527-e4b86938): for each module count
+	// governed dependents — how many decision-covered modules would be
+	// affected if this module changes. Reverse-graph query via
+	// Scanner.GetDependents (same data source EnrichDriftWithImpact uses
+	// in forward direction). Time-bounded fallback: if compute exceeds
+	// the deadline, leave remaining ImpactScore at zero and continue;
+	// callers see partial ranking, not a stall.
+	governedModuleIDs := make(map[string]bool, len(report.Modules))
+	for _, mc := range report.Modules {
+		if mc.Status == CoverageCovered || mc.Status == CoveragePartial {
+			governedModuleIDs[mc.Module.ID] = true
+		}
+	}
+	impactDeadline := time.Now().Add(500 * time.Millisecond)
+	for i := range report.Modules {
+		if time.Now().After(impactDeadline) {
+			// Time guard per DRR weakest_link mitigation — abandon
+			// remaining impact compute, return what we have.
+			break
+		}
+		deps, err := scanner.GetDependents(ctx, report.Modules[i].Module.ID)
+		if err != nil {
+			continue
+		}
+		for _, dep := range deps {
+			if governedModuleIDs[dep] {
+				report.Modules[i].ImpactScore++
+			}
+		}
+	}
+
 	return report, nil
 }
 
@@ -153,27 +191,45 @@ func FormatCoverageResponse(report *CoverageReport) string {
 	header += ")\n\n"
 	sb.WriteString(header)
 
-	// Covered first, then partial, then blind
+	// Covered first, then partial, then blind. Within each tier sort by
+	// ImpactScore descending then path ascending (dec-20260527-e4b86938
+	// V1 — impact-ranked spec coverage): hottest items at top so operator
+	// reading the list sees governance-critical modules first.
 	for _, status := range []CoverageStatus{CoverageCovered, CoveragePartial, CoverageBlind} {
+		// Collect modules in this tier and sort.
+		var tier []ModuleCoverage
 		for _, mc := range report.Modules {
-			if mc.Status != status {
-				continue
+			if mc.Status == status {
+				tier = append(tier, mc)
 			}
+		}
+		sort.Slice(tier, func(i, j int) bool {
+			if tier[i].ImpactScore != tier[j].ImpactScore {
+				return tier[i].ImpactScore > tier[j].ImpactScore
+			}
+			return tier[i].Module.Path < tier[j].Module.Path
+		})
+
+		for _, mc := range tier {
 			path := mc.Module.Path
 			if path == "" {
 				path = "(root)"
 			}
+			impactTag := ""
+			if mc.ImpactScore > 0 {
+				impactTag = fmt.Sprintf(", impact: %d", mc.ImpactScore)
+			}
 
 			switch mc.Status {
 			case CoverageCovered:
-				sb.WriteString(fmt.Sprintf("  ✓ %-30s — %d decision(s) [%s]\n",
-					path, mc.DecisionCount, mc.Module.Lang))
+				sb.WriteString(fmt.Sprintf("  ✓ %-30s — %d decision(s)%s [%s]\n",
+					path, mc.DecisionCount, impactTag, mc.Module.Lang))
 			case CoveragePartial:
-				sb.WriteString(fmt.Sprintf("  ~ %-30s — %d decision(s), stale [%s]\n",
-					path, mc.DecisionCount, mc.Module.Lang))
+				sb.WriteString(fmt.Sprintf("  ~ %-30s — %d decision(s), stale%s [%s]\n",
+					path, mc.DecisionCount, impactTag, mc.Module.Lang))
 			case CoverageBlind:
-				sb.WriteString(fmt.Sprintf("  ✗ %-30s — no decisions (blind) [%s]\n",
-					path, mc.Module.Lang))
+				sb.WriteString(fmt.Sprintf("  ✗ %-30s — no decisions (blind)%s [%s]\n",
+					path, impactTag, mc.Module.Lang))
 			}
 		}
 	}

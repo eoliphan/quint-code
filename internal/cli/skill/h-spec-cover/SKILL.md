@@ -26,6 +26,8 @@ Returns per-module status:
 - **stale** — module has decisions but they're past valid_until / R_eff degraded
 - **blind** — module has no decisions
 
+Within each tier modules are **sorted by impact-score descending** (per dec-20260527-e4b86938 V1): impact = number of governed modules that depend on this one. A blind module with high impact is high-priority (governed code at risk if it changes); a blind module with zero impact is an isolated utility, low priority. The `(impact: N)` tag in the output line surfaces the count when > 0; absence of tag = zero impact.
+
 ## Step 2 — Identify the immediate gap
 
 If the operator is currently editing a specific file, prioritize that file's module. Run:
