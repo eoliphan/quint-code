@@ -1820,7 +1820,11 @@ func (t *HaftRefreshTool) Execute(ctx context.Context, argsJSON string) (agent.T
 		if len(reports) == 0 {
 			return agent.PlainResult("No drift detected."), nil
 		}
-		return agent.PlainResult(present.DriftResponse(reports, "")), nil
+		verbose, _ := args["verbose"].(bool)
+		if verbose {
+			return agent.PlainResult(present.DriftResponse(reports, "")), nil
+		}
+		return agent.PlainResult(present.DriftResponseSummary(reports, "")), nil
 
 	case "waive":
 		ref, _ := args["artifact_ref"].(string)

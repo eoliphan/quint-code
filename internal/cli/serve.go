@@ -1014,7 +1014,12 @@ func handleQuintRefresh(ctx context.Context, store *artifact.Store, haftDir stri
 			}
 		}
 		if hasImpact {
-			result += "\n" + present.DriftResponse(driftReports, "")
+			verbose, _ := args["verbose"].(bool)
+			if verbose {
+				result += "\n" + present.DriftResponse(driftReports, "")
+			} else {
+				result += "\n" + present.DriftResponseSummary(driftReports, "")
+			}
 		}
 
 		return result + navStrip, nil

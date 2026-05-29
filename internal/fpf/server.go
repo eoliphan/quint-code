@@ -661,6 +661,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 						"type":        "string",
 						"description": "Optional context filter for scan",
 					},
+					"verbose": map[string]string{
+						"type":        "boolean",
+						"description": "(scan) Include full per-file drift dump. Default false — drift is summarized as counts + top-5 modified paths per decision. Full mode can exceed context budget on repos with vendor subtrees or large added-files sets.",
+					},
 				},
 				"required": []string{"action"},
 			},

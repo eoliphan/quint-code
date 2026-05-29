@@ -226,7 +226,109 @@ func BaselineResponse(decisionRef string, files []artifact.AffectedFile, navStri
 	return sb.String()
 }
 
-// DriftResponse formats drift check results for the agent.
+// DriftResponseSummary formats drift results compactly: per-report counts +
+// up to 5 modified file paths (the actionable ones). Suitable as the default
+// reply from haft_refresh scan; the full per-file dump (DriftResponse) can
+// span thousands of lines on repos with vendor subtrees or large added-files
+// sets and overflows the agent's context. Verbose mode opt-in only.
+func DriftResponseSummary(reports []artifact.DriftReport, navStrip string) string {
+	var sb strings.Builder
+
+	if len(reports) == 0 {
+		sb.WriteString("No drift detected. All baselined decisions match current file state.\n")
+		sb.WriteString(navStrip)
+		return sb.String()
+	}
+
+	driftCount := 0
+	noBaselineCount := 0
+	for _, r := range reports {
+		if r.HasBaseline {
+			driftCount++
+		} else {
+			noBaselineCount++
+		}
+	}
+
+	const topModifiedPerReport = 5
+
+	if driftCount > 0 {
+		sb.WriteString(fmt.Sprintf("## Drift Detected (%d decision(s)) — summary\n\n", driftCount))
+		sb.WriteString("Counts per baselined decision. For full per-file dump pass `verbose: true` to haft_refresh.\n\n")
+		for _, r := range reports {
+			if !r.HasBaseline {
+				continue
+			}
+			var modified, added, missing int
+			var modifiedPaths []string
+			for _, f := range r.Files {
+				switch f.Status {
+				case artifact.DriftModified:
+					modified++
+					if len(modifiedPaths) < topModifiedPerReport {
+						modifiedPaths = append(modifiedPaths, f.Path)
+					}
+				case artifact.DriftAdded:
+					added++
+				case artifact.DriftMissing:
+					missing++
+				}
+			}
+			sb.WriteString(fmt.Sprintf("### %s [%s]\n", r.DecisionTitle, r.DecisionID))
+			sb.WriteString(fmt.Sprintf("  %d modified, %d added, %d missing\n", modified, added, missing))
+			if len(modifiedPaths) > 0 {
+				sb.WriteString("  Top modified:\n")
+				for _, p := range modifiedPaths {
+					sb.WriteString(fmt.Sprintf("    - %s\n", p))
+				}
+				if modified > topModifiedPerReport {
+					sb.WriteString(fmt.Sprintf("    ... and %d more modified\n", modified-topModifiedPerReport))
+				}
+			}
+			sb.WriteString("\n")
+		}
+		for _, r := range reports {
+			if !r.HasBaseline || len(r.ImpactedModules) == 0 {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("**Impact propagation for %s:**\n", r.DecisionID))
+			for _, impact := range r.ImpactedModules {
+				if impact.IsBlind {
+					sb.WriteString(fmt.Sprintf("  ⚠ %s (blind) — no decisions, potential unmonitored impact\n", impact.ModulePath))
+				} else {
+					sb.WriteString(fmt.Sprintf("  → %s — governed by %s\n", impact.ModulePath, strings.Join(impact.DecisionIDs, ", ")))
+				}
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("**Classify each:** cosmetic (re-baseline) | material (flag to user or reopen) | incidental (shared file changed by unrelated work — re-baseline)\n\n")
+		sb.WriteString("For one specific decision use `haft_query(action=\"related\", file=...)`; for full dump pass `verbose: true` to haft_refresh.\n\n")
+	}
+
+	if noBaselineCount > 0 {
+		sb.WriteString(fmt.Sprintf("## No Baseline (%d decision(s))\n\n", noBaselineCount))
+		for _, r := range reports {
+			if r.HasBaseline {
+				continue
+			}
+			gitHint := "no git activity detected after decision date"
+			if r.LikelyImplemented {
+				gitHint = "git activity detected after decision date"
+			}
+			sb.WriteString(fmt.Sprintf("- **%s** [%s] — %d file(s) unmonitored, %s\n",
+				r.DecisionTitle, r.DecisionID, len(r.Files), gitHint))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(navStrip)
+	return sb.String()
+}
+
+// DriftResponse formats drift check results for the agent (verbose: full
+// per-file dump). Opt-in via verbose=true on haft_refresh; default callers
+// should prefer DriftResponseSummary to keep output within an agent's
+// context budget.
 func DriftResponse(reports []artifact.DriftReport, navStrip string) string {
 	var sb strings.Builder
 
