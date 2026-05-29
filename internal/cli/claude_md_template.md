@@ -168,6 +168,16 @@ wrong? Are we painting ourselves into a corner?
    dominates V1 (plain coverage list)` not bare `V3 dominates V1`. Keep
    IDs in the text — they are needed for traceability and follow-up
    kernel calls — but never leave them standalone. Object ≠ Carrier.
+10. **Maintenance discipline (FPF B.3.4 Evidence Decay).** When a kernel
+    response includes `Refresh reminder: N days since last stale scan`
+    and N > 30 — or no scan is visible in the current session — the
+    agent calls `haft_refresh(action="scan")` BEFORE answering the
+    operator, not after. Same for drift detected on files touched
+    in-session: re-baseline via `haft_decision(action="baseline", ...)`
+    or surface the drift inline. Reasoning on a stale graph is the
+    same anti-pattern as reasoning on stale code. Surfacing the
+    reminder is the kernel's job; acting on it is the agent's job;
+    doing nothing is the failure mode this rule exists to fix.
 
 ## FPF Glossary
 

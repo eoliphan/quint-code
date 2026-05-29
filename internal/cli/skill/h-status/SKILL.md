@@ -5,12 +5,29 @@ description: |
 when_to_use: |
   Operator wants situational awareness or session-resume context. Cheap and read-only, fire freely.
 argument-hint: "[optional: context name to filter]"
-allowed-tools: mcp__haft__haft_query
+allowed-tools: mcp__haft__haft_query mcp__haft__haft_refresh
 ---
 
 # h-status — Project FPF state dashboard
 
-You are surfacing the current FPF state via `mcp__haft__haft_query(action="status")`. Read-only — no kernel writes.
+You are surfacing the current FPF state via `mcp__haft__haft_query(action="status")`. Read-only — no kernel writes (Step 0's scan is a maintenance write, not a state mutation).
+
+## Step 0 — Maintenance check (FPF B.3.4 evidence decay)
+
+Before calling status, scan the most recent kernel response in this
+session for `Refresh reminder: N days since last stale scan`. If
+N > 30, OR if no scan is visible in this session's history:
+
+1. Call `mcp__haft__haft_refresh(action="scan")` first — do not
+   defer to the operator. The reminder is a signal for the agent to
+   act, not a prompt for the operator to remember.
+2. Fold any new stale or drifted findings from the scan into the
+   status reply you were already about to produce.
+3. If the scan reveals nothing new — say so briefly and proceed.
+
+Surfacing the reminder is the kernel's job; acting on it is the
+agent's job. Doing nothing is the failure mode this step exists to
+fix. See CLAUDE.md Critical Reminders — maintenance discipline.
 
 ## Step 1 — Call the kernel
 

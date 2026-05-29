@@ -54,6 +54,28 @@ If (1) = yes and (2) = no — STOP. Pick the right kernel action below and call 
 
 ---
 
+## Maintenance check (FPF B.3.4) — before reasoning
+
+When entering this umbrella, look at the most recent kernel response
+for `Refresh reminder: N days since last stale scan`. If N > 30 —
+call `mcp__haft__haft_refresh(action="scan")` BEFORE doing reasoning
+work.
+
+Reasoning on a stale graph is the same anti-pattern as reasoning on
+stale code: variants you generate may rediscover what was already
+decided, or contradict an already-decayed claim. Burn the
+1-second scan first; reason against fresh state. If the scan finds
+nothing new — mention briefly, proceed.
+
+Same discipline for drift detected on files touched in this session:
+re-baseline via `haft_decision(action="baseline", ...)` or surface
+the drift explicitly. Do not silently proceed past a drift warning.
+
+Surfacing the reminder is the kernel's job; acting on it is the
+agent's job. See CLAUDE.md Critical Reminders.
+
+---
+
 ## Quick triage — what is the operator actually asking?
 
 Before doing anything, read the operator's signal carefully and classify:

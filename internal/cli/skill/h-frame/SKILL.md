@@ -5,7 +5,7 @@ description: |
 when_to_use: |
   Operator is about to commit to a direction before the problem is honestly named, OR is explicitly framing. If the signal is a concrete failure with unclear cause, prefer h-diagnose. For one-line micro-decisions use h-note.
 argument-hint: "[problem signal text — what's anomalous, broken, or needs changing]"
-allowed-tools: mcp__haft__haft_problem mcp__haft__haft_query
+allowed-tools: mcp__haft__haft_problem mcp__haft__haft_query mcp__haft__haft_refresh
 ---
 
 # h-frame — Frame the problem before solving
@@ -13,6 +13,24 @@ allowed-tools: mcp__haft__haft_problem mcp__haft__haft_query
 You are framing a problem via `mcp__haft__haft_problem(action="frame", ...)`. Problem quality dominates solution quality. Get the frame right; the rest follows.
 
 ## Procedure
+
+### Step 0 — Maintenance check (FPF B.3.4 evidence decay)
+
+Before framing a NEW problem, check the most recent kernel response
+for `Refresh reminder: N days since last stale scan`. If N > 30,
+call `mcp__haft__haft_refresh(action="scan")` first. Stale or
+drifted artifacts may already touch the area this new problem
+operates in — discovering them after framing wastes the reasoning,
+or worse, lets you frame a problem that's already been decided and
+just decayed silently.
+
+If the scan surfaces a conflict (stale decision in same module,
+unresolved drift on overlapping files) — surface it inline and ask
+the operator whether to verify the existing artifact first or
+proceed with the new frame anyway. Do not silently re-frame around
+obsolete artifacts.
+
+See CLAUDE.md Critical Reminders — maintenance discipline.
 
 ### Step 1 — Stabilize the signal (FPF B.4.1)
 
