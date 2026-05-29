@@ -102,6 +102,15 @@ Surface:
   - `/h-compare` to evaluate variants against declared dimensions and pick a Pareto front
   - More exploration if variants converge too tightly (operator may want a wider net)
 
+**Re-grounding discipline (FPF A.7).** Every bare variant label and
+artifact ID in your operator-facing text (`V1`, `V2`, `sol-...`, returned
+portfolio refs) MUST be paired with its human-readable title or key
+claim on first mention in any paragraph/table/summary. Bare `V3 dominates
+V1` is opaque after a long session; `V3 (data-flow restructure) dominates
+V1 (algorithmic alternative)` restores the object behind the carrier.
+Keep IDs — they are needed for traceability — but never let them stand
+alone. See CLAUDE.md Critical Reminders for the project-wide rule.
+
 ## What NOT to do
 
 - Do not produce 2-3 variants of the same approach (cache LRU vs cache LFU vs cache TTL — all caching). Force at least one out-of-kind alternative.

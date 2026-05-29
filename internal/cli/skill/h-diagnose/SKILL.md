@@ -128,6 +128,15 @@ Surface to operator:
 
 Operator decides next step. Do NOT auto-fix; diagnosis stops at root-cause identification.
 
+**Re-grounding discipline (FPF A.7).** Every hypothesis label (`H1`,
+`H2`, …) and artifact ID (`prob-...`, `sol-...`) in your prime / rivals
+/ recommendation summary MUST be paired with its one-line claim. Bare
+`H3 dominates H1 by evidence weight` is opaque once context fades; `H3
+(race condition in retry loop) dominates H1 (cache stale) by evidence
+weight` restores what is actually being compared. Keep IDs for kernel
+follow-up but never let them stand alone. See CLAUDE.md Critical
+Reminders for the project-wide rule.
+
 ## What NOT to do
 
 - Do not test hypotheses sequentially in one context — anchoring bias degrades evidence quality.

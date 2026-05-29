@@ -90,6 +90,14 @@ Kernel returns ProblemCard ID (e.g. `prob-20260525-...`). Present to operator wi
 - `/h-status` to see this problem in project FPF state
 - For richer dimensions later: characterize via `mcp__haft__haft_problem(action="characterize", problem_ref=..., dimensions=[...])`
 
+**Re-grounding discipline (FPF A.7).** When you reference the new
+ProblemCard ID in subsequent operator-facing text, pair it with the
+problem title or one-line signal — `prob-20260525-abc (cache-invalidation
+flakes in schema-migration suite)` not bare `prob-20260525-abc`. Bare IDs
+accumulate cognitive debt across long sessions. Keep the ID (needed for
+follow-up kernel calls and traceability) but never let it stand alone.
+See CLAUDE.md Critical Reminders for the project-wide rule.
+
 ## What NOT to do
 
 - Do not jump from signal to solution; frame first.

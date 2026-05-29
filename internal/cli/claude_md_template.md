@@ -160,6 +160,14 @@ wrong? Are we painting ourselves into a corner?
    boundary.
 7. **No silent failures.** Empty catch blocks are bugs.
 8. **Be direct.** "No" is a complete sentence. Disagree when you should.
+9. **Re-ground identifiers in operator-facing text (FPF A.7 Strict Distinction).**
+   Pair every artifact ID (`V1`, `sol-X`, `dec-X`, `prob-X`) with its
+   human-readable title or one-line claim. Bare IDs accumulate cognitive
+   debt across long sessions — what was obvious 30 minutes ago is opaque
+   when the operator returns. Use `V3 (drift surfacing in /h-status)
+   dominates V1 (plain coverage list)` not bare `V3 dominates V1`. Keep
+   IDs in the text — they are needed for traceability and follow-up
+   kernel calls — but never leave them standalone. Object ≠ Carrier.
 
 ## FPF Glossary
 

@@ -145,6 +145,16 @@ Surface:
 - Recommendation (advisory only — the operator decides via /h-decide)
 - Soft warnings from the kernel (read them — they may flag rigged comparison: missing parity, single-dimension, selected-not-in-non-dominated, etc.)
 
+**Re-grounding discipline (FPF A.7).** Every variant label (`V1`, `V2`,
+…) and artifact ID (`sol-...`, `prob-...`) in your Pareto-front summary,
+dominance explanation, and recommendation paragraphs MUST be paired with
+its human-readable title or one-line claim on first mention. Bare `V3
+dominates V1 on latency_p95` is opaque when operator returns 30 minutes
+later; `V3 (in-memory cache) dominates V1 (per-request DB read) on
+latency_p95` restores the object behind the carrier. Apply consistently
+to dimension labels too where they are abstract codes. See CLAUDE.md
+Critical Reminders for the project-wide rule.
+
 ## Step 8 — Hand off to operator for decision
 
 This skill STOPS at presentation. The binding choice is /h-decide (manual-only per Transformer Mandate). Recommend it as next step.

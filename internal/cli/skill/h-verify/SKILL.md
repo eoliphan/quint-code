@@ -121,6 +121,15 @@ Surface:
 - Drift status if baseline existed
 - Recommended next action (waive / reopen / supersede / nothing — decision still good)
 
+**Re-grounding discipline (FPF A.7).** When you reference decision IDs
+(`dec-20260525-...`), prediction labels, or evidence refs in the verdict
+summary and recommendation paragraphs, pair each with its
+human-readable title or claim — `dec-20260525-abc (NATS over Kafka for
+ops simplicity) — verdict accepted` not bare `dec-20260525-abc verdict
+accepted`. Bare IDs accumulate cognitive debt across long sessions. Keep
+IDs for traceability but never let them stand alone in summaries. See
+CLAUDE.md Critical Reminders for the project-wide rule.
+
 ## What NOT to do
 
 - Do NOT call `action="measure"` without first gathering evidence — kernel rejects measure-from-memory (the protocol requires evidence before verdict).
