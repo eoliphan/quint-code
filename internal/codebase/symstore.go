@@ -9,8 +9,11 @@ import (
 
 // CodeSymbol is a persisted symbol node. Identity is (FilePath, Name, StartLine)
 // — so two same-name methods on different receivers (different start lines) are
-// two distinct nodes, never one. Immutable value; the store is the only shell.
+// two distinct nodes, never one. ID is the deterministic surrogate derived from
+// that identity, used as the stable handle that code_edges reference. Immutable
+// value; the store is the only shell.
 type CodeSymbol struct {
+	ID        string
 	FilePath  string
 	Name      string
 	Kind      string
@@ -24,8 +27,16 @@ type CodeSymbol struct {
 	Lang      string
 }
 
+// NodeID is the deterministic identity hash for a symbol node — same identity
+// (file, name, start line) always yields the same id across re-indexing, so
+// edges stay valid through an idempotent rebuild of unchanged symbols.
+func NodeID(filePath, name string, startLine int) string {
+	return fmt.Sprintf("%s#%s#%d", filePath, name, startLine)
+}
+
 const codeSymbolsSchema = `
 CREATE TABLE IF NOT EXISTS code_symbols (
+  id         TEXT PRIMARY KEY,
   file_path  TEXT NOT NULL,
   name       TEXT NOT NULL,
   kind       TEXT,
@@ -37,7 +48,7 @@ CREATE TABLE IF NOT EXISTS code_symbols (
   hash       TEXT,
   exported   INTEGER DEFAULT 0,
   lang       TEXT,
-  PRIMARY KEY (file_path, name, start_line)
+  UNIQUE (file_path, name, start_line)
 );
 CREATE INDEX IF NOT EXISTS idx_code_symbols_name ON code_symbols(name);
 CREATE INDEX IF NOT EXISTS idx_code_symbols_file ON code_symbols(file_path);`
@@ -62,6 +73,7 @@ func (s *SymbolStore) EnsureSchema(ctx context.Context) error {
 // codeSymbolFromSnapshot is the pure mapping extraction snapshot → persisted node.
 func codeSymbolFromSnapshot(snap SymbolSnapshot, lang string) CodeSymbol {
 	return CodeSymbol{
+		ID:        NodeID(snap.FilePath, snap.SymbolName, snap.Line),
 		FilePath:  snap.FilePath,
 		Name:      snap.SymbolName,
 		Kind:      snap.SymbolKind,
@@ -97,11 +109,15 @@ func (s *SymbolStore) ReplaceFileSymbols(ctx context.Context, filePath string, s
 		return err
 	}
 	for _, sym := range syms {
+		id := sym.ID
+		if id == "" {
+			id = NodeID(sym.FilePath, sym.Name, sym.StartLine)
+		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT OR REPLACE INTO code_symbols
-			 (file_path, name, kind, receiver, start_line, end_line, start_byte, end_byte, hash, exported, lang)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			sym.FilePath, sym.Name, sym.Kind, sym.Receiver, sym.StartLine, sym.EndLine,
+			 (id, file_path, name, kind, receiver, start_line, end_line, start_byte, end_byte, hash, exported, lang)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, sym.FilePath, sym.Name, sym.Kind, sym.Receiver, sym.StartLine, sym.EndLine,
 			sym.StartByte, sym.EndByte, sym.Hash, boolToInt(sym.Exported), sym.Lang,
 		); err != nil {
 			return err
@@ -197,7 +213,7 @@ func SliceBody(content []byte, sym CodeSymbol) ([]byte, bool) {
 	return content[sym.StartByte:sym.EndByte], true
 }
 
-const codeSymbolSelect = `SELECT file_path, name, kind, receiver, start_line, end_line, start_byte, end_byte, hash, exported, lang FROM code_symbols`
+const codeSymbolSelect = `SELECT id, file_path, name, kind, receiver, start_line, end_line, start_byte, end_byte, hash, exported, lang FROM code_symbols`
 
 func scanCodeSymbols(rows *sql.Rows) ([]CodeSymbol, error) {
 	var out []CodeSymbol
@@ -205,7 +221,7 @@ func scanCodeSymbols(rows *sql.Rows) ([]CodeSymbol, error) {
 		var c CodeSymbol
 		var exported int
 		var receiver, kind, hash, lang sql.NullString
-		if err := rows.Scan(&c.FilePath, &c.Name, &kind, &receiver, &c.StartLine, &c.EndLine, &c.StartByte, &c.EndByte, &hash, &exported, &lang); err != nil {
+		if err := rows.Scan(&c.ID, &c.FilePath, &c.Name, &kind, &receiver, &c.StartLine, &c.EndLine, &c.StartByte, &c.EndByte, &hash, &exported, &lang); err != nil {
 			return nil, err
 		}
 		c.Kind = kind.String
