@@ -83,6 +83,31 @@ The kernel returns the new decision ID (e.g. `dec-20260525-...`). Suggested next
 - For verification later: `/h-verify` (invokes haft_decision measure + evidence)
 - For autonomous execution: `/h-commission` (creates WorkCommission within autonomy envelope)
 
+## Curation gate — present rationale by exception (dec-20260603-732219b6)
+
+Agent-drafted rationale is broad-but-noisy: most extra arguments help, but a
+small fraction mislead. Presenting it FLAT forces the operator to either
+over-read everything or rubber-stamp the misleading fraction. So when you
+surface this decision's rationale for the operator's review — the
+`why_not_others` reasons, the `counterargument`, the `weakest_link` — do NOT
+list it flat. Bucket each argument by YOUR OWN confidence:
+
+- **Overlaps what you'd already conclude** — points the operator very likely
+  already holds. List compactly; these are skim-only.
+- **Helpful (secondary)** — genuinely useful additions worth a glance.
+- **⚠ Uncertain — scrutinize before binding** — arguments you are NOT confident
+  are correct or load-bearing. Surface these FIRST and PROMINENTLY.
+
+Invariants of this decision (do not violate):
+- Human binding stays mandatory — the gate makes curation efficient, it NEVER
+  auto-accepts or substitutes for the operator's `/h-decide`.
+- Surface the uncertain bucket HONESTLY — never down-rank a low-confidence
+  argument into "helpful" to make the output look tidy. False tidiness is worse
+  than a flat list: the operator would curate LESS carefully.
+- If nothing is genuinely uncertain, say so plainly ("none flagged uncertain") —
+  do not fabricate confidence, and do not invent an uncertain item to fill the
+  bucket.
+
 ## What NOT to do
 
 - Do not invoke this skill from another skill — operator must explicitly type `/h-decide` (structural enforcement via `disable-model-invocation: true`).

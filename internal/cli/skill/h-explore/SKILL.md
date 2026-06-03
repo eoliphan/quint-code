@@ -111,6 +111,22 @@ V1 (algorithmic alternative)` restores the object behind the carrier.
 Keep IDs — they are needed for traceability — but never let them stand
 alone. See CLAUDE.md Critical Reminders for the project-wide rule.
 
+## Curation gate — flag uncertain reasoning (dec-20260603-732219b6)
+
+Your drafted rationale (weakest-links, risks, strengths, novelty markers) is
+broad-but-noisy — most points help, a small fraction mislead. When you present
+it, do not give the operator a flat wall to over-read or rubber-stamp. Bucket
+each argument by your confidence and lead with the doubtful ones:
+
+- **⚠ Uncertain — scrutinize** — arguments you are NOT sure are correct or
+  load-bearing. Surface FIRST and prominently.
+- **Helpful (secondary)** / **overlaps the obvious** — list compactly, skim-only.
+
+Honesty rule (an invariant of this decision): never down-rank a low-confidence
+argument into "helpful" to look tidy, and never hide it — false tidiness makes
+the operator curate LESS carefully than a flat list would. If nothing is
+genuinely uncertain, say so; do not invent an uncertain item to fill the bucket.
+
 ## Final step — say it in plain words (MANDATORY, goes LAST)
 
 The recorded portfolio — variants, weakest-links, novelty markers, IDs — is for traceability. It is NOT how you explain the options to the operator. ALWAYS end your reply with a short plain-language section the operator can read on its own. The most common failure of this skill is dumping the variant table plus IDs and stopping — the operator then cannot tell what the real choice is.

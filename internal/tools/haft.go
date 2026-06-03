@@ -263,7 +263,9 @@ Actions:
 - explore: Generate 2+ genuinely distinct approaches with strengths, weakest link, and risks.
   Each variant must differ in KIND, not degree. This is creative abduction.
 - compare: Fair comparison of variants on explicit dimensions. Identify the Pareto front.
-- similar: Search past solution portfolios for patterns matching a query. Reuse proven approaches.`,
+- similar: Search past solution portfolios for patterns matching a query. Reuse proven approaches.
+
+When you present the variants' rationale to the operator, curate by exception: flag arguments you are NOT confident are correct/load-bearing under an "uncertain — scrutinize" bucket and lead with them; never down-rank or hide a low-confidence point to look tidy (false tidiness makes the operator curate less carefully than a flat list).`,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -1006,7 +1008,9 @@ Actions:
 - evidence: Attach an explicit evidence item to any artifact.
 - baseline: Snapshot affected files after implementation and before measurement.
 - measure: Record measurement results against acceptance criteria.
-  Closes the lemniscate cycle with inductive evidence.`,
+  Closes the lemniscate cycle with inductive evidence.
+
+When you present the rationale (rejected alternatives, counterargument, weakest link) for the operator's review, curate by exception: flag the arguments you are NOT confident in under an "uncertain — scrutinize before binding" bucket and lead with them; the operator still binds (this never auto-accepts). Never hide or down-rank a low-confidence argument to look tidy.`,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
