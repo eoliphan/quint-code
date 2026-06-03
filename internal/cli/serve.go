@@ -80,9 +80,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	workflow, workflowErr := project.LoadWorkflow(cwd)
 	if workflowErr != nil {
 		logger.Warn().Err(workflowErr).Msg("failed to load workflow policy")
-	} else if workflow != nil {
-		server.SetInstructions(workflow.PromptPrefix())
 	}
+	// Always emit server instructions: the workflow policy (when present) plus
+	// the always-on code-graph doctrine, so every session's system prompt tells
+	// the agent the fused code graph exists and to consult it before editing.
+	server.SetInstructions(composeServerInstructions(workflow))
 
 	// Load project identity
 	projCfg, err := project.Load(haftDir)
