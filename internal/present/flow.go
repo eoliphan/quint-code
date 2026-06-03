@@ -44,7 +44,7 @@ func FlowResponse(res codeintel.FlowResult, action, seedName string) string {
 	fmt.Fprintf(&b, "%d reached • %d carry recorded reasoning\n\n", len(res.Hops), governed)
 
 	if len(res.Hops) == 0 {
-		b.WriteString("Nothing reached at this depth — a leaf in this direction.\n")
+		b.WriteString(emptyReachMessage(res.Direction))
 		return b.String()
 	}
 
@@ -99,6 +99,19 @@ func directionWord(dir codeintel.Direction) string {
 		return "inbound"
 	}
 	return "outbound"
+}
+
+// emptyReachMessage is direction-aware: an empty CALLEES set genuinely means a
+// leaf (the symbol calls nothing resolvable). But an empty CALLERS set must NOT
+// read as "leaf / safe to change" — some call forms (methods on concrete-typed
+// fields across packages, reflection, callbacks, function values) aren't
+// resolved, so callers may exist but be unshown. Honest coverage: a blank
+// inbound result names its own incompleteness rather than implying none exist.
+func emptyReachMessage(dir codeintel.Direction) string {
+	if dir == codeintel.Callers {
+		return "No resolved callers — but some call forms (methods on concrete-typed fields across packages, reflection, callbacks) are not resolved yet, so callers may exist and be unshown. Do NOT read this as \"leaf / safe to change\" — double-check before relying on it.\n"
+	}
+	return "Nothing reached at this depth — a leaf in this direction (calls nothing resolvable).\n"
 }
 
 func receiverSuffix(c codebase.CodeSymbol) string {

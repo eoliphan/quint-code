@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strings"
 )
 
 // TypeFacts is the package-scoped index needed to infer the types of LOCAL
@@ -262,6 +263,33 @@ func inferExprType(expr ast.Expr, vars map[string]string, facts TypeFacts) strin
 	default:
 		return ""
 	}
+}
+
+// resolveQualifierType resolves the bare TYPE of a call qualifier — a simple
+// receiver var ("store") or a dotted field path ("s.scanner") — using the
+// function's var→type table and the package's struct-field facts. Returns "" for
+// anything it cannot resolve uniquely (a package selector, an unknown field):
+// conservative drop, so a concrete method edge is never bound to a guessed type.
+func resolveQualifierType(qualifier string, vars map[string]string, facts TypeFacts) string {
+	parts := strings.Split(qualifier, ".")
+	if len(parts) == 0 {
+		return ""
+	}
+	t, ok := vars[parts[0]]
+	if !ok {
+		return "" // base is not a known var (likely a package alias) — drop
+	}
+	for _, field := range parts[1:] {
+		fields, ok := facts.StructFields[t]
+		if !ok {
+			return ""
+		}
+		t, ok = fields[field]
+		if !ok || t == "" {
+			return ""
+		}
+	}
+	return t
 }
 
 // inferCallResults resolves a call's ordered result types via package facts.

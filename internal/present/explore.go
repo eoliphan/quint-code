@@ -121,7 +121,7 @@ func renderInvariantsInPlay(b *strings.Builder, chain []codeintel.ChainStep) {
 
 func renderBlastRadius(b *strings.Builder, callers []codeintel.FusedHop) {
 	if len(callers) == 0 {
-		b.WriteString("### Blast radius\nNo direct callers in the index — a leaf or entry point.\n\n")
+		b.WriteString("### Blast radius\nNo resolved callers — but some call forms (methods on concrete-typed fields across packages, reflection, callbacks) are not resolved yet, so callers may exist and be unshown. Do NOT read this as a safe-to-change leaf without double-checking.\n\n")
 		return
 	}
 	governed := 0

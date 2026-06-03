@@ -84,6 +84,11 @@ func (g *GoLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath stri
 	}
 	edges = append(edges, ResolveInterfaceDispatchEdges(relPath, fileSyms, sites, sigs, interfaces, nonTestSymbols(pkgSyms))...)
 
+	// 4. concrete method calls on typed vars/fields (store.Get, s.scanner.ScanEdges),
+	// incl. cross-package — the static counterpart to dispatch, closing the
+	// "method on a concrete-typed field" gap that left real callers unshown.
+	edges = append(edges, ResolveConcreteMethodCallEdges(relPath, fileSyms, sites, sigs, facts, lookup)...)
+
 	return dedupeEdges(edges), nil
 }
 

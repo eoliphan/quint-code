@@ -145,6 +145,64 @@ func ResolveIntraPackageCallEdges(filePath string, fileSymbols, pkgSymbols []Cod
 	return edges
 }
 
+// ResolveConcreteMethodCallEdges resolves QUALIFIED calls whose receiver is a
+// CONCRETE-typed variable or field — `store.Get(...)`, `s.scanner.ScanEdges(...)`
+// — to the method's definition node, including cross-package (the method lives
+// where its type is declared). This is the static counterpart to interface
+// dispatch: the receiver type is resolved (via vars + struct-field facts), then
+// the method node is found by (receiver, name) with the same exactly-1-or-drop
+// guard — a bare-receiver-name collision across packages (two `Store` types)
+// drops rather than emitting a wrong edge. Interface receivers naturally yield
+// no match here (interfaces have no method-body nodes) and are left to dispatch.
+func ResolveConcreteMethodCallEdges(filePath string, fileSymbols []CodeSymbol, callSites []CallSite, signatures map[int]map[string]string, facts TypeFacts, lookup func(name string) []CodeSymbol) []CodeEdge {
+	seen := map[string]bool{}
+	var edges []CodeEdge
+	for _, cs := range callSites {
+		if cs.Qualifier == "" {
+			continue // unqualified → P1a
+		}
+		caller := enclosingSymbol(fileSymbols, cs.Line)
+		if caller == nil {
+			continue
+		}
+		vars := signatures[caller.StartLine]
+		if vars == nil {
+			continue
+		}
+		recvType := resolveQualifierType(cs.Qualifier, vars, facts)
+		if recvType == "" {
+			continue // qualifier type unknown (package alias / unresolved field) — drop
+		}
+		var cands []CodeSymbol
+		for _, s := range lookup(cs.Callee) {
+			if s.Kind == "method" && s.Receiver == recvType {
+				cands = append(cands, s)
+			}
+		}
+		if len(cands) != 1 {
+			continue // 0 = not found; >1 = receiver-name collision — DROP, never fan out
+		}
+		dst := cands[0]
+		if dst.ID == caller.ID {
+			continue
+		}
+		key := caller.ID + "->" + dst.ID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		edges = append(edges, CodeEdge{
+			SrcID:      caller.ID,
+			DstID:      dst.ID,
+			Kind:       EdgeCall,
+			FilePath:   filePath,
+			Line:       cs.Line,
+			Provenance: ProvenanceStatic,
+		})
+	}
+	return edges
+}
+
 // enclosingSymbol returns the innermost func/method whose body covers the line.
 func enclosingSymbol(syms []CodeSymbol, line int) *CodeSymbol {
 	var best *CodeSymbol
