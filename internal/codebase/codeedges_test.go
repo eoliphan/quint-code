@@ -90,6 +90,76 @@ func Shared() {}
 	}
 }
 
+// TestP1bCrossFileCallEdges is the P1b gate: a qualified call into another
+// LOCAL package (pkg.Func) resolves cross-file to that package's exported func;
+// an external import (fmt) does not resolve (dropped, not invented).
+func TestP1bCrossFileCallEdges(t *testing.T) {
+	st, root := newSymbolStore(t)
+	ctx := context.Background()
+
+	mustWrite := func(name, src string) {
+		full := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite("go.mod", "module example.com/proj\n\ngo 1.25\n")
+	mustWrite("main.go", `package main
+
+import (
+	"fmt"
+
+	"example.com/proj/util"
+)
+
+func Run() {
+	util.Help()
+	fmt.Println("x")
+}
+`)
+	mustWrite("util/util.go", `package util
+
+func Help() {}
+`)
+
+	for _, f := range []string{"main.go", "util/util.go"} {
+		if err := st.IndexFileSymbols(ctx, root, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runNodes, _ := st.GetByName(ctx, "Run")
+	helpNodes, _ := st.GetByName(ctx, "Help")
+	if len(runNodes) != 1 || len(helpNodes) != 1 {
+		t.Fatalf("expected 1 Run + 1 Help node, got %d / %d", len(runNodes), len(helpNodes))
+	}
+
+	mainSyms, _ := st.GetByFile(ctx, "main.go")
+	imports, err := ExtractGoImports(root, "main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sites, err := ExtractCallSites(root, "main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup := func(name string) []CodeSymbol {
+		syms, _ := st.GetByName(ctx, name)
+		return syms
+	}
+
+	edges := ResolveCrossFileCallEdges("main.go", mainSyms, sites, imports, lookup)
+	if len(edges) != 1 {
+		t.Fatalf("expected exactly 1 cross-file edge (Run→util.Help); fmt.Println must drop. got %d: %+v", len(edges), edges)
+	}
+	if edges[0].SrcID != runNodes[0].ID || edges[0].DstID != helpNodes[0].ID {
+		t.Fatalf("edge mismatch: %+v (want %s→%s)", edges[0], runNodes[0].ID, helpNodes[0].ID)
+	}
+}
+
 // TestP1aOverResolutionDropsAmbiguous proves the exactly-1-or-drop guard: a
 // callee with multiple package candidates yields NO edge (never a fan-out).
 func TestP1aOverResolutionDropsAmbiguous(t *testing.T) {
