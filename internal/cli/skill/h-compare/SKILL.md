@@ -159,6 +159,22 @@ Critical Reminders for the project-wide rule.
 
 This skill STOPS at presentation. The binding choice is /h-decide (manual-only per Transformer Mandate). Recommend it as next step.
 
+## Step 9 — Say it in plain words (MANDATORY, goes LAST)
+
+Everything above — the Pareto front, dominated variants, scores, artifact IDs — is for traceability. It is NOT how you tell the operator what happened. ALWAYS end your reply with a short plain-language section the operator can read on its own and act on. The most common failure of this skill is dumping the ID-and-jargon structure and stopping — the operator then cannot tell what was decided.
+
+End with an `## In plain words` header, then:
+- **What we compared** — one sentence.
+- **What's left worth doing** — the surviving options in plain words: what each gives you and what it costs, one line each.
+- **What you'd pick and the honest reason.**
+- **The real trade-off** — the single thing the choice actually turns on.
+- **The one question** you need answered to move.
+
+Hard rules for this section:
+- ZERO artifact IDs (`sol-…`, `prob-…`, `dec-…`, `V1`/`V2`). Name each option by what it DOES, not its label.
+- ZERO undefined FPF jargon. Do not write "Pareto front", "dominated", "constraint-eliminated", "Anti-Goodhart", "weakest-link", or "parity" here — say it plainly ("the options not worth it because…", "the thing we watch but don't chase").
+- Short. If the operator cannot understand and decide from THIS section alone, it failed — a comparison the operator can't read is wishlist, not work.
+
 ## What NOT to do
 
 - Do not pre-collapse to a scalar winner. The Pareto front IS the result. The decide step picks from it.

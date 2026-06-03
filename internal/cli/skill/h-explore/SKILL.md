@@ -111,6 +111,21 @@ V1 (algorithmic alternative)` restores the object behind the carrier.
 Keep IDs — they are needed for traceability — but never let them stand
 alone. See CLAUDE.md Critical Reminders for the project-wide rule.
 
+## Final step — say it in plain words (MANDATORY, goes LAST)
+
+The recorded portfolio — variants, weakest-links, novelty markers, IDs — is for traceability. It is NOT how you explain the options to the operator. ALWAYS end your reply with a short plain-language section the operator can read on its own. The most common failure of this skill is dumping the variant table plus IDs and stopping — the operator then cannot tell what the real choice is.
+
+End with an `## In plain words` header, then:
+- **What we're actually deciding** — one sentence.
+- **The real options** — 2-4 of them in plain words, one line each: what it does + the main catch.
+- **Which you'd lean toward and why** — in human terms.
+- **What I need from you** — the one question to move forward.
+
+Hard rules for this section:
+- ZERO artifact IDs (`sol-…`, `prob-…`, `V1`/`V2`). Name each option by what it DOES.
+- ZERO undefined FPF jargon (NQD, stepping-stone, weakest-link, Pareto) — replace with plain words.
+- Short. If the operator cannot choose from THIS section alone, it failed.
+
 ## What NOT to do
 
 - Do not produce 2-3 variants of the same approach (cache LRU vs cache LFU vs cache TTL — all caching). Force at least one out-of-kind alternative.
