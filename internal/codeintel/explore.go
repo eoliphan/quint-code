@@ -45,6 +45,7 @@ type ExploreResult struct {
 	Seed          codebase.CodeSymbol
 	SeedFound     bool
 	Ambiguous     []codebase.CodeSymbol
+	Fuzzy         bool // seed/candidates came from the fuzzy fallback (no exact-name match)
 	Chain         []ChainStep
 	UnresolvedEnd bool // the spine stops at a dispatch boundary it could not cross
 	BridgesUsed   int
@@ -61,13 +62,13 @@ func (s *Service) Explore(ctx context.Context, projectRoot, name, file string, l
 	if err != nil {
 		return ExploreResult{}, err
 	}
-	seed, ambiguous, err := s.resolveSeed(ctx, name, file, line)
+	seed, candidates, fuzzy, err := s.resolveSeed(ctx, name, file, line)
 	if err != nil {
 		return ExploreResult{}, err
 	}
-	res := ExploreResult{ColdBuilt: cold}
-	if len(ambiguous) > 0 {
-		res.Ambiguous = ambiguous
+	res := ExploreResult{ColdBuilt: cold, Fuzzy: fuzzy}
+	if len(candidates) > 0 {
+		res.Ambiguous = candidates
 		return res, nil
 	}
 	if seed.ID == "" {
@@ -115,6 +116,153 @@ func (s *Service) Explore(ctx context.Context, projectRoot, name, file string, l
 	res.SeedBody = string(body)
 	res.SeedBodyOK = ok
 	return res, nil
+}
+
+// BagLeg is the connection between two adjacent seeds in a multi-seed explore:
+// the fused step sequence From … To, or Connected=false when no static path
+// exists (honest — never bridged with a guess). Reversed means the path runs
+// To→From (we still report it, naming the direction).
+type BagLeg struct {
+	From      codebase.CodeSymbol
+	To        codebase.CodeSymbol
+	Steps     []ChainStep
+	Connected bool
+	Reversed  bool
+}
+
+// ExploreBagResult is the multi-seed explore: how a bag of named symbols
+// connects. Each adjacent pair is a leg with its connecting path (or an honest
+// no-path). Seeds that did not resolve to a single symbol are listed so the
+// caller disambiguates them rather than the bag silently dropping them.
+type ExploreBagResult struct {
+	Seeds      []codebase.CodeSymbol
+	Unresolved []string
+	Legs       []BagLeg
+	ColdBuilt  bool
+}
+
+// ExploreBag connects a bag of >=2 seed names: resolve each (exact, else
+// unambiguous fuzzy) and find the shortest connecting path between each adjacent
+// pair over the call/dispatch edges, trying both directions. A pair with no
+// static path is reported as not connected — never bridged with a guess.
+func (s *Service) ExploreBag(ctx context.Context, projectRoot string, names []string) (ExploreBagResult, error) {
+	cold, err := s.EnsureIndex(ctx, projectRoot)
+	if err != nil {
+		return ExploreBagResult{}, err
+	}
+	res := ExploreBagResult{ColdBuilt: cold}
+	var seeds []codebase.CodeSymbol
+	for _, n := range names {
+		seed, candidates, _, err := s.resolveSeed(ctx, n, "", 0)
+		if err != nil {
+			return ExploreBagResult{}, err
+		}
+		if seed.ID == "" || len(candidates) > 0 {
+			res.Unresolved = append(res.Unresolved, n) // not found or ambiguous — can't place in the bag
+			continue
+		}
+		seeds = append(seeds, seed)
+	}
+	res.Seeds = seeds
+	if len(seeds) < 2 {
+		return res, nil
+	}
+	for i := 0; i+1 < len(seeds); i++ {
+		from, to := seeds[i], seeds[i+1]
+		leg := BagLeg{From: from, To: to}
+		if path, ok := shortestPath(ctx, s.edges, from.ID, to.ID, MaxChainHops); ok {
+			leg.Connected = true
+			if leg.Steps, err = s.fuseChain(ctx, path); err != nil {
+				return ExploreBagResult{}, err
+			}
+		} else if path, ok := shortestPath(ctx, s.edges, to.ID, from.ID, MaxChainHops); ok {
+			leg.Connected = true
+			leg.Reversed = true
+			if leg.Steps, err = s.fuseChain(ctx, path); err != nil {
+				return ExploreBagResult{}, err
+			}
+		}
+		res.Legs = append(res.Legs, leg)
+	}
+	return res, nil
+}
+
+// fuseChain resolves a node-id path to symbols and fuses each. Distance is the
+// position in the EMITTED chain (not the raw hop index), so it stays contiguous
+// even if a stale/deleted node is skipped mid-path.
+func (s *Service) fuseChain(ctx context.Context, hops []chainHop) ([]ChainStep, error) {
+	steps := make([]ChainStep, 0, len(hops))
+	for _, h := range hops {
+		sym, ok, err := s.symbols.GetByID(ctx, h.NodeID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		cc, err := contextgraph.FetchCodeContext(ctx, s.art, s.graph, contextgraph.Target{File: sym.FilePath, Symbol: sym.Name, Line: sym.StartLine})
+		if err != nil {
+			return nil, err
+		}
+		steps = append(steps, ChainStep{Symbol: sym, Distance: len(steps), ViaKind: h.ViaKind, Provenance: h.Provenance, Context: cc})
+	}
+	return steps, nil
+}
+
+// shortestPath is a bounded BFS from fromID to toID over out-edges, returning
+// the node sequence (from … to inclusive) or ok=false if unreachable within
+// maxHops. Each non-seed hop carries the edge that reached it. Pure relative to
+// the EdgeSource.
+func shortestPath(ctx context.Context, src EdgeSource, fromID, toID string, maxHops int) ([]chainHop, bool) {
+	if fromID == toID {
+		return []chainHop{{NodeID: fromID}}, true
+	}
+	visited := map[string]bool{fromID: true}
+	reachedBy := map[string]chainHop{}
+	pred := map[string]string{}
+	type frontier struct {
+		id    string
+		depth int
+	}
+	queue := []frontier{{fromID, 0}}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur.depth >= maxHops {
+			continue
+		}
+		edges, err := src.OutEdges(ctx, cur.id)
+		if err != nil {
+			return nil, false
+		}
+		for _, e := range edges {
+			if visited[e.DstID] {
+				continue
+			}
+			visited[e.DstID] = true
+			reachedBy[e.DstID] = chainHop{NodeID: e.DstID, ViaKind: e.Kind, Provenance: e.Provenance}
+			pred[e.DstID] = cur.id
+			if e.DstID == toID {
+				return reconstructPath(fromID, toID, reachedBy, pred), true
+			}
+			queue = append(queue, frontier{e.DstID, cur.depth + 1})
+		}
+	}
+	return nil, false
+}
+
+// reconstructPath walks predecessors from toID back to fromID and reverses.
+func reconstructPath(fromID, toID string, reachedBy map[string]chainHop, pred map[string]string) []chainHop {
+	var rev []chainHop
+	for n := toID; n != fromID; n = pred[n] {
+		rev = append(rev, reachedBy[n])
+	}
+	rev = append(rev, chainHop{NodeID: fromID})
+	out := make([]chainHop, len(rev))
+	for i := range rev {
+		out[len(rev)-1-i] = rev[i]
+	}
+	return out
 }
 
 // chainHop is a pure node-id step on the spine — the shell resolves it to a

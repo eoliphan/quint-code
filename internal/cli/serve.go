@@ -1252,7 +1252,17 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 			line = int(l)
 		}
 		projectRoot := filepath.Dir(haftDir)
-		res, err := codeintel.NewService(store).Explore(ctx, projectRoot, name, file, line)
+		svc := codeintel.NewService(store)
+		// A bag of >=2 names (space/comma-separated) → multi-seed: connect them.
+		// A single name → the single-seed flow. Same arg, no new tool.
+		if seeds := splitSeedBag(name); len(seeds) >= 2 {
+			res, err := svc.ExploreBag(ctx, projectRoot, seeds)
+			if err != nil {
+				return "", err
+			}
+			return present.ExploreBagResponse(res) + navStrip, nil
+		}
+		res, err := svc.Explore(ctx, projectRoot, name, file, line)
 		if err != nil {
 			return "", err
 		}
@@ -1356,6 +1366,22 @@ func nodeLang(file string, view codeintel.NodeView) string {
 		ext = filepath.Ext(view.Overloads[0].Symbol.FilePath)
 	}
 	return strings.TrimPrefix(ext, ".")
+}
+
+// splitSeedBag splits an explore symbol argument into a bag of seed names on
+// whitespace or commas (so "FrameProblem Create" or "FrameProblem, Create"
+// both work), dropping empties. A single token yields a one-element slice.
+func splitSeedBag(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == ','
+	})
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // exploreLang derives the code-fence language for an explore view from the file

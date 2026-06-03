@@ -16,24 +16,32 @@ import (
 func FlowResponse(res codeintel.FlowResult, action, seedName string) string {
 	var b strings.Builder
 
-	// Ambiguous seed: surface candidates, never silently pick (keystone discipline).
+	// Candidates: surface them, never silently pick (keystone discipline). The
+	// wording distinguishes exact-name overloads from a fuzzy (no-exact) match.
 	if len(res.Ambiguous) > 0 {
-		fmt.Fprintf(&b, "## %s — `%s` is ambiguous\n\n", titleFor(action), seedName)
-		fmt.Fprintf(&b, "%d symbols share this name. Re-query with `file` (and `line`) to disambiguate:\n\n", len(res.Ambiguous))
+		if res.Fuzzy {
+			fmt.Fprintf(&b, "## %s — no exact match for `%s`; did you mean:\n\n", titleFor(action), seedName)
+		} else {
+			fmt.Fprintf(&b, "## %s — `%s` is ambiguous\n\n", titleFor(action), seedName)
+			fmt.Fprintf(&b, "%d symbols share this name. Re-query with `file` (and `line`) to disambiguate:\n\n", len(res.Ambiguous))
+		}
 		for _, c := range res.Ambiguous {
-			fmt.Fprintf(&b, "- `%s:%d`%s\n", c.FilePath, c.StartLine, receiverSuffix(c))
+			fmt.Fprintf(&b, "- `%s` `%s:%d`%s\n", c.Name, c.FilePath, c.StartLine, receiverSuffix(c))
 		}
 		return b.String()
 	}
 
 	if !res.SeedFound {
 		fmt.Fprintf(&b, "## %s — `%s` not found\n\n", titleFor(action), seedName)
-		b.WriteString("No symbol with that name is in the code index. Check spelling, or pass `file` to scope it.\n")
+		b.WriteString("No symbol whose name matches that is in the code index (exact or substring). Check spelling, or pass `file` to scope it.\n")
 		return b.String()
 	}
 
 	fmt.Fprintf(&b, "## %s of `%s` — %s:%d (depth %d, %s)\n\n",
 		titleFor(action), res.Seed.Name, res.Seed.FilePath, res.Seed.StartLine, res.Depth, directionWord(res.Direction))
+	if res.Fuzzy {
+		fmt.Fprintf(&b, "_(no exact match for `%s` — using the single fuzzy match `%s`)_\n\n", seedName, res.Seed.Name)
+	}
 
 	governed := 0
 	for _, h := range res.Hops {

@@ -32,10 +32,12 @@ type NodeOverload struct {
 // self-contained. Unlike a Flow seed, a node is never "ambiguous" — it shows
 // ALL overloads rather than asking the caller to pick.
 type NodeView struct {
-	Name      string
-	Found     bool
-	Overloads []NodeOverload
-	ColdBuilt bool
+	Name       string
+	Found      bool
+	Overloads  []NodeOverload
+	Candidates []codebase.CodeSymbol // fuzzy matches when no exact name resolved and >1 hit
+	Fuzzy      bool                  // the shown definitions / candidates came from the fuzzy fallback
+	ColdBuilt  bool
 }
 
 // Node assembles the detail view for a symbol name: all overloads (or the one
@@ -46,12 +48,12 @@ func (s *Service) Node(ctx context.Context, projectRoot, name, file string, line
 	if err != nil {
 		return NodeView{}, err
 	}
-	candidates, err := s.resolveOverloads(ctx, name, file, line)
+	overloads, candidates, fuzzy, err := s.resolveOverloads(ctx, name, file, line)
 	if err != nil {
 		return NodeView{}, err
 	}
-	view := NodeView{Name: name, ColdBuilt: cold}
-	for _, sym := range candidates {
+	view := NodeView{Name: name, ColdBuilt: cold, Fuzzy: fuzzy, Candidates: candidates}
+	for _, sym := range overloads {
 		ol, err := s.buildOverload(ctx, projectRoot, sym)
 		if err != nil {
 			return NodeView{}, err
@@ -65,24 +67,46 @@ func (s *Service) Node(ctx context.Context, projectRoot, name, file string, line
 // resolveOverloads returns every definition the node view should show: the one
 // covering file+line if both given, else all same-name defs in the file (if
 // given), else all same-name defs across the project.
-func (s *Service) resolveOverloads(ctx context.Context, name, file string, line int) ([]codebase.CodeSymbol, error) {
+// resolveOverloads returns the definitions to SHOW (overloads), a fuzzy
+// CANDIDATE list when no exact name matched and more than one fuzzy hit exists,
+// and whether the result came from the fuzzy fallback. Exact name → show all its
+// overloads. Single fuzzy hit → show it (fuzzy=true). Multiple fuzzy hits → no
+// overloads, candidates listed (never auto-expand a dozen fuzzy matches).
+func (s *Service) resolveOverloads(ctx context.Context, name, file string, line int) (overloads, candidates []codebase.CodeSymbol, fuzzy bool, err error) {
 	if file != "" && line > 0 {
 		syms, err := s.symbols.GetByFile(ctx, file)
 		if err != nil {
-			return nil, err
+			return nil, nil, false, err
 		}
 		if sym, ok := symbolCoveringLine(syms, line); ok {
-			return []codebase.CodeSymbol{sym}, nil
+			return []codebase.CodeSymbol{sym}, nil, false, nil
 		}
 	}
-	candidates, err := s.symbols.GetByName(ctx, name)
+	exact, err := s.symbols.GetByName(ctx, name)
 	if err != nil {
-		return nil, err
+		return nil, nil, false, err
 	}
 	if file != "" {
-		candidates = filterByFile(candidates, file)
+		exact = filterByFile(exact, file)
 	}
-	return candidates, nil
+	if len(exact) > 0 {
+		return exact, nil, false, nil
+	}
+	fuzzyHits, err := s.symbols.SearchSymbols(ctx, name, 12)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if file != "" {
+		fuzzyHits = filterByFile(fuzzyHits, file)
+	}
+	switch len(fuzzyHits) {
+	case 0:
+		return nil, nil, false, nil
+	case 1:
+		return fuzzyHits, nil, true, nil
+	default:
+		return nil, fuzzyHits, true, nil
+	}
 }
 
 // buildOverload assembles one overload: freshness-revalidated body + fusion +

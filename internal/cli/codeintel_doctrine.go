@@ -37,6 +37,14 @@ decision, not just misreading structure. A blind Read/Grep cannot see this.
 - "read this symbol's source (and all overloads) with its governance" -> node
   (instead of Read: byte-exact, freshness-revalidated, per-overload fusion)
 
+## Seeds are forgiving — you don't need the exact name
+- Don't know the exact name? Pass a FRAGMENT — the actions match by substring and
+  either use the single hit (labeled "fuzzy") or list candidates to pick from. So
+  you never Grep just to find a symbol's name.
+- explore takes SEVERAL names at once (space- or comma-separated, e.g.
+  "FrameProblem Create") and shows the call path connecting them — or says
+  honestly there is no static path. Use this for "how does X reach Y".
+
 ## Honest coverage — heed the markers
 Unresolved dynamic dispatch is dropped and marked, never guessed. An empty
 "callers" says some call forms (reflection, callbacks) may be unresolved — do

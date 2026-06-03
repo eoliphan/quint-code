@@ -110,3 +110,41 @@ func TestExploreResponse_AmbiguousAndNotFound(t *testing.T) {
 		t.Errorf("missing seed must say not found:\n%s", nf)
 	}
 }
+
+func TestExploreBagResponse_ConnectedNoPathAndUnresolved(t *testing.T) {
+	res := codeintel.ExploreBagResult{
+		Seeds: []codebase.CodeSymbol{
+			{Name: "A", FilePath: "a.go", StartLine: 1},
+			{Name: "C", FilePath: "c.go", StartLine: 9},
+			{Name: "Z", FilePath: "z.go", StartLine: 3},
+		},
+		Unresolved: []string{"Huh"},
+		Legs: []codeintel.BagLeg{
+			{
+				From:      codebase.CodeSymbol{Name: "A", FilePath: "a.go", StartLine: 1},
+				To:        codebase.CodeSymbol{Name: "C", FilePath: "c.go", StartLine: 9},
+				Connected: true,
+				Steps: []codeintel.ChainStep{
+					{Symbol: codebase.CodeSymbol{Name: "A", FilePath: "a.go", StartLine: 1}, Distance: 0},
+					{Symbol: codebase.CodeSymbol{Name: "B", FilePath: "b.go", StartLine: 5}, Distance: 1, ViaKind: codebase.EdgeCall},
+					{Symbol: codebase.CodeSymbol{Name: "C", FilePath: "c.go", StartLine: 9}, Distance: 2, ViaKind: codebase.EdgeCall},
+				},
+			},
+			{
+				From:      codebase.CodeSymbol{Name: "C", FilePath: "c.go", StartLine: 9},
+				To:        codebase.CodeSymbol{Name: "Z", FilePath: "z.go", StartLine: 3},
+				Connected: false,
+			},
+		},
+	}
+	out := ExploreBagResponse(res)
+	if !strings.Contains(out, "A → C") || !strings.Contains(out, "**B**") {
+		t.Errorf("connected leg should render the path A→...→C:\n%s", out)
+	}
+	if !strings.Contains(out, "C ⇸ Z") || !strings.Contains(out, "no static path") {
+		t.Errorf("disconnected leg must say no static path, not bridge it:\n%s", out)
+	}
+	if !strings.Contains(out, "Huh") {
+		t.Errorf("unresolved seed must be surfaced:\n%s", out)
+	}
+}

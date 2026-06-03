@@ -17,20 +17,27 @@ func ExploreResponse(res codeintel.ExploreResult, seedName, lang string) string 
 	var b strings.Builder
 
 	if len(res.Ambiguous) > 0 {
-		fmt.Fprintf(&b, "## Explore — `%s` is ambiguous\n\n", seedName)
-		fmt.Fprintf(&b, "%d symbols share this name. Re-query with `file` (and `line`):\n\n", len(res.Ambiguous))
+		if res.Fuzzy {
+			fmt.Fprintf(&b, "## Explore — no exact match for `%s`; did you mean:\n\n", seedName)
+		} else {
+			fmt.Fprintf(&b, "## Explore — `%s` is ambiguous\n\n", seedName)
+			fmt.Fprintf(&b, "%d symbols share this name. Re-query with `file` (and `line`):\n\n", len(res.Ambiguous))
+		}
 		for _, c := range res.Ambiguous {
-			fmt.Fprintf(&b, "- `%s:%d`%s\n", c.FilePath, c.StartLine, receiverSuffix(c))
+			fmt.Fprintf(&b, "- `%s` `%s:%d`%s\n", c.Name, c.FilePath, c.StartLine, receiverSuffix(c))
 		}
 		return b.String()
 	}
 	if !res.SeedFound {
 		fmt.Fprintf(&b, "## Explore — `%s` not found\n\n", seedName)
-		b.WriteString("No symbol with that name is in the code index. Check spelling, or pass `file` to scope it.\n")
+		b.WriteString("No symbol whose name matches that is in the code index (exact or substring). Check spelling, or pass `file` to scope it.\n")
 		return b.String()
 	}
 
 	fmt.Fprintf(&b, "## Explore `%s` — %s:%d\n\n", res.Seed.Name, res.Seed.FilePath, res.Seed.StartLine)
+	if res.Fuzzy {
+		fmt.Fprintf(&b, "_(no exact match for `%s` — using the single fuzzy match `%s`)_\n\n", seedName, res.Seed.Name)
+	}
 
 	renderChain(&b, res)
 	renderBlastRadius(&b, res.BlastRadius)
@@ -156,4 +163,61 @@ func renderSeedSource(b *strings.Builder, res codeintel.ExploreResult, lang stri
 		return
 	}
 	fmt.Fprintf(b, "```%s\n%s\n```\n\n", lang, res.SeedBody)
+}
+
+// ExploreBagResponse renders a multi-seed explore: how a bag of named symbols
+// connects. Each adjacent pair is a leg — the fused path between them, or an
+// honest "no static path". Seeds that did not resolve to one symbol are listed
+// for the caller to disambiguate.
+func ExploreBagResponse(res codeintel.ExploreBagResult) string {
+	var b strings.Builder
+	b.WriteString("## Explore — connecting flow among seeds\n\n")
+
+	if len(res.Unresolved) > 0 {
+		fmt.Fprintf(&b, "Could not place these seeds (not found, or ambiguous — re-query each precisely): %s\n\n", strings.Join(res.Unresolved, ", "))
+	}
+	if len(res.Seeds) < 2 {
+		b.WriteString("Need at least 2 resolvable seeds to connect a flow.\n")
+		return b.String()
+	}
+
+	for _, leg := range res.Legs {
+		if !leg.Connected {
+			fmt.Fprintf(&b, "### %s ⇸ %s — no static path\nNo call/dispatch path connects these in the graph (a dynamic/runtime hop, or genuinely unrelated). Not bridged with a guess.\n\n", leg.From.Name, leg.To.Name)
+			continue
+		}
+		heading := fmt.Sprintf("%s → %s", leg.From.Name, leg.To.Name)
+		if leg.Reversed {
+			heading = fmt.Sprintf("%s → %s (the call path runs this direction)", leg.To.Name, leg.From.Name)
+		}
+		fmt.Fprintf(&b, "### %s — %d hop(s)\n", heading, maxInt(len(leg.Steps)-1, 0))
+		for _, step := range leg.Steps {
+			recv := ""
+			if step.Symbol.Receiver != "" {
+				recv = fmt.Sprintf("(%s).", step.Symbol.Receiver)
+			}
+			via := ""
+			if step.Distance > 0 {
+				via = fmt.Sprintf(" _(%s", step.ViaKind)
+				if step.Bridge() {
+					via += " ⚠ heuristic"
+				}
+				via += ")_"
+			}
+			fmt.Fprintf(&b, "- **%s%s** `%s:%d`%s\n", recv, step.Symbol.Name, step.Symbol.FilePath, step.Symbol.StartLine, via)
+			renderChainGovernance(&b, step.Context)
+		}
+		b.WriteString("\n")
+	}
+	if res.ColdBuilt {
+		b.WriteString("_(code index built on first query; subsequent queries are warm.)_\n")
+	}
+	return b.String()
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

@@ -38,6 +38,7 @@ type FlowResult struct {
 	Seed      codebase.CodeSymbol
 	SeedFound bool
 	Ambiguous []codebase.CodeSymbol
+	Fuzzy     bool // seed/candidates came from the fuzzy fallback (no exact-name match)
 	Direction Direction
 	Depth     int
 	Hops      []FusedHop
@@ -142,13 +143,13 @@ func (s *Service) Flow(ctx context.Context, projectRoot, name, file string, line
 	if err != nil {
 		return FlowResult{}, err
 	}
-	seed, ambiguous, err := s.resolveSeed(ctx, name, file, line)
+	seed, candidates, fuzzy, err := s.resolveSeed(ctx, name, file, line)
 	if err != nil {
 		return FlowResult{}, err
 	}
-	res := FlowResult{Direction: dir, Depth: depth, ColdBuilt: cold}
-	if len(ambiguous) > 0 {
-		res.Ambiguous = ambiguous
+	res := FlowResult{Direction: dir, Depth: depth, ColdBuilt: cold, Fuzzy: fuzzy}
+	if len(candidates) > 0 {
+		res.Ambiguous = candidates
 		return res, nil
 	}
 	if seed.ID == "" {
@@ -202,31 +203,48 @@ func (s *Service) fuse(ctx context.Context, h Hop) (FusedHop, bool, error) {
 
 // resolveSeed maps a (name, file, line) request to a single seed symbol, or to
 // a candidate list when the name is ambiguous and nothing disambiguates it.
-func (s *Service) resolveSeed(ctx context.Context, name, file string, line int) (codebase.CodeSymbol, []codebase.CodeSymbol, error) {
+func (s *Service) resolveSeed(ctx context.Context, name, file string, line int) (seed codebase.CodeSymbol, candidates []codebase.CodeSymbol, fuzzy bool, err error) {
 	// Most precise: a file + line covers exactly one symbol body.
 	if file != "" && line > 0 {
 		syms, err := s.symbols.GetByFile(ctx, file)
 		if err != nil {
-			return codebase.CodeSymbol{}, nil, err
+			return codebase.CodeSymbol{}, nil, false, err
 		}
 		if sym, ok := symbolCoveringLine(syms, line); ok {
-			return sym, nil, nil
+			return sym, nil, false, nil
 		}
 	}
-	candidates, err := s.symbols.GetByName(ctx, name)
+	// Exact name first (existing behavior): one → seed, many → overload candidates.
+	exact, err := s.symbols.GetByName(ctx, name)
 	if err != nil {
-		return codebase.CodeSymbol{}, nil, err
+		return codebase.CodeSymbol{}, nil, false, err
 	}
 	if file != "" {
-		candidates = filterByFile(candidates, file)
+		exact = filterByFile(exact, file)
 	}
-	switch len(candidates) {
+	if len(exact) == 1 {
+		return exact[0], nil, false, nil
+	}
+	if len(exact) > 1 {
+		return codebase.CodeSymbol{}, exact, false, nil
+	}
+	// No exact match → fuzzy substring fallback. Exactly one fuzzy match is used
+	// (labeled fuzzy so the caller can say so); more than one is returned as
+	// candidates — NEVER silently pick among ambiguous fuzzy matches.
+	fuzzyHits, err := s.symbols.SearchSymbols(ctx, name, 12)
+	if err != nil {
+		return codebase.CodeSymbol{}, nil, false, err
+	}
+	if file != "" {
+		fuzzyHits = filterByFile(fuzzyHits, file)
+	}
+	switch len(fuzzyHits) {
 	case 0:
-		return codebase.CodeSymbol{}, nil, nil
+		return codebase.CodeSymbol{}, nil, false, nil // genuinely not found
 	case 1:
-		return candidates[0], nil, nil
+		return fuzzyHits[0], nil, true, nil
 	default:
-		return codebase.CodeSymbol{}, candidates, nil
+		return codebase.CodeSymbol{}, fuzzyHits, true, nil
 	}
 }
 

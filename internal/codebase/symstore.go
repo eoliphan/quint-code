@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
 // CodeSymbol is a persisted symbol node. Identity is (FilePath, Name, StartLine)
@@ -183,6 +185,67 @@ func (s *SymbolStore) GetByName(ctx context.Context, name string) ([]CodeSymbol,
 	}
 	defer rows.Close()
 	return scanCodeSymbols(rows)
+}
+
+// SearchSymbols returns symbols whose name CONTAINS q (case-insensitive),
+// deterministically ranked — exact name, then prefix, then shorter names — and
+// capped. The fuzzy fallback for seed resolution when the exact name is not
+// known. Deterministic (LIKE + a fixed Go sort); no embeddings, no second
+// runtime. An empty/whitespace query matches nothing (never "everything").
+func (s *SymbolStore) SearchSymbols(ctx context.Context, q string, limit int) ([]CodeSymbol, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 25
+	}
+	rows, err := s.db.QueryContext(ctx,
+		codeSymbolSelect+` WHERE instr(lower(name), lower(?)) > 0 ORDER BY name, file_path, start_line LIMIT ?`,
+		q, limit*4) // over-fetch, then rank + trim in Go
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	all, err := scanCodeSymbols(rows)
+	if err != nil {
+		return nil, err
+	}
+	rankSymbolMatches(all, q)
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
+}
+
+// rankSymbolMatches orders matches by closeness to the query: exact name first,
+// then prefix matches, then shorter names, then name/file for stable output.
+func rankSymbolMatches(syms []CodeSymbol, q string) {
+	lq := strings.ToLower(q)
+	rank := func(c CodeSymbol) int {
+		ln := strings.ToLower(c.Name)
+		switch {
+		case ln == lq:
+			return 0
+		case strings.HasPrefix(ln, lq):
+			return 1
+		default:
+			return 2
+		}
+	}
+	sort.SliceStable(syms, func(i, j int) bool {
+		ri, rj := rank(syms[i]), rank(syms[j])
+		if ri != rj {
+			return ri < rj
+		}
+		if len(syms[i].Name) != len(syms[j].Name) {
+			return len(syms[i].Name) < len(syms[j].Name)
+		}
+		if syms[i].Name != syms[j].Name {
+			return syms[i].Name < syms[j].Name
+		}
+		return syms[i].FilePath < syms[j].FilePath
+	})
 }
 
 // GetByID returns the single node with the given surrogate id, if present. The

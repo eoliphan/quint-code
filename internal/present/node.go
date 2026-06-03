@@ -16,9 +16,23 @@ import (
 func NodeResponse(view codeintel.NodeView, lang string) string {
 	var b strings.Builder
 
+	// No exact/single definition, but fuzzy matches exist → list them to pick
+	// from, never auto-expand a dozen bodies.
+	if !view.Found && len(view.Candidates) > 0 {
+		fmt.Fprintf(&b, "## Node — no exact match for `%s`; did you mean:\n\n", view.Name)
+		for _, c := range view.Candidates {
+			recv := ""
+			if c.Receiver != "" {
+				recv = fmt.Sprintf(" (%s)", c.Receiver)
+			}
+			fmt.Fprintf(&b, "- `%s`%s `%s:%d` _(%s)_\n", c.Name, recv, c.FilePath, c.StartLine, c.Kind)
+		}
+		return b.String()
+	}
+
 	if !view.Found {
 		fmt.Fprintf(&b, "## Node — `%s` not found\n\n", view.Name)
-		b.WriteString("No symbol with that name is in the code index. Check spelling, or pass `file` to scope it.\n")
+		b.WriteString("No symbol whose name matches that is in the code index (exact or substring). Check spelling, or pass `file` to scope it.\n")
 		return b.String()
 	}
 
@@ -26,7 +40,11 @@ func NodeResponse(view codeintel.NodeView, lang string) string {
 	if len(view.Overloads) != 1 {
 		plural = "s"
 	}
-	fmt.Fprintf(&b, "## Node `%s` — %d definition%s\n\n", view.Name, len(view.Overloads), plural)
+	title := fmt.Sprintf("## Node `%s` — %d definition%s", view.Name, len(view.Overloads), plural)
+	if view.Fuzzy {
+		title = fmt.Sprintf("## Node — no exact match for `%s`; showing the single fuzzy match `%s`", view.Name, view.Overloads[0].Symbol.Name)
+	}
+	b.WriteString(title + "\n\n")
 
 	for i := range view.Overloads {
 		renderOverload(&b, view.Overloads[i], lang)
