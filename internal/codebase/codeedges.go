@@ -116,17 +116,6 @@ func (e *EdgeStore) InEdges(ctx context.Context, dstID string) ([]CodeEdge, erro
 	return scanEdges(rows)
 }
 
-// HasEdges reports whether the edge layer is populated — the cheap probe the
-// query surface uses to decide whether a one-time cold index build is needed.
-func (e *EdgeStore) HasEdges(ctx context.Context) (bool, error) {
-	var n int
-	err := e.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM code_edges`).Scan(&n)
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
 func scanEdges(rows *sql.Rows) ([]CodeEdge, error) {
 	var out []CodeEdge
 	for rows.Next() {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/m0n0x41d/haft/internal/artifact"
 	"github.com/m0n0x41d/haft/internal/codebase"
@@ -66,31 +67,71 @@ func NewService(store *artifact.Store) *Service {
 	}
 }
 
-// EnsureIndex builds the symbol + edge layers once when the edge layer is empty
-// (the cold path). Returns whether a build ran. code_edges persists, so after
-// the first query traversal is fast. (P5 makes the rebuild incremental; here it
-// is build-once — keeps the latency win after warm-up.)
+// buildMu serializes index builds across the process. Service is created per
+// request (and one runs at server startup), so the lock cannot live on the
+// struct — it must be package-scoped. With double-checked staleness inside the
+// lock, a query arriving during the startup rebuild waits, then sees a fresh
+// index instead of triggering a second build.
+var buildMu sync.Mutex
+
+// EnsureIndex (re)builds the symbol + edge layers when the index is empty OR the
+// source tree has changed since the last build (fingerprint mismatch). Returns
+// whether a build ran. The staleness check is a stat-only fingerprint — cheap on
+// the warm path (no rebuild, just a tree walk) — so the index stays fresh
+// without a manual rebuild after code changes. (A full rebuild on staleness;
+// closure-scoped partial rebuild is a later latency optimization — edges are
+// non-local, so per-file rebuild would be unsound.)
 func (s *Service) EnsureIndex(ctx context.Context, projectRoot string) (bool, error) {
+	buildMu.Lock()
+	defer buildMu.Unlock()
+
 	if err := s.symbols.EnsureSchema(ctx); err != nil {
 		return false, err
 	}
 	if err := s.edges.EnsureSchema(ctx); err != nil {
 		return false, err
 	}
-	has, err := s.edges.HasEdges(ctx)
+	if err := s.scanner.EnsureIndexMetaSchema(ctx); err != nil {
+		return false, err
+	}
+
+	stale, fp, err := s.indexStale(ctx, projectRoot)
 	if err != nil {
 		return false, err
 	}
-	if has {
+	if !stale {
 		return false, nil
 	}
 	if _, err := s.scanner.ScanSymbols(ctx, projectRoot); err != nil {
-		return false, fmt.Errorf("cold index (symbols): %w", err)
+		return false, fmt.Errorf("index (symbols): %w", err)
 	}
 	if _, err := s.scanner.ScanEdges(ctx, projectRoot); err != nil {
-		return false, fmt.Errorf("cold index (edges): %w", err)
+		return false, fmt.Errorf("index (edges): %w", err)
+	}
+	if err := s.scanner.SetFingerprint(ctx, fp); err != nil {
+		return false, fmt.Errorf("record index fingerprint: %w", err)
 	}
 	return true, nil
+}
+
+// indexStale reports whether the index must be rebuilt: never built (no
+// fingerprint recorded — set only after a successful build, so it correctly
+// distinguishes "never built" from "built but zero edges resolved"), or a
+// current source fingerprint that differs from the stored one. Returns the
+// freshly-computed fingerprint so the caller can store it after a rebuild.
+func (s *Service) indexStale(ctx context.Context, projectRoot string) (bool, string, error) {
+	fp, err := s.scanner.SourceFingerprint(projectRoot)
+	if err != nil {
+		return false, "", err
+	}
+	stored, err := s.scanner.StoredFingerprint(ctx)
+	if err != nil {
+		return false, fp, err
+	}
+	if stored == "" {
+		return true, fp, nil // never built
+	}
+	return stored != fp, fp, nil
 }
 
 // Flow runs a callers/callees traversal from the named seed, fusing the

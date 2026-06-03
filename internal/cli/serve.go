@@ -111,6 +111,20 @@ func runServe(cmd *cobra.Command, args []string) error {
 				// Populate context_facts on startup
 				_ = project.PopulateContextFacts(context.Background(), database.GetRawDB(), projCfg.Name)
 
+				// Refresh the code graph in the background if the source tree
+				// changed since the last build — so the first code-graph query
+				// after a code change hits a fresh index without a manual
+				// rebuild. Non-blocking: the server starts immediately; the
+				// build lock serializes this with any query-time EnsureIndex.
+				codeIntelRoot := filepath.Dir(haftDir)
+				go func() {
+					if built, err := codeintel.NewService(artStore).EnsureIndex(context.Background(), codeIntelRoot); err != nil {
+						logger.Warn().Err(err).Msg("code-graph startup refresh failed")
+					} else if built {
+						logger.Info().Msg("code-graph index rebuilt on startup (source changed)")
+					}
+				}()
+
 				server.SetV5Handler(makeV5Handler(artStore, haftDir, projCfg, indexStore))
 			}
 		}
@@ -1634,6 +1648,12 @@ func parseDimensions(raw any) []artifact.ComparisonDimension {
 		}
 		if v, ok := dm["how_to_measure"].(string); ok {
 			dim.HowToMeasure = v
+		}
+		if v, ok := dm["role"].(string); ok {
+			dim.Role = v
+		}
+		if v, ok := dm["valid_until"].(string); ok {
+			dim.ValidUntil = v
 		}
 		if dim.Name != "" {
 			dims = append(dims, dim)
