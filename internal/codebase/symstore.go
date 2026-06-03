@@ -151,6 +151,28 @@ func (s *SymbolStore) GetByFile(ctx context.Context, filePath string) ([]CodeSym
 	return scanCodeSymbols(rows)
 }
 
+// GetByDir returns symbols whose file lives DIRECTLY in dir (a Go package =
+// the files in one directory, not nested). Used to scope impl resolution to a
+// single package so bare receiver names don't collide across packages.
+func (s *SymbolStore) GetByDir(ctx context.Context, dir string) ([]CodeSymbol, error) {
+	rows, err := s.db.QueryContext(ctx, codeSymbolSelect+` WHERE file_path LIKE ? ORDER BY file_path, start_line`, dir+"/%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	all, err := scanCodeSymbols(rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CodeSymbol, 0, len(all))
+	for _, sym := range all {
+		if filepath.Dir(sym.FilePath) == dir {
+			out = append(out, sym)
+		}
+	}
+	return out, nil
+}
+
 // GetByName returns all symbols with the given name across files (overloads incl.).
 func (s *SymbolStore) GetByName(ctx context.Context, name string) ([]CodeSymbol, error) {
 	rows, err := s.db.QueryContext(ctx, codeSymbolSelect+` WHERE name = ? ORDER BY file_path, start_line`, name)
