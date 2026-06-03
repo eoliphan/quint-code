@@ -8,6 +8,7 @@ import (
 	"github.com/m0n0x41d/haft/internal/codebase"
 	"github.com/m0n0x41d/haft/internal/codeintel"
 	"github.com/m0n0x41d/haft/internal/contextgraph"
+	"github.com/m0n0x41d/haft/internal/graph"
 )
 
 func TestExploreResponse_SpineBlastSourceFused(t *testing.T) {
@@ -52,6 +53,31 @@ func TestExploreResponse_SpineBlastSourceFused(t *testing.T) {
 	}
 	if !strings.Contains(out, "func FrameProblem()") {
 		t.Errorf("verbatim seed source must be included (0–1 Read sufficiency):\n%s", out)
+	}
+}
+
+// Module invariants are shared across on-chain symbols; the spine must collect
+// them ONCE in "Invariants in play", not repeat them on every hop (the verbosity
+// defect that buried the signal).
+func TestExploreResponse_InvariantsDedupedNotPerNode(t *testing.T) {
+	inv := []graph.Invariant{{Text: "no second runtime", DecisionTitle: "extend in place"}}
+	res := codeintel.ExploreResult{
+		Seed:       codebase.CodeSymbol{Name: "A", FilePath: "x.go", StartLine: 1},
+		SeedFound:  true,
+		SeedBody:   "func A() {}",
+		SeedBodyOK: true,
+		Chain: []codeintel.ChainStep{
+			{Symbol: codebase.CodeSymbol{Name: "A", FilePath: "x.go", StartLine: 1}, Distance: 0, Context: contextgraph.CodeContext{Invariants: inv}},
+			{Symbol: codebase.CodeSymbol{Name: "B", FilePath: "x.go", StartLine: 9}, Distance: 1, ViaKind: codebase.EdgeCall, Context: contextgraph.CodeContext{Invariants: inv}},
+			{Symbol: codebase.CodeSymbol{Name: "C", FilePath: "x.go", StartLine: 20}, Distance: 2, ViaKind: codebase.EdgeCall, Context: contextgraph.CodeContext{Invariants: inv}},
+		},
+	}
+	out := ExploreResponse(res, "A", "go")
+	if n := strings.Count(out, "no second runtime"); n != 1 {
+		t.Errorf("shared invariant must appear exactly once (was the per-node verbosity bug), appeared %d times:\n%s", n, out)
+	}
+	if !strings.Contains(out, "Invariants in play (1)") {
+		t.Errorf("invariants must be collected in a single section:\n%s", out)
 	}
 }
 

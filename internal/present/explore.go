@@ -73,10 +73,13 @@ func renderChain(b *strings.Builder, res codeintel.ExploreResult) {
 		b.WriteString("⚠ chain ends at an unresolved dispatch boundary — the flow continues through a dynamic call the static graph cannot resolve. Not shown rather than guessed.\n")
 	}
 	b.WriteString("\n")
+	renderInvariantsInPlay(b, res.Chain)
 }
 
 // renderChainGovernance is the per-symbol fusion on the spine — the moat: code
-// flow interleaved with the reasoning governing each step.
+// flow interleaved with the DECISIONS governing each step. Invariants are NOT
+// shown per node — they are module-scoped, so repeating them on every hop buries
+// the signal; they are collected once in renderInvariantsInPlay below.
 func renderChainGovernance(b *strings.Builder, cc contextgraph.CodeContext) {
 	switch {
 	case len(cc.Decisions) > 0:
@@ -88,9 +91,32 @@ func renderChainGovernance(b *strings.Builder, cc contextgraph.CodeContext) {
 	case len(cc.ModuleDecisions) > 0:
 		fmt.Fprintf(b, "    ⮡ module governed by %s\n", moduleDecisionList(cc.ModuleDecisions))
 	}
-	for _, inv := range cc.Invariants {
-		fmt.Fprintf(b, "    ⮡ invariant: %s _(from %s)_\n", inv.Text, inv.DecisionTitle)
+}
+
+// renderInvariantsInPlay lists the UNIQUE invariants across all on-chain symbols
+// once (deduplicated by text), so the constraints the flow must respect are
+// visible without being repeated on every hop. First-seen order is preserved.
+func renderInvariantsInPlay(b *strings.Builder, chain []codeintel.ChainStep) {
+	seen := map[string]bool{}
+	type inv struct{ text, from string }
+	var uniq []inv
+	for _, step := range chain {
+		for _, iv := range step.Context.Invariants {
+			if seen[iv.Text] {
+				continue
+			}
+			seen[iv.Text] = true
+			uniq = append(uniq, inv{iv.Text, iv.DecisionTitle})
+		}
 	}
+	if len(uniq) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "### Invariants in play (%d)\n", len(uniq))
+	for _, iv := range uniq {
+		fmt.Fprintf(b, "- %s _(from %s)_\n", iv.text, iv.from)
+	}
+	b.WriteString("\n")
 }
 
 func renderBlastRadius(b *strings.Builder, callers []codeintel.FusedHop) {
