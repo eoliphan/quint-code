@@ -115,6 +115,9 @@ func (t *HaftProblemTool) Execute(ctx context.Context, argsJSON string) (agent.T
 			return agent.ToolResult{}, err
 		}
 		display := fmt.Sprintf("Problem framed: %s\nID: %s\nFile: %s", a.Meta.Title, a.Meta.ID, filePath)
+		if warn := artifact.UmbrellaWarning(input.Title, input.Signal, input.Acceptance); warn != "" {
+			display += "\n\n" + warn
+		}
 		return agent.ToolResult{
 			DisplayText: display,
 			Meta: &agent.ArtifactMeta{
@@ -1327,6 +1330,9 @@ func (t *HaftDecisionTool) decide(ctx context.Context, args map[string]any) (age
 	coverageWarnings := formatCoverageWarnings(gaps)
 	if len(coverageWarnings) > 0 {
 		display += "\n\n" + strings.Join(coverageWarnings, "\n")
+	}
+	if warn := artifact.ReputationWarning(input.WhySelected, input.SelectionPolicy, input.CounterArgument, input.WeakestLink); warn != "" {
+		display += "\n" + warn
 	}
 
 	return agent.ToolResult{

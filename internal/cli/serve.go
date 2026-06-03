@@ -460,7 +460,11 @@ func handleQuintProblem(ctx context.Context, store *artifact.Store, haftDir stri
 			return "", err
 		}
 		navStrip := present.NavStrip(artifact.ComputeNavState(ctx, store, contextName))
-		return present.ProblemResponse("frame", a, filePath, navStrip) + present.FPFPhaseHint("frame"), nil
+		resp := present.ProblemResponse("frame", a, filePath, navStrip) + present.FPFPhaseHint("frame")
+		if warn := artifact.UmbrellaWarning(input.Title, input.Signal, input.Acceptance); warn != "" {
+			resp += "\n" + warn
+		}
+		return resp, nil
 
 	case "characterize":
 		input := artifact.CharacterizeInput{}
@@ -768,7 +772,11 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 		}
 
 		navStrip := present.NavStrip(artifact.ComputeNavState(ctx, store, contextName))
-		return present.DecisionResponse("decide", a, filePath, "", navStrip) + baselineNote + present.FPFPhaseHint("decide"), a.Meta.ID, nil
+		resp := present.DecisionResponse("decide", a, filePath, "", navStrip) + baselineNote + present.FPFPhaseHint("decide")
+		if warn := artifact.ReputationWarning(input.WhySelected, input.SelectionPolicy, input.CounterArgument, input.WeakestLink); warn != "" {
+			resp += "\n" + warn
+		}
+		return resp, a.Meta.ID, nil
 
 	case "apply":
 		decisionRef, _ := args["decision_ref"].(string)
