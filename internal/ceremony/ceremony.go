@@ -86,7 +86,12 @@ type Recommendation struct {
 // file content for; a match makes the file high-risk regardless of its path.
 // Exported so the shell and tests share one list (no drift).
 var HighRiskContentTokens = []string{
-	"DROP TABLE", "DROP COLUMN", "DELETE FROM", "TRUNCATE", "ALTER TABLE",
+	// destructive SQL (matched case-insensitively — content is upper-cased)
+	"DROP TABLE", "DROP COLUMN", "DROP DATABASE", "DROP SCHEMA", "DROP INDEX",
+	"DELETE FROM", "TRUNCATE", "ALTER TABLE",
+	// irreversible filesystem destruction (generic Go; ungoverned innocuous-path
+	// deletions were a confirmed under-flag in the recall audit)
+	"OS.REMOVEALL",
 }
 
 // Classify is the deterministic floor. Pure: same Input → same Recommendation.
@@ -125,12 +130,16 @@ func pathSignal(f string) Signal {
 	switch {
 	case ext == ".sql" || strings.Contains(lower, "migration"):
 		return Signal{Source: "path", Detail: f + " (data / schema migration)", Band: RiskHigh}
-	case securityHit(lower):
+	case segHit(lower, securityKeywords):
 		return Signal{Source: "path", Detail: f + " (security / privacy surface)", Band: RiskHigh}
+	case segHit(lower, financialAuthzKeywords):
+		return Signal{Source: "path", Detail: f + " (irreversible financial / authorization surface)", Band: RiskHigh}
 	case ext == ".proto" || strings.Contains(lower, "openapi") || strings.Contains(lower, "swagger"):
 		return Signal{Source: "path", Detail: f + " (public API surface)", Band: RiskHigh}
 	case ext == ".tf" || ext == ".tfvars" || base == "dockerfile" || strings.Contains(lower, "/k8s/") || strings.Contains(lower, "/helm/"):
 		return Signal{Source: "path", Detail: f + " (infrastructure / deploy)", Band: RiskHigh}
+	case segHit(lower, elevatedKeywords):
+		return Signal{Source: "path", Detail: f + " (external effect — notify / publish / release / quota)", Band: RiskElevated}
 	case isRecognizedOrdinary(ext):
 		return Signal{Source: "path", Detail: f + " (ordinary source)", Band: RiskLow}
 	default:
@@ -234,12 +243,29 @@ var securityKeywords = map[string]bool{
 	"permissions": true, "rbac": true, "acl": true, "session": true, "sessions": true,
 }
 
-func securityHit(lowerPath string) bool {
+// financialAuthzKeywords mark irreversible financial / external-money effects
+// and authorization-enforcement surfaces — High. (From the recall audit: these
+// live in ordinary-path .go that the SQL/security detectors miss.)
+var financialAuthzKeywords = map[string]bool{
+	"billing": true, "payment": true, "payments": true, "charge": true, "charges": true,
+	"invoice": true, "invoices": true, "invoicing": true, "payout": true, "payouts": true,
+	"refund": true, "refunds": true, "subscription": true, "subscriptions": true,
+	"scopeauth": true, "authorization": true, "authorize": true,
+}
+
+// elevatedKeywords mark softer external/irreversible effects — at least standard
+// (never tactical), but not deep: notifications, publishes/releases, quotas.
+var elevatedKeywords = map[string]bool{
+	"notify": true, "notification": true, "notifications": true,
+	"publish": true, "release": true, "releases": true, "quota": true, "quotas": true,
+}
+
+// segHit reports whether any whole path SEGMENT (or its extension-stripped form)
+// is in set — exact-segment match, so "author.go" never matches "auth" while a
+// dir named "billing" or a file "charge.go" does.
+func segHit(lowerPath string, set map[string]bool) bool {
 	for _, seg := range strings.Split(lowerPath, "/") {
-		if securityKeywords[seg] {
-			return true
-		}
-		if securityKeywords[strings.TrimSuffix(seg, filepath.Ext(seg))] {
+		if set[seg] || set[strings.TrimSuffix(seg, filepath.Ext(seg))] {
 			return true
 		}
 	}

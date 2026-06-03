@@ -85,3 +85,31 @@ func TestClassify_AggregatePriority(t *testing.T) {
 		t.Errorf("medium-reversibility governance should be Elevated/standard, got band %d mode %q", rec.Band, rec.Mode)
 	}
 }
+
+// Recall-audit hardening (wf_8d6c4057-dd5): the confirmed under-flag classes are
+// now caught — without re-routing ordinary code.
+func TestClassify_HardenedRecall(t *testing.T) {
+	high := []Input{
+		{Files: []string{"internal/billing/charge.go"}},                                  // financial path
+		{Files: []string{"internal/scopeauth/scope_authorization.go"}},                   // authorization path
+		{Files: []string{"internal/x/cleanup.go"}, ContentHighRisk: map[string]string{}}, // (content set below)
+	}
+	high[2].ContentHighRisk["internal/x/cleanup.go"] = "OS.REMOVEALL"
+	for _, in := range high {
+		if rec := Classify(in); rec.Band != RiskHigh || rec.Mode == ModeTactical {
+			t.Errorf("expected High/non-tactical for %v, got band %d mode %q", in.Files, rec.Band, rec.Mode)
+		}
+	}
+	// DROP DATABASE content → High.
+	if rec := Classify(Input{Files: []string{"internal/x/y.go"}, ContentHighRisk: map[string]string{"internal/x/y.go": "DROP DATABASE"}}); rec.Band != RiskHigh {
+		t.Errorf("DROP DATABASE content should be High, got %d", rec.Band)
+	}
+	// Softer external effect → Elevated/standard (never tactical), not deep.
+	if rec := Classify(Input{Files: []string{"internal/notify/email.go"}}); rec.Band != RiskElevated || rec.Mode != ModeStandard {
+		t.Errorf("notify path should be Elevated/standard, got band %d mode %q", rec.Band, rec.Mode)
+	}
+	// No regression: ordinary .go that merely resembles a keyword (author.go) stays Low.
+	if rec := Classify(Input{Files: []string{"internal/blog/author.go"}}); rec.Band != RiskLow || rec.Mode != ModeTactical {
+		t.Errorf("author.go must NOT match 'auth' — should stay Low/tactical, got band %d mode %q", rec.Band, rec.Mode)
+	}
+}
