@@ -106,6 +106,45 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 - **Code drift surfaced in `/h-status` (H1)** — `haft_query(action="status")`
   reports decisions whose affected files changed since baseline, so drift is
   visible without a manual `/h-verify`.
+- **Context graph — code intelligence fused with the reasoning graph**
+  (`dec-20260603-5825abc6`, plan `note-20260603-7d6632f1`). A code-graph
+  (symbols + call/dispatch edges) built on the existing tree-sitter substrate,
+  where every tool interleaves code structure with the decisions, problems,
+  variants, notes, and invariants governing it — the fusion no pure code-graph
+  can do. Functional core / imperative shell throughout; an unresolved
+  call/dispatch is an **absent** edge, never a wrong one ("partial coverage
+  worse than none"). New `haft_query` actions (cross-host over MCP):
+  - **`code_context`** — the full reasoning context for a file or a symbol
+    within it. Line-aware fusion join (`SearchByAffectedSymbolAt` +
+    `Target.Line`) disambiguates overloaded same-name symbols by body line-range,
+    so a decision attaches to the right overload instead of the union of all of
+    them; granularity is reported honestly (`line-precise` vs
+    `file+name (overload not disambiguated)`). A module-governed symbol shows
+    `module governed by dec-Y`, never blank. `internal/contextgraph`.
+  - **`callees` / `callers` / `impact`** — bounded directed traversal over the
+    code-edge layer (depth ≤10, default 2, result ≤20), each reached symbol
+    annotated with BOTH symbol-level (line-aware) and module-level governing
+    decisions; ambiguous seed names list candidates rather than silently
+    picking one. `internal/codeintel` (pure BFS over an `EdgeSource` port).
+  - **`node`** — a symbol's detail page: byte-exact body **re-read + re-hashed**
+    from disk before slicing (never stale source on an actively-edited file),
+    its immediate caller/callee trail, and ALL same-name overloads each with
+    their own per-overload governance + member outline for container types.
+  - **`explore`** (PRIMARY) — the single-call answer: deepest connected call
+    chain (≤7 hops, ≤1 dispatch bridge), each on-chain symbol fused with its
+    governing decisions/invariants, plus blast radius (callers + covering
+    decisions) and verbatim freshness-checked seed source — enough to answer
+    "how does this flow and why is it shaped this way" at 0–1 Read. A chain
+    that hits a dynamic-dispatch boundary it cannot resolve says so rather than
+    implying completeness.
+  - **Language-pluggable seam (not Go-locked)** — `EdgeResolver` / `SymbolView`
+    ports + a per-language adapter registry; Go is the first adapter
+    (`internal/codebase` call-site, cross-file, and interface→impl dispatch
+    resolution). Other languages add an adapter; node extraction already spans
+    7 languages. Interface dispatch resolves through `:=`-inferred receivers,
+    not only declared ones (package-scoped type-fact inference), with
+    conservative drop on any ambiguity so a shadowed or cross-package binding
+    never produces a wrong edge.
 
 ### Changed
 
