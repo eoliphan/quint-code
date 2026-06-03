@@ -39,6 +39,11 @@ type CodeContext struct {
 	Module     string               // module the file belongs to ("" if none)
 	Governed   bool                 // module carries ≥1 decision (vs. blind)
 
+	// ModuleDecisions are the decisions governing the file's MODULE — surfaced
+	// so a symbol with no symbol-level link still shows "module governed by
+	// dec-Y" rather than rendering blank (which would read as "safe to change").
+	ModuleDecisions []graph.Node
+
 	// SymbolGranularity records HOW symbol-scoped artifacts were matched, so the
 	// presentation never overstates precision:
 	//   ""                                  — file-level view (no symbol given)

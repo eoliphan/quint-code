@@ -14,6 +14,7 @@ import (
 	"github.com/m0n0x41d/haft/db"
 	"github.com/m0n0x41d/haft/internal/artifact"
 	"github.com/m0n0x41d/haft/internal/codebase"
+	"github.com/m0n0x41d/haft/internal/codeintel"
 	"github.com/m0n0x41d/haft/internal/contextgraph"
 	"github.com/m0n0x41d/haft/internal/fpf"
 	"github.com/m0n0x41d/haft/internal/graph"
@@ -1182,6 +1183,31 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		}
 		return present.CodeContextResponse(cc) + navStrip, nil
 
+	case "callees", "callers", "impact":
+		name := firstNonEmptyQueryArg(args, "symbol", "name")
+		if name == "" {
+			return "", fmt.Errorf("symbol is required for %s action", action)
+		}
+		file, _ := args["file"].(string)
+		line := 0
+		if l, ok := args["line"].(float64); ok {
+			line = int(l)
+		}
+		depth := 0
+		if d, ok := args["depth"].(float64); ok {
+			depth = int(d)
+		}
+		dir := codeintel.Callees
+		if action != "callees" {
+			dir = codeintel.Callers // callers + impact both walk inbound edges
+		}
+		projectRoot := filepath.Dir(haftDir)
+		res, err := codeintel.NewService(store).Flow(ctx, projectRoot, name, file, line, depth, dir)
+		if err != nil {
+			return "", err
+		}
+		return present.FlowResponse(res, action, name) + navStrip, nil
+
 	case "projection":
 		viewName, _ := args["view"].(string)
 		view, err := artifact.ParseProjectionView(viewName)
@@ -1268,7 +1294,7 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		return handleQuintQueryResolveTerm(ctx, store, haftDir, args)
 
 	default:
-		return "", fmt.Errorf("unknown action %q — use 'search', 'status', 'related', 'code_context', 'projection', 'list', 'coverage', 'fpf', 'check', or 'resolve_term'", action)
+		return "", fmt.Errorf("unknown action %q — use 'search', 'status', 'related', 'code_context', 'callees', 'callers', 'impact', 'projection', 'list', 'coverage', 'fpf', 'check', or 'resolve_term'", action)
 	}
 }
 

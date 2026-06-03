@@ -225,6 +225,59 @@ func (s *Scanner) ScanSymbols(ctx context.Context, projectRoot string) (int, err
 	return indexed, nil
 }
 
+// ScanEdges builds the code_edges layer for every file with a registered
+// EdgeResolver, via the language-agnostic port (Go today; other languages add
+// an adapter). Must run AFTER ScanSymbols — cross-file/dispatch resolution
+// reads the full node store. Idempotent per file; per-file failures skipped.
+func (s *Scanner) ScanEdges(ctx context.Context, projectRoot string) (int, error) {
+	scanStart := time.Now()
+	edgeStore := NewEdgeStore(s.db)
+	if err := edgeStore.EnsureSchema(ctx); err != nil {
+		return 0, err
+	}
+	symbols := NewSymbolStore(s.db)
+	ignoreChecker := NewIgnoreChecker(projectRoot)
+	total := 0
+
+	err := filepath.WalkDir(projectRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if IsExcludedDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			if relDir, err := filepath.Rel(projectRoot, path); err == nil && ignoreChecker.IsIgnored(relDir) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		resolver := s.registry.ResolverForFile(path)
+		if resolver == nil {
+			return nil // no edge resolver for this language yet
+		}
+		relPath, err := filepath.Rel(projectRoot, path)
+		if err != nil || ignoreChecker.IsIgnored(relPath) {
+			return nil
+		}
+		edges, err := resolver.ResolveFileEdges(ctx, projectRoot, relPath, symbols)
+		if err != nil {
+			return nil
+		}
+		if err := edgeStore.ReplaceFileEdges(ctx, relPath, edges); err != nil {
+			return nil
+		}
+		total += len(edges)
+		return nil
+	})
+	if err != nil {
+		return total, fmt.Errorf("walk for edges: %w", err)
+	}
+
+	logger.CodebaseOp("scan_edges", total, time.Since(scanStart).Milliseconds())
+	return total, nil
+}
+
 // GetModules returns all stored modules.
 func (s *Scanner) GetModules(ctx context.Context) ([]Module, error) {
 	rows, err := s.db.QueryContext(ctx,

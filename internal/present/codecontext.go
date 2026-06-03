@@ -6,6 +6,7 @@ import (
 
 	"github.com/m0n0x41d/haft/internal/artifact"
 	"github.com/m0n0x41d/haft/internal/contextgraph"
+	"github.com/m0n0x41d/haft/internal/graph"
 )
 
 // CodeContextResponse renders the fused "what haft knows about this code" view
@@ -22,11 +23,11 @@ func CodeContextResponse(cc contextgraph.CodeContext) string {
 	fmt.Fprintf(&b, "## Code context — %s\n\n", target)
 
 	if cc.Module != "" {
-		status := "blind — no decisions govern this module"
-		if cc.Governed {
-			status = "governed"
+		if len(cc.ModuleDecisions) > 0 {
+			fmt.Fprintf(&b, "Module `%s`: governed by %s\n\n", cc.Module, moduleDecisionList(cc.ModuleDecisions))
+		} else {
+			fmt.Fprintf(&b, "Module `%s`: blind — no decisions govern this module\n\n", cc.Module)
 		}
-		fmt.Fprintf(&b, "Module `%s`: %s\n\n", cc.Module, status)
 	}
 
 	if cc.Target.Symbol != "" && cc.SymbolGranularity != "" {
@@ -53,6 +54,17 @@ func CodeContextResponse(cc contextgraph.CodeContext) string {
 	}
 
 	return b.String()
+}
+
+// moduleDecisionList renders the module's governing decisions inline, each ID
+// paired with its title (FPF A.7 re-grounding) — so a governed module is never
+// a bare "governed" with no handle to the why.
+func moduleDecisionList(decisions []graph.Node) string {
+	parts := make([]string, 0, len(decisions))
+	for _, d := range decisions {
+		parts = append(parts, fmt.Sprintf("`%s` (%s)", d.ID, d.Name))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // renderContextArtifacts lists a kind-group, pairing every artifact ID with

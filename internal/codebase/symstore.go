@@ -183,6 +183,21 @@ func (s *SymbolStore) GetByName(ctx context.Context, name string) ([]CodeSymbol,
 	return scanCodeSymbols(rows)
 }
 
+// GetByID returns the single node with the given surrogate id, if present. The
+// inverse of NodeID — resolves a traversal hop back to its symbol for display.
+func (s *SymbolStore) GetByID(ctx context.Context, id string) (CodeSymbol, bool, error) {
+	rows, err := s.db.QueryContext(ctx, codeSymbolSelect+` WHERE id = ?`, id)
+	if err != nil {
+		return CodeSymbol{}, false, err
+	}
+	defer rows.Close()
+	syms, err := scanCodeSymbols(rows)
+	if err != nil || len(syms) == 0 {
+		return CodeSymbol{}, false, err
+	}
+	return syms[0], true, nil
+}
+
 // GetByIdentity returns the single node at (file, name, start_line), if present.
 func (s *SymbolStore) GetByIdentity(ctx context.Context, file, name string, startLine int) (CodeSymbol, bool, error) {
 	rows, err := s.db.QueryContext(ctx, codeSymbolSelect+` WHERE file_path = ? AND name = ? AND start_line = ?`, file, name, startLine)

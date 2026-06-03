@@ -42,10 +42,11 @@ func FetchCodeContext(ctx context.Context, store *artifact.Store, g *graph.Store
 		return CodeContext{}, fmt.Errorf("fetch invariants: %w", err)
 	}
 
-	module, governed := moduleStatus(ctx, g, target.File)
+	module, moduleDecisions := moduleStatus(ctx, g, target.File)
 
-	cc := BuildCodeContext(target, linked, invariants, module, governed)
+	cc := BuildCodeContext(target, linked, invariants, module, len(moduleDecisions) > 0)
 	cc.SymbolGranularity = granularity
+	cc.ModuleDecisions = moduleDecisions
 	return cc, nil
 }
 
@@ -73,19 +74,20 @@ func fetchSymbolLinked(ctx context.Context, store *artifact.Store, target Target
 	return blind, "file+name (overload not disambiguated)", nil
 }
 
-// moduleStatus resolves the file's module and whether it is governed (carries
-// at least one decision). Best-effort: a missing module is not an error — the
-// file simply has no module-level coverage.
-func moduleStatus(ctx context.Context, g *graph.Store, file string) (module string, governed bool) {
+// moduleStatus resolves the file's module and the decisions governing it.
+// Best-effort: a missing module is not an error — the file simply has no
+// module-level coverage. Returns the decisions (not just a bool) so the
+// presentation can name them instead of rendering a governed module blank.
+func moduleStatus(ctx context.Context, g *graph.Store, file string) (module string, moduleDecisions []graph.Node) {
 	node, err := g.FindModuleForFile(ctx, file)
 	if err != nil || node == nil {
-		return "", false
+		return "", nil
 	}
 	decisions, err := g.FindDecisionsForModule(ctx, node.ID)
 	if err != nil {
-		return node.Name, false
+		return node.Name, nil
 	}
-	return node.Name, len(decisions) > 0
+	return node.Name, decisions
 }
 
 // dedupeArtifacts removes duplicate artifacts by ID, preserving first-seen
