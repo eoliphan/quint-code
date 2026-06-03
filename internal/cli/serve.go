@@ -13,6 +13,7 @@ import (
 
 	"github.com/m0n0x41d/haft/db"
 	"github.com/m0n0x41d/haft/internal/artifact"
+	"github.com/m0n0x41d/haft/internal/ceremony"
 	"github.com/m0n0x41d/haft/internal/codebase"
 	"github.com/m0n0x41d/haft/internal/codeintel"
 	"github.com/m0n0x41d/haft/internal/contextgraph"
@@ -1268,6 +1269,32 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		}
 		return present.ExploreResponse(res, name, exploreLang(file, res)) + navStrip, nil
 
+	case "ceremony":
+		files := ceremonyFiles(args)
+		if len(files) == 0 {
+			return "", fmt.Errorf("files (array) or a space/comma-separated file is required for ceremony action")
+		}
+		projectRoot := filepath.Dir(haftDir)
+		gov := func(f string) ceremony.GovFacts {
+			arts, err := store.SearchByAffectedFile(ctx, f)
+			if err != nil {
+				return ceremony.GovFacts{}
+			}
+			for _, a := range arts {
+				// A file governed by an active decision is higher-stakes → at
+				// least standard. (Conservative + precise: governed-presence
+				// only; recorded low-reversibility → High is a follow-up that
+				// needs the decision→problem body parse, deferred to avoid a
+				// coarse body-scan false-High.)
+				if a.Meta.Kind == artifact.KindDecisionRecord && a.Meta.Status == artifact.StatusActive {
+					return ceremony.GovFacts{Reversibility: "medium"}
+				}
+			}
+			return ceremony.GovFacts{}
+		}
+		rec := ceremony.Recommend(projectRoot, files, gov)
+		return present.CeremonyResponse(rec, files) + navStrip, nil
+
 	case "projection":
 		viewName, _ := args["view"].(string)
 		view, err := artifact.ParseProjectionView(viewName)
@@ -1354,7 +1381,7 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		return handleQuintQueryResolveTerm(ctx, store, haftDir, args)
 
 	default:
-		return "", fmt.Errorf("unknown action %q — use 'search', 'status', 'related', 'code_context', 'callees', 'callers', 'impact', 'node', 'explore', 'projection', 'list', 'coverage', 'fpf', 'check', or 'resolve_term'", action)
+		return "", fmt.Errorf("unknown action %q — use 'search', 'status', 'related', 'code_context', 'callees', 'callers', 'impact', 'node', 'explore', 'ceremony', 'projection', 'list', 'coverage', 'fpf', 'check', or 'resolve_term'", action)
 	}
 }
 
@@ -1366,6 +1393,26 @@ func nodeLang(file string, view codeintel.NodeView) string {
 		ext = filepath.Ext(view.Overloads[0].Symbol.FilePath)
 	}
 	return strings.TrimPrefix(ext, ".")
+}
+
+// ceremonyFiles extracts the touched-file set for the ceremony action: a
+// `files` array if given, else a space/comma-separated `file` string.
+func ceremonyFiles(args map[string]any) []string {
+	if raw, ok := args["files"].([]any); ok {
+		out := make([]string, 0, len(raw))
+		for _, v := range raw {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	if f, _ := args["file"].(string); strings.TrimSpace(f) != "" {
+		return splitSeedBag(f)
+	}
+	return nil
 }
 
 // splitSeedBag splits an explore symbol argument into a bag of seed names on

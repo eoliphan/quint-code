@@ -175,6 +175,13 @@ Hard rules for this section:
 - ZERO undefined FPF jargon. Do not write "Pareto front", "dominated", "constraint-eliminated", "Anti-Goodhart", "weakest-link", or "parity" here — say it plainly ("the options not worth it because…", "the thing we watch but don't chase").
 - Short. If the operator cannot understand and decide from THIS section alone, it failed — a comparison the operator can't read is wishlist, not work.
 
+## Ceremony
+
+This workflow inherits its mode from the framed problem. If comparing without a
+frame and a build will follow, right-size the effort first:
+`mcp__haft__haft_query(action="ceremony", files=[...])` — the floor recommends a
+mode and never lets a high-risk change run tactical.
+
 ## What NOT to do
 
 - Do not pre-collapse to a scalar winner. The Pareto front IS the result. The decide step picks from it.

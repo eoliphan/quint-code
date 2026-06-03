@@ -77,7 +77,21 @@ What no candidate variant may violate. Constraint role per FPF CHR-01.
 - `optimization_targets` (1-3 max) — what to optimize
 - `observation_indicators` — watch but do NOT optimize (Anti-Goodhart per FPF CHR-01)
 
-### Step 8 — Set mode based on blast radius
+### Step 8 — Set mode based on blast radius (let the floor recommend it)
+
+Don't default to `standard` by reflex. When you know the files the change will
+touch, get a risk-proportioned recommendation first:
+
+```
+mcp__haft__haft_query(action="ceremony", files=["path/a.go", "db/0007.sql", ...])
+```
+
+It returns a recommended mode from path/content + governance signals, with a
+deterministic safety floor: a HIGH-risk change (migration/sql, auth/secrets,
+public-API, infra, destructive content, low-reversibility governance) is NEVER
+recommended tactical, and when it can't tell it asks ONE question instead of
+defaulting low. Use the recommendation — you can override it in one step. The
+modes:
 
 - `tactical` — reversible <2-week blast radius; minimum ceremony
 - `standard` (default) — most architectural decisions

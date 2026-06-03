@@ -142,6 +142,13 @@ Hard rules for this section:
 - ZERO undefined FPF jargon (NQD, stepping-stone, weakest-link, Pareto) — replace with plain words.
 - Short. If the operator cannot choose from THIS section alone, it failed.
 
+## Ceremony
+
+This workflow inherits its mode from the framed problem. If you are exploring
+without a frame and a build will follow, right-size the effort first:
+`mcp__haft__haft_query(action="ceremony", files=[...])` — the floor recommends a
+mode and never lets a high-risk change run tactical.
+
 ## What NOT to do
 
 - Do not produce 2-3 variants of the same approach (cache LRU vs cache LFU vs cache TTL — all caching). Force at least one out-of-kind alternative.
