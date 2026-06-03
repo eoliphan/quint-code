@@ -2,7 +2,9 @@ package codebase
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 )
@@ -248,6 +250,24 @@ func SliceBody(content []byte, sym CodeSymbol) ([]byte, bool) {
 		return nil, false
 	}
 	return content[sym.StartByte:sym.EndByte], true
+}
+
+// VerifyBody slices the symbol's body from freshly-read content AND re-hashes
+// it against the stored hash — the freshness guarantee for P3. fresh=true means
+// the stored byte range still points at the exact same source on disk; false
+// means the file was edited (offsets stale or content changed) and the caller
+// must re-index before trusting the slice. Pure: the hash comparison, not a
+// stored-hash-vs-stored-hash check, is what catches an actively-edited file.
+func VerifyBody(content []byte, sym CodeSymbol) (body []byte, fresh bool) {
+	slice, ok := SliceBody(content, sym)
+	if !ok {
+		return nil, false
+	}
+	if sym.Hash == "" {
+		return slice, false // no baseline hash to verify against — treat as unverified
+	}
+	sum := sha256.Sum256(slice)
+	return slice, hex.EncodeToString(sum[:]) == sym.Hash
 }
 
 const codeSymbolSelect = `SELECT id, file_path, name, kind, receiver, start_line, end_line, start_byte, end_byte, hash, exported, lang FROM code_symbols`

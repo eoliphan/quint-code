@@ -678,8 +678,8 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"enum":        []interface{}{"search", "status", "board", "related", "code_context", "callees", "callers", "impact", "projection", "list", "coverage", "fpf", "check", "resolve_term"},
-						"description": "search=FTS5 keyword search, status=compact dashboard (at-a-glance overview), board=rich health dashboard, related=decisions affecting a file, code_context=the FULL reasoning context for a file (or a symbol within it): decisions governing it, problems framed around it, solution variants explored, notes, invariants that must hold, and module coverage — call this BEFORE changing unfamiliar code to see what was already decided and why, callees=what a symbol calls (forward dependency set), callers=what calls a symbol, impact=what breaks if you change a symbol (inbound traversal) — callees/callers/impact each fuse the reasoning graph onto every reached symbol: per node you see BOTH the call/dispatch edge AND the decisions governing it (symbol-level, or module-level so a governed node never reads as safe-to-change), projection=audience-specific artifact view, list=all artifacts by kind, coverage=module-level decision coverage, fpf=search FPF methodology spec, check=CI-actionable enforcement findings, resolve_term=ground an umbrella term in this project's bounded context (term-map entries + spec sections referencing it + past artifact mentions) before deciding to ask the operator. Use status for overview; use check when the operator or CI must act on debt; use impact BEFORE editing a symbol to see who depends on it and what was decided; use resolve_term BEFORE asking 'what do you mean?' on a vague signal.",
+						"enum":        []interface{}{"search", "status", "board", "related", "code_context", "callees", "callers", "impact", "node", "projection", "list", "coverage", "fpf", "check", "resolve_term"},
+						"description": "search=FTS5 keyword search, status=compact dashboard (at-a-glance overview), board=rich health dashboard, related=decisions affecting a file, code_context=the FULL reasoning context for a file (or a symbol within it): decisions governing it, problems framed around it, solution variants explored, notes, invariants that must hold, and module coverage — call this BEFORE changing unfamiliar code to see what was already decided and why, callees=what a symbol calls (forward dependency set), callers=what calls a symbol, impact=what breaks if you change a symbol (inbound traversal) — callees/callers/impact each fuse the reasoning graph onto every reached symbol: per node you see BOTH the call/dispatch edge AND the decisions governing it (symbol-level, or module-level so a governed node never reads as safe-to-change), node=the detail page for a symbol: its byte-exact body (re-read + re-hash from disk, never stale), the decisions fused onto exactly it, its immediate caller/callee trail, and ALL same-name overloads each with their own per-overload governance — call this instead of Read when you want one symbol with its reasoning attached, projection=audience-specific artifact view, list=all artifacts by kind, coverage=module-level decision coverage, fpf=search FPF methodology spec, check=CI-actionable enforcement findings, resolve_term=ground an umbrella term in this project's bounded context (term-map entries + spec sections referencing it + past artifact mentions) before deciding to ask the operator. Use status for overview; use check when the operator or CI must act on debt; use impact BEFORE editing a symbol to see who depends on it and what was decided; use node to read a symbol's source WITH its governance; use resolve_term BEFORE asking 'what do you mean?' on a vague signal.",
 					},
 					"query": map[string]string{
 						"type":        "string",
@@ -695,15 +695,15 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 					},
 					"file": map[string]string{
 						"type":        "string",
-						"description": "(related, code_context, callees/callers/impact) File path — for code-graph actions it scopes/disambiguates an overloaded symbol name to one definition",
+						"description": "(related, code_context, callees/callers/impact, node) File path — for code-graph actions it scopes/disambiguates an overloaded symbol name to one definition",
 					},
 					"symbol": map[string]string{
 						"type":        "string",
-						"description": "(code_context) symbol to narrow context to; (callees/callers/impact) REQUIRED — the symbol to traverse from. If the name is ambiguous (overloaded), the tool returns the candidates so you re-query with file (and line)",
+						"description": "(code_context) symbol to narrow context to; (callees/callers/impact) REQUIRED — the symbol to traverse from, returns candidates if ambiguous; (node) REQUIRED — the symbol to show; node shows ALL overloads, so file/line only narrow which definitions appear",
 					},
 					"line": map[string]interface{}{
 						"type":        "integer",
-						"description": "(code_context, callees/callers/impact) Optional 1-based line of the symbol — disambiguates overloaded same-name symbols so the right one is selected",
+						"description": "(code_context, callees/callers/impact, node) Optional 1-based line of the symbol — disambiguates overloaded same-name symbols so the right one is selected",
 					},
 					"depth": map[string]interface{}{
 						"type":        "integer",

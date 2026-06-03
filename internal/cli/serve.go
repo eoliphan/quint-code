@@ -1208,6 +1208,23 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		}
 		return present.FlowResponse(res, action, name) + navStrip, nil
 
+	case "node":
+		name := firstNonEmptyQueryArg(args, "symbol", "name")
+		if name == "" {
+			return "", fmt.Errorf("symbol is required for node action")
+		}
+		file, _ := args["file"].(string)
+		line := 0
+		if l, ok := args["line"].(float64); ok {
+			line = int(l)
+		}
+		projectRoot := filepath.Dir(haftDir)
+		view, err := codeintel.NewService(store).Node(ctx, projectRoot, name, file, line)
+		if err != nil {
+			return "", err
+		}
+		return present.NodeResponse(view, nodeLang(file, view)) + navStrip, nil
+
 	case "projection":
 		viewName, _ := args["view"].(string)
 		view, err := artifact.ParseProjectionView(viewName)
@@ -1294,8 +1311,18 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		return handleQuintQueryResolveTerm(ctx, store, haftDir, args)
 
 	default:
-		return "", fmt.Errorf("unknown action %q — use 'search', 'status', 'related', 'code_context', 'callees', 'callers', 'impact', 'projection', 'list', 'coverage', 'fpf', 'check', or 'resolve_term'", action)
+		return "", fmt.Errorf("unknown action %q — use 'search', 'status', 'related', 'code_context', 'callees', 'callers', 'impact', 'node', 'projection', 'list', 'coverage', 'fpf', 'check', or 'resolve_term'", action)
 	}
+}
+
+// nodeLang derives the markdown code-fence language for a node view from the
+// file argument, falling back to the first overload's file extension.
+func nodeLang(file string, view codeintel.NodeView) string {
+	ext := filepath.Ext(file)
+	if ext == "" && len(view.Overloads) > 0 {
+		ext = filepath.Ext(view.Overloads[0].Symbol.FilePath)
+	}
+	return strings.TrimPrefix(ext, ".")
 }
 
 func firstNonEmptyQueryArg(args map[string]any, keys ...string) string {
