@@ -3,6 +3,7 @@ package codebase
 import (
 	"context"
 	"path/filepath"
+	"strings"
 )
 
 // SymbolView is the read port over the symbol-node store that an EdgeResolver
@@ -62,21 +63,43 @@ func (g *GoLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath stri
 	}
 	edges = append(edges, ResolveCrossFileCallEdges(relPath, fileSyms, sites, imports, lookup)...)
 
-	// 3. interface dispatch (interfaces + impls scoped to the package)
+	// 3. interface dispatch (interfaces, impls, AND type-facts scoped to the
+	// package). Type-facts let dispatch resolve `:=`-inferred receivers (e.g.
+	// `resolver := registry.ResolverForFile(p)` → EdgeResolver), not only
+	// declared ones. Package scope keeps the facts collision-free.
 	interfaces := map[string]InterfaceDef{}
+	facts := NewTypeFacts()
 	for _, pf := range distinctFiles(pkgSyms) {
 		defs, _ := ExtractGoInterfaces(projectRoot, pf)
 		for _, d := range defs {
 			interfaces[d.Name] = d
 		}
+		if ff, err := ExtractGoTypeFacts(projectRoot, pf); err == nil {
+			facts.merge(ff)
+		}
 	}
-	sigs, err := ExtractGoSignatures(projectRoot, relPath)
+	sigs, err := ExtractGoSignaturesWithLocals(projectRoot, relPath, facts)
 	if err != nil {
 		return nil, err
 	}
-	edges = append(edges, ResolveInterfaceDispatchEdges(relPath, fileSyms, sites, sigs, interfaces, pkgSyms)...)
+	edges = append(edges, ResolveInterfaceDispatchEdges(relPath, fileSyms, sites, sigs, interfaces, nonTestSymbols(pkgSyms))...)
 
 	return dedupeEdges(edges), nil
+}
+
+// nonTestSymbols drops _test.go symbols from the dispatch impl-candidate set: a
+// test double is never a production dispatch target (Go test files are not
+// importable), so resolving to one would be a misleading edge — structurally
+// valid but pointing at code that only runs under test.
+func nonTestSymbols(syms []CodeSymbol) []CodeSymbol {
+	out := make([]CodeSymbol, 0, len(syms))
+	for _, s := range syms {
+		if strings.HasSuffix(s.FilePath, "_test.go") {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func distinctFiles(syms []CodeSymbol) []string {

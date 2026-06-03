@@ -121,6 +121,21 @@ func ExtractGoInterfaces(projectRoot, relPath string) ([]InterfaceDef, error) {
 // inference that bounds dispatch precision: a call x.M() links through an
 // interface only when x's DECLARED type is a known interface.
 func ExtractGoSignatures(projectRoot, relPath string) (map[int]map[string]string, error) {
+	return extractGoSignatures(projectRoot, relPath, TypeFacts{}, false)
+}
+
+// ExtractGoSignaturesWithLocals additionally infers the types of LOCAL variables
+// (`resolver := registry.ResolverForFile(path)`) via the package's TypeFacts, so
+// interface dispatch resolves through `:=`-inferred receivers — not only the
+// declared receiver/param ones. Same conservative discipline: an unresolvable
+// local contributes no entry.
+func ExtractGoSignaturesWithLocals(projectRoot, relPath string, facts TypeFacts) (map[int]map[string]string, error) {
+	return extractGoSignatures(projectRoot, relPath, facts, true)
+}
+
+// extractGoSignatures maps each function's start line to its variable→type
+// table (receiver + params, optionally extended with inferred locals).
+func extractGoSignatures(projectRoot, relPath string, facts TypeFacts, withLocals bool) (map[int]map[string]string, error) {
 	absPath := filepath.Join(projectRoot, relPath)
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, absPath, nil, 0)
@@ -152,6 +167,9 @@ func ExtractGoSignatures(projectRoot, relPath string) (map[int]map[string]string
 			for _, field := range fd.Type.Params.List {
 				add(field)
 			}
+		}
+		if withLocals {
+			vars = InferLocalVarTypes(fd, vars, facts)
 		}
 		out[fset.Position(fd.Pos()).Line] = vars
 	}
