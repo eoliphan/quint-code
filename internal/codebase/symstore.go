@@ -1,0 +1,226 @@
+package codebase
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"path/filepath"
+)
+
+// CodeSymbol is a persisted symbol node. Identity is (FilePath, Name, StartLine)
+// — so two same-name methods on different receivers (different start lines) are
+// two distinct nodes, never one. Immutable value; the store is the only shell.
+type CodeSymbol struct {
+	FilePath  string
+	Name      string
+	Kind      string
+	Receiver  string
+	StartLine int
+	EndLine   int
+	StartByte int
+	EndByte   int
+	Hash      string
+	Exported  bool
+	Lang      string
+}
+
+const codeSymbolsSchema = `
+CREATE TABLE IF NOT EXISTS code_symbols (
+  file_path  TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  kind       TEXT,
+  receiver   TEXT,
+  start_line INTEGER NOT NULL,
+  end_line   INTEGER,
+  start_byte INTEGER,
+  end_byte   INTEGER,
+  hash       TEXT,
+  exported   INTEGER DEFAULT 0,
+  lang       TEXT,
+  PRIMARY KEY (file_path, name, start_line)
+);
+CREATE INDEX IF NOT EXISTS idx_code_symbols_name ON code_symbols(name);
+CREATE INDEX IF NOT EXISTS idx_code_symbols_file ON code_symbols(file_path);`
+
+// SymbolStore persists code symbols (the node layer of the code graph). It does
+// not own the DB connection — the caller manages lifecycle.
+type SymbolStore struct {
+	db *sql.DB
+}
+
+// NewSymbolStore creates a symbol store over an existing DB connection.
+func NewSymbolStore(db *sql.DB) *SymbolStore { return &SymbolStore{db: db} }
+
+// EnsureSchema creates the code_symbols table + indexes if absent (idempotent).
+func (s *SymbolStore) EnsureSchema(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, codeSymbolsSchema); err != nil {
+		return fmt.Errorf("ensure code_symbols schema: %w", err)
+	}
+	return nil
+}
+
+// codeSymbolFromSnapshot is the pure mapping extraction snapshot → persisted node.
+func codeSymbolFromSnapshot(snap SymbolSnapshot, lang string) CodeSymbol {
+	return CodeSymbol{
+		FilePath:  snap.FilePath,
+		Name:      snap.SymbolName,
+		Kind:      snap.SymbolKind,
+		Receiver:  snap.Receiver,
+		StartLine: snap.Line,
+		EndLine:   snap.EndLine,
+		StartByte: snap.StartByte,
+		EndByte:   snap.EndByte,
+		Hash:      snap.Hash,
+		Exported:  snap.Exported,
+		Lang:      lang,
+	}
+}
+
+// langNameForExt resolves a file extension to its extractor language name.
+func langNameForExt(ext string) string {
+	if li, ok := languages[ext]; ok {
+		return li.name
+	}
+	return ""
+}
+
+// ReplaceFileSymbols idempotently rebuilds one file's symbol rows in a single
+// transaction (delete-then-insert), so re-indexing a file is exact, not additive.
+func (s *SymbolStore) ReplaceFileSymbols(ctx context.Context, filePath string, syms []CodeSymbol) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM code_symbols WHERE file_path = ?`, filePath); err != nil {
+		return err
+	}
+	for _, sym := range syms {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO code_symbols
+			 (file_path, name, kind, receiver, start_line, end_line, start_byte, end_byte, hash, exported, lang)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			sym.FilePath, sym.Name, sym.Kind, sym.Receiver, sym.StartLine, sym.EndLine,
+			sym.StartByte, sym.EndByte, sym.Hash, boolToInt(sym.Exported), sym.Lang,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// IndexFileSymbols extracts a file and replaces its symbol rows. The rebuild-on-
+// demand half of the freshness primitive — calling it makes the store match disk.
+func (s *SymbolStore) IndexFileSymbols(ctx context.Context, projectRoot, relPath string) error {
+	snaps, err := ExtractSymbolSnapshots(projectRoot, relPath)
+	if err != nil {
+		return err
+	}
+	lang := langNameForExt(filepath.Ext(relPath))
+	syms := make([]CodeSymbol, 0, len(snaps))
+	for _, snap := range snaps {
+		syms = append(syms, codeSymbolFromSnapshot(snap, lang))
+	}
+	return s.ReplaceFileSymbols(ctx, relPath, syms)
+}
+
+// GetByFile returns all symbols stored for a file, ordered by start line.
+func (s *SymbolStore) GetByFile(ctx context.Context, filePath string) ([]CodeSymbol, error) {
+	rows, err := s.db.QueryContext(ctx, codeSymbolSelect+` WHERE file_path = ? ORDER BY start_line`, filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanCodeSymbols(rows)
+}
+
+// GetByName returns all symbols with the given name across files (overloads incl.).
+func (s *SymbolStore) GetByName(ctx context.Context, name string) ([]CodeSymbol, error) {
+	rows, err := s.db.QueryContext(ctx, codeSymbolSelect+` WHERE name = ? ORDER BY file_path, start_line`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanCodeSymbols(rows)
+}
+
+// GetByIdentity returns the single node at (file, name, start_line), if present.
+func (s *SymbolStore) GetByIdentity(ctx context.Context, file, name string, startLine int) (CodeSymbol, bool, error) {
+	rows, err := s.db.QueryContext(ctx, codeSymbolSelect+` WHERE file_path = ? AND name = ? AND start_line = ?`, file, name, startLine)
+	if err != nil {
+		return CodeSymbol{}, false, err
+	}
+	defer rows.Close()
+	syms, err := scanCodeSymbols(rows)
+	if err != nil || len(syms) == 0 {
+		return CodeSymbol{}, false, err
+	}
+	return syms[0], true, nil
+}
+
+// FileSymbolsStale reports whether the file on disk no longer matches the stored
+// symbols — by node identity + body hash. The is-stale half of the freshness
+// primitive; pair with IndexFileSymbols to rebuild on demand before slicing.
+func (s *SymbolStore) FileSymbolsStale(ctx context.Context, projectRoot, relPath string) (bool, error) {
+	current, err := ExtractSymbolSnapshots(projectRoot, relPath)
+	if err != nil {
+		return true, err
+	}
+	stored, err := s.GetByFile(ctx, relPath)
+	if err != nil {
+		return true, err
+	}
+	if len(current) != len(stored) {
+		return true, nil
+	}
+	storedKey := make(map[string]string, len(stored)) // (name|startLine) -> hash
+	for _, sym := range stored {
+		storedKey[fmt.Sprintf("%s|%d", sym.Name, sym.StartLine)] = sym.Hash
+	}
+	for _, snap := range current {
+		h, ok := storedKey[fmt.Sprintf("%s|%d", snap.SymbolName, snap.Line)]
+		if !ok || h != snap.Hash {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// SliceBody returns the byte-exact body of a symbol from file content. Pure;
+// returns ok=false if the offsets don't fit the content (stale — caller must
+// re-index before trusting source).
+func SliceBody(content []byte, sym CodeSymbol) ([]byte, bool) {
+	if sym.StartByte < 0 || sym.EndByte <= sym.StartByte || sym.EndByte > len(content) {
+		return nil, false
+	}
+	return content[sym.StartByte:sym.EndByte], true
+}
+
+const codeSymbolSelect = `SELECT file_path, name, kind, receiver, start_line, end_line, start_byte, end_byte, hash, exported, lang FROM code_symbols`
+
+func scanCodeSymbols(rows *sql.Rows) ([]CodeSymbol, error) {
+	var out []CodeSymbol
+	for rows.Next() {
+		var c CodeSymbol
+		var exported int
+		var receiver, kind, hash, lang sql.NullString
+		if err := rows.Scan(&c.FilePath, &c.Name, &kind, &receiver, &c.StartLine, &c.EndLine, &c.StartByte, &c.EndByte, &hash, &exported, &lang); err != nil {
+			return nil, err
+		}
+		c.Kind = kind.String
+		c.Receiver = receiver.String
+		c.Hash = hash.String
+		c.Lang = lang.String
+		c.Exported = exported != 0
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}

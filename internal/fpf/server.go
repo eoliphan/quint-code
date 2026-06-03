@@ -678,8 +678,8 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"enum":        []interface{}{"search", "status", "board", "related", "projection", "list", "coverage", "fpf", "check", "resolve_term"},
-						"description": "search=FTS5 keyword search, status=compact dashboard (at-a-glance overview), board=rich health dashboard, related=by file path, projection=audience-specific artifact view, list=all artifacts by kind, coverage=module-level decision coverage, fpf=search FPF methodology spec, check=CI-actionable enforcement findings, resolve_term=ground an umbrella term in this project's bounded context (term-map entries + spec sections referencing it + past artifact mentions) before deciding to ask the operator. Use status for overview; use check when the operator or CI must act on debt; use resolve_term BEFORE asking 'what do you mean?' on a vague signal.",
+						"enum":        []interface{}{"search", "status", "board", "related", "code_context", "projection", "list", "coverage", "fpf", "check", "resolve_term"},
+						"description": "search=FTS5 keyword search, status=compact dashboard (at-a-glance overview), board=rich health dashboard, related=decisions affecting a file, code_context=the FULL reasoning context for a file (or a symbol within it): decisions governing it, problems framed around it, solution variants explored, notes, invariants that must hold, and module coverage — call this BEFORE changing unfamiliar code to see what was already decided and why, projection=audience-specific artifact view, list=all artifacts by kind, coverage=module-level decision coverage, fpf=search FPF methodology spec, check=CI-actionable enforcement findings, resolve_term=ground an umbrella term in this project's bounded context (term-map entries + spec sections referencing it + past artifact mentions) before deciding to ask the operator. Use status for overview; use check when the operator or CI must act on debt; use resolve_term BEFORE asking 'what do you mean?' on a vague signal.",
 					},
 					"query": map[string]string{
 						"type":        "string",
@@ -695,7 +695,15 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 					},
 					"file": map[string]string{
 						"type":        "string",
-						"description": "(related) File path to find linked decisions",
+						"description": "(related, code_context) File path to find linked artifacts",
+					},
+					"symbol": map[string]string{
+						"type":        "string",
+						"description": "(code_context) Optional symbol name (function/type/method) to narrow the context to a specific symbol within the file",
+					},
+					"line": map[string]interface{}{
+						"type":        "integer",
+						"description": "(code_context) Optional 1-based line of the symbol — disambiguates overloaded same-name symbols so governance attaches to the right one",
 					},
 					"context": map[string]string{
 						"type":        "string",

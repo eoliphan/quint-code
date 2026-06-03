@@ -338,6 +338,62 @@ func (s *Store) SearchByAffectedFile(ctx context.Context, filePath string) ([]*A
 	return scanArtifacts(rows)
 }
 
+// SearchByAffectedSymbol returns artifacts linked to a specific symbol via
+// affected_symbols — the symbol-granular companion to SearchByAffectedFile.
+// This is the join that lets an agent exploring a symbol see the decisions /
+// problems / variants touching that exact symbol, not just its file. When
+// filePath is non-empty, results are scoped to that file so same-named symbols
+// in different files don't collide.
+func (s *Store) SearchByAffectedSymbol(ctx context.Context, symbolName, filePath string) ([]*Artifact, error) {
+	query := `
+		SELECT DISTINCT a.id, a.kind, a.version, a.status, a.context, a.mode, a.title, a.content, a.valid_until, a.created_at, a.updated_at
+		FROM artifacts a
+		JOIN affected_symbols asym ON a.id = asym.artifact_id
+		WHERE asym.symbol_name = ?`
+	queryArgs := []any{symbolName}
+	if filePath != "" {
+		query += ` AND asym.file_path = ?`
+		queryArgs = append(queryArgs, filePath)
+	}
+	query += ` ORDER BY a.updated_at DESC`
+
+	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArtifacts(rows)
+}
+
+// SearchByAffectedSymbolAt is the LINE-AWARE companion to SearchByAffectedSymbol:
+// it returns only artifacts whose affected_symbols row for this (name, file)
+// COVERS the given 1-based line (line within [symbol_line, symbol_end_line]).
+// This is the keystone of honest fusion — two same-name methods on different
+// receivers occupy disjoint line ranges, so a decision recorded against one
+// overload never bleeds onto the other. Rows with no usable end line (legacy or
+// 0-valued) cannot be range-matched and are intentionally excluded; the caller
+// falls back to the line-blind SearchByAffectedSymbol and LABELS the result as
+// file+name granularity rather than presenting false per-symbol precision.
+func (s *Store) SearchByAffectedSymbolAt(ctx context.Context, symbolName, filePath string, line int) ([]*Artifact, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT a.id, a.kind, a.version, a.status, a.context, a.mode, a.title, a.content, a.valid_until, a.created_at, a.updated_at
+		FROM artifacts a
+		JOIN affected_symbols asym ON a.id = asym.artifact_id
+		WHERE asym.symbol_name = ?
+		  AND asym.file_path = ?
+		  AND asym.symbol_end_line >= asym.symbol_line
+		  AND ? >= asym.symbol_line
+		  AND ? <= asym.symbol_end_line
+		ORDER BY a.updated_at DESC`,
+		symbolName, filePath, line, line,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArtifacts(rows)
+}
+
 // FindStaleDecisions returns decisions past their valid_until or with refresh_due status.
 func (s *Store) FindStaleDecisions(ctx context.Context) ([]*Artifact, error) {
 	rows, err := s.db.QueryContext(ctx, `

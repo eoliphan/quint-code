@@ -14,7 +14,9 @@ import (
 	"github.com/m0n0x41d/haft/db"
 	"github.com/m0n0x41d/haft/internal/artifact"
 	"github.com/m0n0x41d/haft/internal/codebase"
+	"github.com/m0n0x41d/haft/internal/contextgraph"
 	"github.com/m0n0x41d/haft/internal/fpf"
+	"github.com/m0n0x41d/haft/internal/graph"
 	"github.com/m0n0x41d/haft/internal/present"
 	"github.com/m0n0x41d/haft/internal/project"
 	"github.com/m0n0x41d/haft/internal/ui"
@@ -1164,6 +1166,22 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		}
 		return present.RelatedResponse(results, file) + navStrip, nil
 
+	case "code_context":
+		file, _ := args["file"].(string)
+		if file == "" {
+			return "", fmt.Errorf("file is required for code_context action")
+		}
+		symbol, _ := args["symbol"].(string)
+		line := 0
+		if l, ok := args["line"].(float64); ok {
+			line = int(l)
+		}
+		cc, err := contextgraph.FetchCodeContext(ctx, store, graph.NewStore(store.DB()), contextgraph.Target{File: file, Symbol: symbol, Line: line})
+		if err != nil {
+			return "", err
+		}
+		return present.CodeContextResponse(cc) + navStrip, nil
+
 	case "projection":
 		viewName, _ := args["view"].(string)
 		view, err := artifact.ParseProjectionView(viewName)
@@ -1250,7 +1268,7 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		return handleQuintQueryResolveTerm(ctx, store, haftDir, args)
 
 	default:
-		return "", fmt.Errorf("unknown action %q — use 'search', 'status', 'related', 'projection', 'list', 'coverage', 'fpf', 'check', or 'resolve_term'", action)
+		return "", fmt.Errorf("unknown action %q — use 'search', 'status', 'related', 'code_context', 'projection', 'list', 'coverage', 'fpf', 'check', or 'resolve_term'", action)
 	}
 }
 
