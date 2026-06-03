@@ -82,6 +82,30 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 - **`Warnings []string` on `ToolResult`** — Slice B warning detectors
   for h-explore (diversity check), h-compare (parity hints), h-decide
   (DRR completeness hints) preserved from pre-pivot work.
+- **Inline FPF-discipline guards (kernel, advisory — never block)** — three
+  deterministic checks adopted from FPF `16cd313`, surfaced as soft warnings
+  so the agent self-corrects while the human stays final authority
+  (Transformer Mandate):
+  - **Umbrella-word frame guard** (FPF E.10 wording-use precision) —
+    `haft_problem(action="frame")` scans title/signal/acceptance against a
+    curated EN+RU trigger registry (`quality`, `robust`, `scalable`, `clean`,
+    `ready`, `secure`, …) and names, per word, the precise recovery and the
+    overread to block. `internal/artifact/umbrella.go`.
+  - **Content-vs-reputation decide guard** (FPF E.9.DA:4.4b) —
+    `haft_decision(action="decide")` flags rationale leaning on popularity /
+    adoption / "industry standard" / "best practice" and asks for the content
+    reason that makes the option right for *this* problem.
+    `internal/artifact/reputation.go`.
+  - **Non-discriminating dimension warning** (FPF A.19.ECS) — `compare`
+    flags a TARGET dimension on which every variant scores identically (dead
+    weight, or a hidden parity condition mislabeled as a target); role-aware,
+    so constraints (all-pass is correct) and observations are skipped.
+    `internal/artifact/solution.go`.
+- **`/h-spec-cover` impact-ranked coverage (V1)** — uncovered-file output
+  ranks modules by impact instead of a flat list (`dec-20260527-e4b86938`).
+- **Code drift surfaced in `/h-status` (H1)** — `haft_query(action="status")`
+  reports decisions whose affected files changed since baseline, so drift is
+  visible without a manual `/h-verify`.
 
 ### Changed
 
@@ -158,13 +182,36 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
   tasks reachable pending operator decision on full tree removal.
 - `task lint` no longer typechecks the deleted legacy TUI TypeScript;
   runs `go vet` only.
-- FPF spec refreshed to `04dd733 result of semio evidence campaign`
-  (was `7f8a04c`). Picked up upstream: C.29 (mathematical lens
-  adequacy), TGA refresh campaign result (10 patterns), SEMIO-3
-  campaign results, C.22.2 ProblemCard@Context, "first principles
-  in C.29 and pillars", E.10.SEMIO cleanup + corrections, plain-text
-  preservation. Embedded SQLite index (`internal/cli/fpf.db`)
-  rebuilt — 5244 chunks (5178 spec + 66 patterns).
+- **Maintenance forcing function in entry-point skill bodies (V4)** —
+  h-status / h-reason / etc. now act on a surfaced refresh reminder (run
+  `haft_refresh(action="scan")` before answering, re-baseline drift on
+  in-session files) instead of only printing it.
+- **V5 audit — the `description ≠ work` self-check pattern dropped from
+  h-frame, h-compare, h-explore** skill bodies, where it nudged the model to
+  narrate intent instead of acting.
+- **Re-grounding rule added; `h-reason` description trimmed for Codex
+  compatibility** — operator-facing text must pair every artifact ID
+  (`V1`, `dec-…`, `prob-…`) with its human-readable title (FPF A.7 Strict
+  Distinction).
+- FPF spec refreshed to `16cd313 wording-use ontological precision
+  restoration` (was `04dd733`, via `562813f`). Picked up upstream: the
+  quality-improvement campaign (A.19.ECS Evaluation CharacteristicSpace
+  construction, E.8.ECSPF publication form, E.21 pattern-quality, E.9.DA DRR
+  decision-adequacy, E.2.DA pillar-adequacy, E.22 improvement-oriented
+  quality-read framing, E.23 quality-improvement loop) and the wording-use
+  ontological precision restoration (E.10.ARCH architecture, C.16.P, C.16.Q
+  [moved from A.6.Q; `evaluativeAscription` → `qualityTermAscription`],
+  C.30.P). Embedded SQLite index (`internal/cli/fpf.db`) rebuilt — 5607
+  chunks (5541 spec + 66 patterns).
+
+### Fixed
+
+- **`haft_refresh(action="scan")` summary-by-default** — drift output is
+  summarized (counts + top-5 modified paths per decision) instead of dumping
+  full per-file diffs that could exceed the context budget on large repos;
+  `verbose=true` restores the full dump.
+- **Nav-hint feedback loop** — dropped dead `/h-char` and `/h-refresh` nav
+  hints that pointed at removed/renamed commands.
 
 ## [8.0.0] — 2026-05-14
 
