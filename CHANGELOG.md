@@ -144,7 +144,53 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
     7 languages. Interface dispatch resolves through `:=`-inferred receivers,
     not only declared ones (package-scoped type-fact inference), with
     conservative drop on any ambiguity so a shadowed or cross-package binding
-    never produces a wrong edge.
+    never produces a wrong edge. Concrete cross-package method calls resolve to
+    the receiver type's method via package-scoped type facts; a symbol with no
+    recorded callers says so honestly rather than returning a bare empty result.
+- **Context-graph self-refresh (staleness detection + auto-rebuild)** — the code
+  index detects when the source tree changed since its last build (fingerprint
+  compare) and rebuilds automatically: lazily on a `haft_query` that finds the
+  index stale, and on MCP server startup. Traversal / `explore` results are never
+  served from a stale index waiting on a manual rebuild.
+- **MCP server-instructions doctrine + mandatory session-start status** — the
+  MCP `initialize` `instructions` field now always carries, in order, (1) a
+  mandatory first-action rule — run `haft_query(action="status")` at session
+  start, because a governed project's working memory lives in the graph, not
+  only the code — and (2) a consult-before-editing doctrine for the fused code
+  graph (tool-by-intent guidance, honest-coverage markers, anti-patterns).
+  Delivered through the one always-on instruction channel; no CLAUDE.md
+  duplication. `composeServerInstructions` (`internal/cli`), fires
+  unconditionally.
+- **Fuzzy-tolerant seeds + multi-seed `explore` (no new tool, no embeddings)** —
+  folded into the EXISTING `haft_query` actions, determinism preserved. A seed
+  name with no exact match falls back to deterministic substring ranking
+  (exact > prefix > shorter): exactly one fuzzy match is used and **labeled**
+  fuzzy; more than one returns candidates rather than silently picking. `explore`
+  additionally accepts a bag of 2+ names in the same `symbol` argument and finds
+  the connecting static path between adjacent seeds (bounded BFS, both
+  directions); a disconnected pair is reported as "no static path", never
+  bridged. (`SearchSymbols`, `resolveSeed`, `ExploreBag`.)
+- **Curation gate for agent-drafted rationale** (`dec-20260603-732219b6`) —
+  `/h-explore` and `/h-decide` (skill bodies + the `haft_solution` /
+  `haft_decision` tool descriptions) bucket the agent's drafted
+  weakest-links / risks / strengths by the agent's own confidence and surface the
+  **doubtful ones first**, so the operator scrutinizes the load-bearing-but-
+  uncertain arguments instead of rubber-stamping a flat wall. Honesty invariant:
+  a low-confidence point is never down-ranked to look tidy. No kernel/schema
+  change — the gate lives in guidance, not validation.
+- **Ceremony auto-scaler — risk-floor + ask-when-blind**
+  (`dec-20260604-…0a6edafd`). New `haft_query(action="ceremony", files=[…])`: a
+  deterministic floor recommends a ceremony mode (tactical / standard / deep)
+  proportioned to a change's **risk**, detected from path/content patterns +
+  recorded governance facts — **never from call-graph fan-out** (a "leaf" is
+  never assumed safe; a one-line auth change is high-risk). Hard invariant: a
+  detected high-risk change (irreversible / security / privacy / public-API /
+  data / financial-authz / destructive content / low-reversibility governance)
+  is **never** routed tactical; when the floor cannot classify a touched file it
+  escalates and asks rather than defaulting low. Recommendation only — the
+  operator binds the mode (Transformer Mandate). Pure core in `internal/ceremony`
+  (functional core / imperative shell), wired into `/h-frame`, `/h-explore`,
+  `/h-compare`.
 
 ### Changed
 
@@ -232,6 +278,11 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
   compatibility** — operator-facing text must pair every artifact ID
   (`V1`, `dec-…`, `prob-…`) with its human-readable title (FPF A.7 Strict
   Distinction).
+- **Mandatory plain-words final step in `h-explore` / `h-compare`** — both
+  skills now end with a short plain-language section (zero artifact IDs, zero
+  undefined FPF jargon) the operator can act on from that section alone, so a
+  comparison or option set is never delivered as an ID-and-jargon wall the
+  operator cannot read.
 - FPF spec refreshed to `16cd313 wording-use ontological precision
   restoration` (was `04dd733`, via `562813f`). Picked up upstream: the
   quality-improvement campaign (A.19.ECS Evaluation CharacteristicSpace
@@ -245,6 +296,11 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 
 ### Fixed
 
+- **Terminal-status artifacts no longer resurface as expiry debt** — the
+  `haft_refresh` stale-collection path now excludes `deprecated` / `superseded`
+  artifacts, matching the active-decision scan's status filter. An archived-but-
+  expired decision stops showing per-item expiry debt that it no longer counts
+  toward the active budget. (`internal/artifact/refresh.go`.)
 - **`haft_refresh(action="scan")` summary-by-default** — drift output is
   summarized (counts + top-5 modified paths per decision) instead of dumping
   full per-file diffs that could exceed the context budget on large repos;
