@@ -112,6 +112,79 @@ func TestCreateAndGet(t *testing.T) {
 	}
 }
 
+func TestSearchSplitsCompoundQuery(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+
+	// The artifact spells the identifier as separate prose words, not as the
+	// camelCase compound a user might type.
+	a := &Artifact{
+		Meta: Meta{ID: "note-20260604-split", Kind: KindNote, Title: "Helper for the get user name lookup"},
+		Body: "Resolves the user name from the active session.",
+	}
+	if err := store.Create(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+
+	// Phase-1 term prep (dec-20260604-3aaad199): a camelCase query is split into
+	// its parts, so it matches prose that spells the identifier out. The
+	// pre-split behavior indexed "getUserName" as a single token and missed
+	// content written as "get user name".
+	got, err := store.Search(ctx, "getUserName", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("compound query 'getUserName' should match prose 'get user name'")
+	}
+}
+
+func TestSearchKindFilter(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	// Two artifacts share the "caching" content but differ in kind.
+	if err := store.Create(ctx, &Artifact{
+		Meta: Meta{ID: "dec-20260604-kf", Kind: KindDecisionRecord, Title: "caching strategy decision"},
+		Body: "Chose Redis caching for the session store.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(ctx, &Artifact{
+		Meta: Meta{ID: "note-20260604-kf", Kind: KindNote, Title: "caching observation"},
+		Body: "Observed Redis caching behavior under load.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// kind: qualifier narrows the reasoning lane to one kind (dec-20260604-3aaad199).
+	got, err := store.Search(ctx, "kind:DecisionRecord caching", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("kind:DecisionRecord caching should match the decision")
+	}
+	for _, a := range got {
+		if a.Meta.Kind != KindDecisionRecord {
+			t.Errorf("kind filter leaked a %s", a.Meta.Kind)
+		}
+	}
+
+	// A kind-only query (no free text) lists that kind rather than matching nothing.
+	notes, err := store.Search(ctx, "kind:Note", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notes) == 0 {
+		t.Fatal("kind-only query should list notes")
+	}
+	for _, a := range notes {
+		if a.Meta.Kind != KindNote {
+			t.Errorf("kind-only query leaked a %s", a.Meta.Kind)
+		}
+	}
+}
+
 func TestUpdate(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()

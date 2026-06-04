@@ -36,11 +36,17 @@ decision, not just misreading structure. A blind Read/Grep cannot see this.
 - "what calls X / what does X call?" -> callers / callees
 - "read this symbol's source (and all overloads) with its governance" -> node
   (instead of Read: byte-exact, freshness-revalidated, per-overload fusion)
+- "find a decision / problem / note / fact by MEANING, not a symbol" -> search
+  (FTS over the reasoning graph; splits compound terms, and a kind: qualifier —
+  kind:DecisionRecord / ProblemCard / Note / … — narrows to that artifact kind)
 
 ## Seeds are forgiving — you don't need the exact name
-- Don't know the exact name? Pass a FRAGMENT — the actions match by substring and
-  either use the single hit (labeled "fuzzy") or list candidates to pick from. So
-  you never Grep just to find a symbol's name.
+- Don't know the exact name? Pass a FRAGMENT — the actions match by substring AND
+  tolerate typos (a misspelled fragment still resolves by edit distance), then
+  either use the single hit (labeled "fuzzy") or list candidates. So you never
+  Grep just to find a symbol's name.
+- NARROW a seed with field qualifiers when a fragment is ambiguous:
+  kind:/lang:/path:/name: (e.g. "kind:func Handler", "path:internal/cli Frame").
 - explore takes SEVERAL names at once (space- or comma-separated, e.g.
   "FrameProblem Create") and shows the call path connecting them — or says
   honestly there is no static path. Use this for "how does X reach Y".

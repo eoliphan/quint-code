@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/m0n0x41d/haft/internal/textsearch"
 )
 
 // CodeSymbol is a persisted symbol node. Identity is (FilePath, Name, StartLine)
@@ -187,11 +189,18 @@ func (s *SymbolStore) GetByName(ctx context.Context, name string) ([]CodeSymbol,
 	return scanCodeSymbols(rows)
 }
 
+// editScanCap bounds how many names the edit-distance fallback scans, so a
+// typo query stays cheap even on a large index. Names beyond the cap are not
+// considered — surfaced as a silent ceiling, never as a wrong match.
+const editScanCap = 20000
+
 // SearchSymbols returns symbols whose name CONTAINS q (case-insensitive),
-// deterministically ranked — exact name, then prefix, then shorter names — and
-// capped. The fuzzy fallback for seed resolution when the exact name is not
-// known. Deterministic (LIKE + a fixed Go sort); no embeddings, no second
-// runtime. An empty/whitespace query matches nothing (never "everything").
+// deterministically ranked — exact, prefix, substring, then fuzzy — and capped.
+// The seed-resolution fallback when the exact name is not known. When substring
+// finds nothing it falls back to a bounded edit-distance scan so a TYPO still
+// resolves (autenticate -> authenticate), the tier the store previously lacked.
+// Deterministic (LIKE / edit distance + a fixed Go sort); no embeddings, no
+// second runtime. An empty/whitespace query matches nothing (never "everything").
 func (s *SymbolStore) SearchSymbols(ctx context.Context, q string, limit int) ([]CodeSymbol, error) {
 	q = strings.TrimSpace(q)
 	if q == "" {
@@ -200,9 +209,132 @@ func (s *SymbolStore) SearchSymbols(ctx context.Context, q string, limit int) ([
 	if limit <= 0 {
 		limit = 25
 	}
+
+	// Field-qualified parse (dec-20260604-3aaad199): kind:/lang:/path:/name:
+	// narrow the match; the remainder is the free-text symbol term. A bare name
+	// has no fields, so existing seed-resolution callers are unaffected.
+	pq := textsearch.ParseQuery(q)
+	term := pq.Text
+	if term == "" && len(pq.NameFilters) > 0 {
+		term = pq.NameFilters[0]
+	}
+
+	var all []CodeSymbol
+	var err error
+	if term != "" {
+		all, err = s.searchByName(ctx, term, limit*4) // over-fetch, rank + trim in Go
+	} else {
+		// Filter-only query (e.g. "kind:function"): scan, then filter in Go.
+		all, err = s.scanAllSymbols(ctx, editScanCap)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	all = applySymbolFilters(all, pq)
+	rankSymbolMatches(all, term)
+	if len(all) > limit {
+		all = all[:limit]
+	}
+	return all, nil
+}
+
+// searchByName resolves a free-text symbol term: case-insensitive substring on
+// name, then a bounded edit-distance scan (typo tolerance) ONLY when substring
+// matched nothing — so the exact behavior is never regressed. Returns ranked
+// candidates; the caller lists them and never auto-picks (no-wrong-edge).
+func (s *SymbolStore) searchByName(ctx context.Context, term string, fetch int) ([]CodeSymbol, error) {
 	rows, err := s.db.QueryContext(ctx,
 		codeSymbolSelect+` WHERE instr(lower(name), lower(?)) > 0 ORDER BY name, file_path, start_line LIMIT ?`,
-		q, limit*4) // over-fetch, then rank + trim in Go
+		term, fetch)
+	if err != nil {
+		return nil, err
+	}
+	all, err := scanCodeSymbols(rows)
+	_ = rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if len(all) == 0 {
+		return s.searchByEditDistance(ctx, term, maxEditDist(term))
+	}
+	return all, nil
+}
+
+// scanAllSymbols loads up to maxScan symbols for a filter-only query.
+func (s *SymbolStore) scanAllSymbols(ctx context.Context, maxScan int) ([]CodeSymbol, error) {
+	rows, err := s.db.QueryContext(ctx,
+		codeSymbolSelect+` ORDER BY name, file_path, start_line LIMIT ?`, maxScan)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanCodeSymbols(rows)
+}
+
+// applySymbolFilters keeps only symbols satisfying every field-qualified filter
+// present in pq. Within a category the filters are OR'd (kind:a kind:b → a or b);
+// categories AND together. An absent category imposes no constraint.
+func applySymbolFilters(syms []CodeSymbol, pq textsearch.ParsedQuery) []CodeSymbol {
+	if len(pq.Kinds) == 0 && len(pq.Langs) == 0 && len(pq.PathFilters) == 0 && len(pq.NameFilters) == 0 {
+		return syms
+	}
+	out := make([]CodeSymbol, 0, len(syms))
+	for _, c := range syms {
+		if anyEqualFold(pq.Kinds, c.Kind) &&
+			anyEqualFold(pq.Langs, c.Lang) &&
+			anySubstringFold(pq.PathFilters, c.FilePath) &&
+			anySubstringFold(pq.NameFilters, c.Name) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// anyEqualFold reports whether c case-insensitively equals any of xs. An empty
+// xs is "no constraint" (true).
+func anyEqualFold(xs []string, c string) bool {
+	if len(xs) == 0 {
+		return true
+	}
+	for _, x := range xs {
+		if strings.EqualFold(x, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// anySubstringFold reports whether c case-insensitively contains any of xs. An
+// empty xs is "no constraint" (true).
+func anySubstringFold(xs []string, c string) bool {
+	if len(xs) == 0 {
+		return true
+	}
+	lc := strings.ToLower(c)
+	for _, x := range xs {
+		if strings.Contains(lc, strings.ToLower(x)) {
+			return true
+		}
+	}
+	return false
+}
+
+// maxEditDist scales typo tolerance with query length: a short token can only
+// afford 1 edit before it spans unrelated names; longer tokens allow 2.
+func maxEditDist(q string) int {
+	if len(q) <= 4 {
+		return 1
+	}
+	return 2
+}
+
+// searchByEditDistance scans up to editScanCap names and keeps those within
+// maxDist Levenshtein edits of q (case-folded). Bounded edit distance early-exits
+// per name, so the scan stays cheap.
+func (s *SymbolStore) searchByEditDistance(ctx context.Context, q string, maxDist int) ([]CodeSymbol, error) {
+	rows, err := s.db.QueryContext(ctx,
+		codeSymbolSelect+` ORDER BY name, file_path, start_line LIMIT ?`, editScanCap)
 	if err != nil {
 		return nil, err
 	}
@@ -211,32 +343,44 @@ func (s *SymbolStore) SearchSymbols(ctx context.Context, q string, limit int) ([
 	if err != nil {
 		return nil, err
 	}
-	rankSymbolMatches(all, q)
-	if len(all) > limit {
-		all = all[:limit]
+	lq := strings.ToLower(q)
+	hits := make([]CodeSymbol, 0, 8)
+	for _, c := range all {
+		if textsearch.BoundedEditDistance(strings.ToLower(c.Name), lq, maxDist) <= maxDist {
+			hits = append(hits, c)
+		}
 	}
-	return all, nil
+	return hits, nil
 }
 
-// rankSymbolMatches orders matches by closeness to the query: exact name first,
-// then prefix matches, then shorter names, then name/file for stable output.
+// rankSymbolMatches orders matches by closeness to the query: exact name, then
+// prefix, then substring, then fuzzy; within a tier, exported symbols before
+// unexported, callable/type kinds before fields/vars, then shorter names, then
+// name/file for stable, deterministic output.
 func rankSymbolMatches(syms []CodeSymbol, q string) {
 	lq := strings.ToLower(q)
-	rank := func(c CodeSymbol) int {
+	tier := func(c CodeSymbol) int {
 		ln := strings.ToLower(c.Name)
 		switch {
 		case ln == lq:
 			return 0
 		case strings.HasPrefix(ln, lq):
 			return 1
-		default:
+		case strings.Contains(ln, lq):
 			return 2
+		default:
+			return 3 // fuzzy / edit-distance match
 		}
 	}
 	sort.SliceStable(syms, func(i, j int) bool {
-		ri, rj := rank(syms[i]), rank(syms[j])
-		if ri != rj {
-			return ri < rj
+		if ti, tj := tier(syms[i]), tier(syms[j]); ti != tj {
+			return ti < tj
+		}
+		if syms[i].Exported != syms[j].Exported {
+			return syms[i].Exported // exported API before internals
+		}
+		if ki, kj := kindRank(syms[i].Kind), kindRank(syms[j].Kind); ki != kj {
+			return ki < kj
 		}
 		if len(syms[i].Name) != len(syms[j].Name) {
 			return len(syms[i].Name) < len(syms[j].Name)
@@ -246,6 +390,21 @@ func rankSymbolMatches(syms []CodeSymbol, q string) {
 		}
 		return syms[i].FilePath < syms[j].FilePath
 	})
+}
+
+// kindRank orders symbol kinds by typical search relevance (lower = better):
+// callables and type definitions above fields/vars/consts; unknown kinds last.
+func kindRank(kind string) int {
+	switch kind {
+	case "func", "function", "method":
+		return 0
+	case "interface", "type", "struct", "class", "trait", "enum":
+		return 1
+	case "const", "constant", "var", "variable", "field", "property":
+		return 2
+	default:
+		return 3
+	}
 }
 
 // GetByID returns the single node with the given surrogate id, if present. The
