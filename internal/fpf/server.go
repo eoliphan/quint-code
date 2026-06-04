@@ -207,11 +207,11 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 								"type": "object",
 								"properties": map[string]interface{}{
 									"type": map[string]string{"type": "string", "description": "Edge label: governs | about | relates_to | implements | supersedes"},
-									"ref":  map[string]string{"type": "string", "description": "Target artifact ID (dec-/prob-/note-/sol-). MUST exist — a dead anchor is rejected."},
+									"ref":  map[string]string{"type": "string", "description": "Target — an artifact ID (dec-/prob-/note-/sol-) OR a code symbol (Name, or Name@file to disambiguate). MUST exist — a dead anchor is rejected."},
 								},
 								"required": []string{"ref"},
 							},
-							"description": "Typed edges from this fact to decisions/problems/notes — surface in related/backlinks.",
+							"description": "Typed edges from this fact to decisions/problems/notes OR code symbols — surface in related/backlinks and code_context.",
 						},
 						"rationale": map[string]string{
 							"type":        "string",

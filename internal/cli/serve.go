@@ -421,6 +421,63 @@ func parseNoteAnchors(raw any) []artifact.NoteAnchor {
 	return out
 }
 
+// isArtifactRef reports whether an anchor ref is an artifact ID (a lower-case
+// prefix + '-' + a date digit, e.g. dec-20260604-…) as opposed to a code-symbol
+// name. Symbol names have no such shape.
+func isArtifactRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	dash := strings.IndexByte(ref, '-')
+	if dash <= 0 || dash+1 >= len(ref) {
+		return false
+	}
+	for i := 0; i < dash; i++ {
+		if c := ref[i]; c < 'a' || c > 'z' {
+			return false
+		}
+	}
+	return ref[dash+1] >= '0' && ref[dash+1] <= '9'
+}
+
+// resolveSymbolAnchor resolves a symbol-anchor ref ("Name" or "Name@file") to a
+// single indexed symbol, returning the AffectedSymbol to persist. A ref that
+// resolves to no symbol — or to several without a @file qualifier — is an error
+// (a dead/ambiguous anchor is never silently kept).
+func resolveSymbolAnchor(ctx context.Context, syms *codebase.SymbolStore, ref string) (artifact.AffectedSymbol, error) {
+	name, file := ref, ""
+	if i := strings.LastIndexByte(ref, '@'); i > 0 {
+		name, file = ref[:i], ref[i+1:]
+	}
+	cands, err := syms.GetByName(ctx, name)
+	if err != nil {
+		return artifact.AffectedSymbol{}, err
+	}
+	if file != "" {
+		var filtered []codebase.CodeSymbol
+		for _, c := range cands {
+			if c.FilePath == file {
+				filtered = append(filtered, c)
+			}
+		}
+		cands = filtered
+	}
+	switch len(cands) {
+	case 0:
+		return artifact.AffectedSymbol{}, fmt.Errorf("symbol anchor %q resolves to no indexed symbol — check the name or qualify with @<file>", ref)
+	case 1:
+		c := cands[0]
+		return artifact.AffectedSymbol{
+			FilePath:   c.FilePath,
+			SymbolName: c.Name,
+			SymbolKind: c.Kind,
+			Line:       c.StartLine,
+			EndLine:    c.EndLine,
+			Hash:       c.Hash,
+		}, nil
+	default:
+		return artifact.AffectedSymbol{}, fmt.Errorf("symbol anchor %q is ambiguous (%d matches) — qualify with @<file>", ref, len(cands))
+	}
+}
+
 func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string, args map[string]any) (string, error) {
 	input := artifact.NoteInput{}
 	if v, ok := args["title"].(string); ok {
@@ -440,7 +497,21 @@ func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string,
 	}
 	input.AffectedFiles = parseStringArrayFromArgs(args, "affected_files")
 	input.Observations = parseStringArrayFromArgs(args, "observations")
-	input.Anchors = parseNoteAnchors(args["anchors"])
+	// Classify each anchor: an artifact ID (dec-/prob-/...) becomes a typed link;
+	// anything else is a code-symbol anchor, resolved against the symbol store
+	// (a dead/ambiguous symbol anchor rejects the note — no dead edges).
+	symStore := codebase.NewSymbolStore(store.DB())
+	for _, an := range parseNoteAnchors(args["anchors"]) {
+		if isArtifactRef(an.Ref) {
+			input.Anchors = append(input.Anchors, an)
+			continue
+		}
+		as, err := resolveSymbolAnchor(ctx, symStore, an.Ref)
+		if err != nil {
+			return "", err
+		}
+		input.AffectedSymbols = append(input.AffectedSymbols, as)
+	}
 	if v, ok := args["search_keywords"].(string); ok {
 		input.SearchKeywords = v
 	}

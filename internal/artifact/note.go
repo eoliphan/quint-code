@@ -12,16 +12,17 @@ import (
 // OPTIONAL (a fact needs only a title + an observation or a source), and Anchors
 // are typed edges into the reasoning graph.
 type NoteInput struct {
-	Title          string       `json:"title"`
-	TaskContext    string       `json:"task_context,omitempty"`
-	Rationale      string       `json:"rationale,omitempty"`
-	Observations   []string     `json:"observations,omitempty"`
-	AffectedFiles  []string     `json:"affected_files,omitempty"`
-	Anchors        []NoteAnchor `json:"anchors,omitempty"`
-	Evidence       string       `json:"evidence,omitempty"`
-	Context        string       `json:"context,omitempty"`
-	ValidUntil     string       `json:"valid_until,omitempty"`
-	SearchKeywords string       `json:"search_keywords,omitempty"`
+	Title           string           `json:"title"`
+	TaskContext     string           `json:"task_context,omitempty"`
+	Rationale       string           `json:"rationale,omitempty"`
+	Observations    []string         `json:"observations,omitempty"`
+	AffectedFiles   []string         `json:"affected_files,omitempty"`
+	AffectedSymbols []AffectedSymbol `json:"affected_symbols,omitempty"` // pre-resolved symbol anchors (validated at the shell)
+	Anchors         []NoteAnchor     `json:"anchors,omitempty"`
+	Evidence        string           `json:"evidence,omitempty"`
+	Context         string           `json:"context,omitempty"`
+	ValidUntil      string           `json:"valid_until,omitempty"`
+	SearchKeywords  string           `json:"search_keywords,omitempty"`
 }
 
 // NoteAnchor is a typed edge from a fact-note to a target artifact (decision,
@@ -343,6 +344,14 @@ func CreateNote(ctx context.Context, store ArtifactStore, haftDir string, input 
 		}
 		if err := store.SetAffectedFiles(ctx, id, files); err != nil {
 			warnings = append(warnings, fmt.Sprintf("failed to track affected files: %v", err))
+		}
+	}
+
+	// Symbol anchors (pre-resolved at the shell) — surface the fact in
+	// code_context / node at the exact code symbol (dec-20260604-26be1e4b).
+	if len(input.AffectedSymbols) > 0 {
+		if err := store.SetAffectedSymbols(ctx, id, input.AffectedSymbols); err != nil {
+			warnings = append(warnings, fmt.Sprintf("failed to track affected symbols: %v", err))
 		}
 	}
 

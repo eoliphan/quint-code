@@ -12,15 +12,6 @@ func TestSearchByAffectedSymbol(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 
-	// affected_symbols is not in the base test harness — create it to match
-	// the production schema.
-	if _, err := store.db.ExecContext(ctx, `CREATE TABLE affected_symbols (
-		artifact_id TEXT NOT NULL, file_path TEXT NOT NULL, symbol_name TEXT NOT NULL,
-		symbol_kind TEXT, symbol_line INTEGER, symbol_end_line INTEGER, symbol_hash TEXT,
-		PRIMARY KEY (artifact_id, file_path, symbol_name))`); err != nil {
-		t.Fatal(err)
-	}
-
 	now := time.Now().UTC()
 	mk := func(id, title string) *Artifact {
 		return &Artifact{Meta: Meta{

@@ -41,6 +41,10 @@ func setupTestDB(t *testing.T) *Store {
 		`CREATE TABLE affected_files (
 			artifact_id TEXT NOT NULL, file_path TEXT NOT NULL, file_hash TEXT,
 			PRIMARY KEY (artifact_id, file_path))`,
+		`CREATE TABLE affected_symbols (
+			artifact_id TEXT NOT NULL, file_path TEXT NOT NULL, symbol_name TEXT NOT NULL,
+			symbol_kind TEXT NOT NULL, symbol_line INTEGER, symbol_end_line INTEGER, symbol_hash TEXT,
+			PRIMARY KEY (artifact_id, file_path, symbol_name))`,
 		`CREATE TABLE fpf_state (
 			context_id TEXT PRIMARY KEY,
 			active_role TEXT,

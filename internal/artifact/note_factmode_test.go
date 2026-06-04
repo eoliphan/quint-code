@@ -84,3 +84,40 @@ func TestNoteAnchors_PersistAsLinksAndRejectDead(t *testing.T) {
 		t.Fatal("a note anchored to a non-existent target must be rejected")
 	}
 }
+
+func TestNoteSymbolAnchors_PersistAndSurface(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	haftDir := t.TempDir()
+
+	note, _, err := CreateNote(ctx, store, haftDir, NoteInput{
+		Title:        "fact about SearchSymbols",
+		Observations: []string{"it tolerates typos via bounded edit distance"},
+		AffectedSymbols: []AffectedSymbol{{
+			FilePath:   "internal/codebase/symstore.go",
+			SymbolName: "SearchSymbols",
+			SymbolKind: "method",
+			Line:       230,
+			EndLine:    266,
+			Hash:       "deadbeef",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The fact surfaces at the exact symbol via the symbol-granular join.
+	hits, err := store.SearchByAffectedSymbol(ctx, "SearchSymbols", "internal/codebase/symstore.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, h := range hits {
+		if h.Meta.ID == note.Meta.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("symbol-anchored fact should surface via SearchByAffectedSymbol, got %v", hits)
+	}
+}
