@@ -39,6 +39,32 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 
 ### Added
 
+- **Code-graph retrieval — codegraph-parity lexical heuristics.** `haft_query`
+  symbol seeds and the `search` action now tolerate typos (bounded edit
+  distance), split compound identifiers (`getUserName` → get/user/name), stem
+  query terms, and accept field qualifiers (`kind:`/`lang:`/`path:`/`name:`) —
+  closing the grep-to-find-a-seed fallback. Deterministic, no embeddings.
+- **Graph-proximity recall in `related`.** A "Related by graph proximity"
+  section ranks symbols / decisions / notes by distance in the fused
+  code+reasoning graph via deterministic Personalized PageRank (no embeddings,
+  no second runtime). Held-out link-prediction on the real graph measured
+  recall@10 ≈ 1.8× a name-lexical baseline.
+- **"Tested by" coverage lane in `related`.** For a file, surfaces which test
+  functions exercise each callable symbol (structural coverage via call
+  edges — "exercised by", not "verified") and flags exported symbols no test
+  reaches; the proximity section stays production-only.
+- **Multi-language structural code edges.** The code graph grew beyond Go
+  call/dispatch to structural relationship edges across three languages: Go
+  `implements` / `embeds`, Python `extends` (class inheritance), and
+  TypeScript/JavaScript `extends` / `implements` (from explicit heritage
+  clauses). Unresolved or external targets are dropped, never invented; each
+  edge surfaces in callers/callees/impact with its kind label. (Resolution is
+  directory-scoped for now — cross-module imports are a follow-up.)
+- **Fact memory in `haft_note`.** `haft_note` is now a fact carrier: record
+  atomic `observations` (rationale optional) and anchor a fact to
+  decisions/problems/notes via typed `anchors`, persisted as real graph edges
+  that surface in `related` / backlinks. A dead anchor (missing target) is
+  rejected, never silently kept.
 - **`haft init` installs/updates project `CLAUDE.md` haft section** — new
   step in the init flow. Writes a haft-managed section delimited by
   `<!-- haft:start -->` / `<!-- haft:end -->` HTML-comment markers.

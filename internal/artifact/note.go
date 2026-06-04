@@ -7,16 +7,30 @@ import (
 	"time"
 )
 
-// NoteInput is the input for creating a note.
+// NoteInput is the input for creating a note. Per dec-20260604-26be1e4b a note is
+// a single-purpose FACT carrier: Observations are atomic facts, Rationale is
+// OPTIONAL (a fact needs only a title + an observation or a source), and Anchors
+// are typed edges into the reasoning graph.
 type NoteInput struct {
-	Title          string   `json:"title"`
-	TaskContext    string   `json:"task_context,omitempty"`
-	Rationale      string   `json:"rationale"`
-	AffectedFiles  []string `json:"affected_files,omitempty"`
-	Evidence       string   `json:"evidence,omitempty"`
-	Context        string   `json:"context,omitempty"`
-	ValidUntil     string   `json:"valid_until,omitempty"`
-	SearchKeywords string   `json:"search_keywords,omitempty"`
+	Title          string       `json:"title"`
+	TaskContext    string       `json:"task_context,omitempty"`
+	Rationale      string       `json:"rationale,omitempty"`
+	Observations   []string     `json:"observations,omitempty"`
+	AffectedFiles  []string     `json:"affected_files,omitempty"`
+	Anchors        []NoteAnchor `json:"anchors,omitempty"`
+	Evidence       string       `json:"evidence,omitempty"`
+	Context        string       `json:"context,omitempty"`
+	ValidUntil     string       `json:"valid_until,omitempty"`
+	SearchKeywords string       `json:"search_keywords,omitempty"`
+}
+
+// NoteAnchor is a typed edge from a fact-note to a target artifact (decision,
+// problem, note, solution) — persisted as a real artifact link and surfaced in
+// related/backlinks. The target MUST exist; a dead anchor is rejected, never
+// silently kept (dec-20260604-26be1e4b, no-wrong-edge).
+type NoteAnchor struct {
+	Type string `json:"type"` // governs | about | relates_to | implements | supersedes
+	Ref  string `json:"ref"`  // target artifact ID
 }
 
 // NoteValidation holds the result of pre-recording checks.
@@ -38,14 +52,15 @@ type ConflictInfo struct {
 func ValidateNote(ctx context.Context, store ArtifactStore, input NoteInput) NoteValidation {
 	v := NoteValidation{OK: true}
 
-	// Check 1: Rationale
-	if strings.TrimSpace(input.Rationale) == "" {
+	// Check 1: not content-free. A note is a fact carrier (dec-20260604-26be1e4b):
+	// rationale is OPTIONAL, but a fact needs a title plus at least one of an
+	// observation, a source (evidence), or a rationale.
+	if strings.TrimSpace(input.Rationale) == "" && len(input.Observations) == 0 && strings.TrimSpace(input.Evidence) == "" {
 		v.OK = false
-		v.Warnings = append(v.Warnings, "Missing rationale. Why this choice? What alternatives were considered?")
+		v.Warnings = append(v.Warnings, "Content-free note. Provide at least one observation, a source, or a rationale.")
 		return v
 	}
-	words := len(strings.Fields(input.Rationale))
-	if words < 5 && len(input.AffectedFiles) > 0 {
+	if words := len(strings.Fields(input.Rationale)); words > 0 && words < 5 && len(input.AffectedFiles) > 0 {
 		v.Warnings = append(v.Warnings, fmt.Sprintf("Rationale is very short (%d words) for a change that affects files. Consider expanding.", words))
 	}
 
@@ -247,9 +262,24 @@ func checkConflicts(ctx context.Context, store ArtifactStore, input NoteInput) [
 func BuildNoteArtifact(id string, now time.Time, input NoteInput) *Artifact {
 	var body strings.Builder
 	body.WriteString(fmt.Sprintf("# %s\n\n", input.Title))
-	body.WriteString(fmt.Sprintf("## Rationale\n\n%s\n", input.Rationale))
+	if len(input.Observations) > 0 {
+		body.WriteString("## Observations\n\n")
+		for _, o := range input.Observations {
+			body.WriteString(fmt.Sprintf("- %s\n", o))
+		}
+		body.WriteString("\n")
+	}
+	if strings.TrimSpace(input.Rationale) != "" {
+		body.WriteString(fmt.Sprintf("## Rationale\n\n%s\n", input.Rationale))
+	}
 	if input.Evidence != "" {
-		body.WriteString(fmt.Sprintf("\n## Evidence\n\n%s\n", input.Evidence))
+		body.WriteString(fmt.Sprintf("\n## Source\n\n%s\n", input.Evidence))
+	}
+	if len(input.Anchors) > 0 {
+		body.WriteString("\n## Anchors\n\n")
+		for _, an := range input.Anchors {
+			body.WriteString(fmt.Sprintf("- %s `%s`\n", an.Type, an.Ref))
+		}
 	}
 	if len(input.AffectedFiles) > 0 {
 		body.WriteString("\n## Affected Files\n\n")
@@ -286,8 +316,20 @@ func CreateNote(ctx context.Context, store ArtifactStore, haftDir string, input 
 	// GenerateID uses a crypto/rand suffix since #63; no sequence lookup
 	// required. seq parameter preserved for backward compat — pass 0.
 	id := GenerateIDWithTaskContext(KindNote, 0, input.TaskContext)
-	a := BuildNoteArtifact(id, time.Now().UTC(), input)
 
+	// Validate typed anchors BEFORE creating anything: a dead anchor (target does
+	// not exist) rejects the whole note — no dead edges, no fabricated
+	// relationships (dec-20260604-26be1e4b).
+	for _, an := range input.Anchors {
+		if strings.TrimSpace(an.Ref) == "" {
+			return nil, "", fmt.Errorf("anchor has an empty ref")
+		}
+		if _, err := store.Get(ctx, an.Ref); err != nil {
+			return nil, "", fmt.Errorf("anchor target %q does not exist — anchors must point to a real artifact", an.Ref)
+		}
+	}
+
+	a := BuildNoteArtifact(id, time.Now().UTC(), input)
 	if err := store.Create(ctx, a); err != nil {
 		return nil, "", fmt.Errorf("store note: %w", err)
 	}
@@ -301,6 +343,18 @@ func CreateNote(ctx context.Context, store ArtifactStore, haftDir string, input 
 		}
 		if err := store.SetAffectedFiles(ctx, id, files); err != nil {
 			warnings = append(warnings, fmt.Sprintf("failed to track affected files: %v", err))
+		}
+	}
+
+	// Persist typed anchors as real artifact links — they surface in
+	// related / backlinks at the anchored decision/problem (the fusion payoff).
+	for _, an := range input.Anchors {
+		linkType := strings.TrimSpace(an.Type)
+		if linkType == "" {
+			linkType = "anchors"
+		}
+		if err := store.AddLink(ctx, id, an.Ref, linkType); err != nil {
+			warnings = append(warnings, fmt.Sprintf("failed to anchor %s -> %s: %v", id, an.Ref, err))
 		}
 	}
 

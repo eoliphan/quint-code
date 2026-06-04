@@ -188,22 +188,39 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 		tools = append(tools,
 			Tool{
 				Name:        "haft_note",
-				Description: "Record a micro-decision with rationale. Validates before recording: checks for missing rationale, conflicts with active decisions, and whether the scope is too large for a note. Use for quick engineering choices during coding.",
+				Description: "Record a project FACT into the reasoning graph. A note is a fact/observation carrier — NOT a decision (a choice among alternatives goes to /h-decide). Give a title plus at least one atomic observation or a source; rationale is optional. Anchor the fact to decisions/problems/notes via typed edges so it surfaces at them in related/code_context.",
 				InputSchema: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"title": map[string]string{
 							"type":        "string",
-							"description": "What was decided (e.g., 'RWMutex over channels for session cache')",
+							"description": "What the fact is (e.g., 'MCP server is per-session, not a daemon')",
+						},
+						"observations": map[string]interface{}{
+							"type":        "array",
+							"items":       map[string]string{"type": "string"},
+							"description": "Atomic facts — one fact per entry. The core of a fact note.",
+						},
+						"anchors": map[string]interface{}{
+							"type": "array",
+							"items": map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"type": map[string]string{"type": "string", "description": "Edge label: governs | about | relates_to | implements | supersedes"},
+									"ref":  map[string]string{"type": "string", "description": "Target artifact ID (dec-/prob-/note-/sol-). MUST exist — a dead anchor is rejected."},
+								},
+								"required": []string{"ref"},
+							},
+							"description": "Typed edges from this fact to decisions/problems/notes — surface in related/backlinks.",
 						},
 						"rationale": map[string]string{
 							"type":        "string",
-							"description": "Why this choice — what alternatives existed, what evidence supports it",
+							"description": "OPTIONAL — why, if the fact carries a reasoned judgment. A bare fact needs none.",
 						},
 						"affected_files": map[string]interface{}{
 							"type":        "array",
 							"items":       map[string]string{"type": "string"},
-							"description": "File paths affected by this decision",
+							"description": "File paths this fact is about",
 						},
 						"evidence": map[string]string{
 							"type":        "string",
@@ -218,7 +235,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 							"description": "Optional context name for grouping (e.g., 'auth', 'payments')",
 						},
 					},
-					"required": []string{"title", "rationale"},
+					"required": []string{"title"},
 				},
 			},
 			Tool{

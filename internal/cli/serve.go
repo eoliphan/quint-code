@@ -398,6 +398,29 @@ func truncateMeasure(s string, max int) string {
 
 // --- Tool handlers ---
 
+// parseNoteAnchors decodes the haft_note `anchors` arg ([{type, ref}, ...]) into
+// typed NoteAnchors, skipping malformed entries and ones with an empty ref.
+func parseNoteAnchors(raw any) []artifact.NoteAnchor {
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	var out []artifact.NoteAnchor
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		ref, _ := m["ref"].(string)
+		if strings.TrimSpace(ref) == "" {
+			continue
+		}
+		typ, _ := m["type"].(string)
+		out = append(out, artifact.NoteAnchor{Type: typ, Ref: ref})
+	}
+	return out
+}
+
 func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string, args map[string]any) (string, error) {
 	input := artifact.NoteInput{}
 	if v, ok := args["title"].(string); ok {
@@ -416,6 +439,8 @@ func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string,
 		input.Context = v
 	}
 	input.AffectedFiles = parseStringArrayFromArgs(args, "affected_files")
+	input.Observations = parseStringArrayFromArgs(args, "observations")
+	input.Anchors = parseNoteAnchors(args["anchors"])
 	if v, ok := args["search_keywords"].(string); ok {
 		input.SearchKeywords = v
 	}
