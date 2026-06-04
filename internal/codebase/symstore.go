@@ -189,6 +189,32 @@ func (s *SymbolStore) GetByName(ctx context.Context, name string) ([]CodeSymbol,
 	return scanCodeSymbols(rows)
 }
 
+// SymbolRef is a symbol's stable id paired with its file — the minimum the
+// fused-graph ranker needs to bridge a symbol node to its file connector node
+// (graphrank, dec-20260604-3aaad199 phase 2) without loading full symbol rows.
+type SymbolRef struct {
+	ID       string
+	FilePath string
+}
+
+// AllSymbolRefs enumerates every symbol's (id, file) in one pass, stably ordered.
+func (s *SymbolStore) AllSymbolRefs(ctx context.Context) ([]SymbolRef, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, file_path FROM code_symbols ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SymbolRef
+	for rows.Next() {
+		var r SymbolRef
+		if err := rows.Scan(&r.ID, &r.FilePath); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // editScanCap bounds how many names the edit-distance fallback scans, so a
 // typo query stays cheap even on a large index. Names beyond the cap are not
 // considered — surfaced as a silent ceiling, never as a wrong match.

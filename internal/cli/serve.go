@@ -1182,7 +1182,44 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		if err != nil {
 			return "", err
 		}
-		return present.RelatedResponse(results, file) + navStrip, nil
+		resp := present.RelatedResponse(results, file)
+		if file != "" {
+			svc := codeintel.NewService(store)
+			projectRoot := filepath.Dir(haftDir)
+			// Phase-2 graph-proximity recall (dec-20260604-3aaad199): FTS5-seeded
+			// PPR over the fused graph, additive to the exact affected-file list.
+			// Best-effort — a failure never breaks the related response.
+			if ranked, perr := svc.RelatedToFile(ctx, projectRoot, file, 12); perr == nil && len(ranked) > 0 {
+				// Dedup: drop anything already shown in the exact affected-file
+				// section, so a decision is not listed twice.
+				shown := make(map[string]bool, len(results))
+				for _, a := range results {
+					shown[a.Meta.ID] = true
+				}
+				items := make([]present.RelatedProximityItem, 0, len(ranked))
+				for _, r := range ranked {
+					if shown[r.ID] {
+						continue
+					}
+					label := "reasoning"
+					if r.Kind == codeintel.RelatedSymbol {
+						label = "symbol"
+					}
+					items = append(items, present.RelatedProximityItem{Title: r.Title, Label: label, Ref: r.ID})
+				}
+				resp += present.RelatedProximityResponse(items)
+			}
+			// Structural test-coverage lane (dec-20260604-ef966a11): which tests
+			// exercise this file's symbols — 'exercised by', never 'verified'.
+			if cov, cerr := svc.TestedBy(ctx, projectRoot, file); cerr == nil && len(cov) > 0 {
+				items := make([]present.TestedByItem, 0, len(cov))
+				for _, c := range cov {
+					items = append(items, present.TestedByItem{Symbol: c.Symbol, Exported: c.Exported, TestedBy: c.TestedBy})
+				}
+				resp += present.TestedByResponse(items)
+			}
+		}
+		return resp + navStrip, nil
 
 	case "code_context":
 		file, _ := args["file"].(string)

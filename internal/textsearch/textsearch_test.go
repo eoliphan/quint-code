@@ -186,6 +186,35 @@ func TestParseQueryUnterminatedQuote(t *testing.T) {
 	}
 }
 
+func TestIsTestPath(t *testing.T) {
+	test := []string{
+		"internal/codebase/symstore_test.go",
+		"internal/foo/testdata/x.go",
+		"pkg/__tests__/a.ts",
+		"app/components/Button.test.tsx",
+		"test/helpers.go",
+		"python/test_module.py",
+		"lib/cache_spec.rb",
+	}
+	prod := []string{
+		"internal/codebase/symstore.go",
+		"internal/cli/serve.go",
+		"app/latest.go",   // "test" substring but not a test file
+		"src/manifest.ts", // ditto
+		"",
+	}
+	for _, p := range test {
+		if !IsTestPath(p) {
+			t.Errorf("IsTestPath(%q) = false, want true", p)
+		}
+	}
+	for _, p := range prod {
+		if IsTestPath(p) {
+			t.Errorf("IsTestPath(%q) = true, want false", p)
+		}
+	}
+}
+
 func contains(xs []string, want string) bool {
 	return slices.Contains(xs, want)
 }

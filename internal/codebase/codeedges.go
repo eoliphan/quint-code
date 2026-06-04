@@ -94,7 +94,20 @@ func (e *EdgeStore) ReplaceFileEdges(ctx context.Context, filePath string, edges
 const (
 	outEdgesQuery = `SELECT src_id, dst_id, kind, file_path, line, provenance FROM code_edges WHERE src_id = ? ORDER BY dst_id, src_id`
 	inEdgesQuery  = `SELECT src_id, dst_id, kind, file_path, line, provenance FROM code_edges WHERE dst_id = ? ORDER BY dst_id, src_id`
+	allEdgesQuery = `SELECT src_id, dst_id, kind, file_path, line, provenance FROM code_edges ORDER BY src_id, dst_id, kind, line`
 )
+
+// AllEdges returns every code edge in one pass — the whole-graph enumeration the
+// fused-graph ranker (graphrank, dec-20260604-3aaad199 phase 2) needs to build
+// adjacency once instead of N per-node queries. Stable order = deterministic build.
+func (e *EdgeStore) AllEdges(ctx context.Context) ([]CodeEdge, error) {
+	rows, err := e.db.QueryContext(ctx, allEdgesQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanEdges(rows)
+}
 
 // OutEdges returns edges where srcID is the source (its callees / dispatch targets).
 func (e *EdgeStore) OutEdges(ctx context.Context, srcID string) ([]CodeEdge, error) {

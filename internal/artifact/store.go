@@ -589,6 +589,61 @@ func (s *Store) GetBacklinks(ctx context.Context, artifactID string) ([]Link, er
 	return links, rows.Err()
 }
 
+// LinkEdge is one artifact_links row — a directed reasoning-graph edge.
+type LinkEdge struct {
+	Source string
+	Target string
+	Type   string
+}
+
+// AllLinks enumerates every artifact link in one pass — the whole-graph
+// enumeration the fused-graph ranker (graphrank, dec-20260604-3aaad199 phase 2)
+// uses to build the reasoning-graph adjacency. Stable order = deterministic build.
+func (s *Store) AllLinks(ctx context.Context) ([]LinkEdge, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT source_id, target_id, link_type FROM artifact_links ORDER BY source_id, target_id, link_type`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LinkEdge
+	for rows.Next() {
+		var e LinkEdge
+		if err := rows.Scan(&e.Source, &e.Target, &e.Type); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// AffectedFileRef is one affected_files row — an artifact's link to a file path,
+// the bridge between the reasoning graph and the code graph.
+type AffectedFileRef struct {
+	ArtifactID string
+	FilePath   string
+}
+
+// AllAffectedFiles enumerates every (artifact, file) pair in one pass, stably
+// ordered — the artifact<->file half of the fused-graph bridge.
+func (s *Store) AllAffectedFiles(ctx context.Context) ([]AffectedFileRef, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT artifact_id, file_path FROM affected_files ORDER BY artifact_id, file_path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AffectedFileRef
+	for rows.Next() {
+		var r AffectedFileRef
+		if err := rows.Scan(&r.ArtifactID, &r.FilePath); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // --- Affected Files ---
 
 // SetAffectedFiles replaces the affected files list for an artifact.

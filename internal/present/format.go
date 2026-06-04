@@ -983,6 +983,66 @@ func RelatedResponse(results []*artifact.Artifact, filePath string) string {
 	return sb.String()
 }
 
+// RelatedProximityItem is one graph-proximity-ranked related node, resolved to a
+// display title — the phase-2 PPR section of the related action (dec-20260604-3aaad199).
+type RelatedProximityItem struct {
+	Title string
+	Label string // user-facing kind: "symbol" or "reasoning"
+	Ref   string
+}
+
+// TestedByItem is one callable symbol of a file and the tests exercising it via
+// call edges — the structural-coverage lane of related (dec-20260604-ef966a11).
+type TestedByItem struct {
+	Symbol   string
+	Exported bool
+	TestedBy []string // test function names; empty = not exercised
+}
+
+// TestedByResponse formats the structural test-coverage lane: callable symbols
+// exercised by tests, then untested EXPORTED symbols as a gap signal. Honest by
+// construction — "exercised by", never "verified" (a call edge is not an
+// assertion). Returns "" when there is nothing worth showing. Pure.
+func TestedByResponse(items []TestedByItem) string {
+	var tested, gaps []TestedByItem
+	for _, it := range items {
+		if len(it.TestedBy) > 0 {
+			tested = append(tested, it)
+		} else if it.Exported {
+			gaps = append(gaps, it)
+		}
+	}
+	if len(tested) == 0 && len(gaps) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n## Tested by (exercised, not asserted)\n\n")
+	sb.WriteString("_Test functions whose call edges reach this file's symbols — structural coverage, not verification._\n\n")
+	for _, it := range tested {
+		sb.WriteString(fmt.Sprintf("- **%s** ← %s\n", it.Symbol, strings.Join(it.TestedBy, ", ")))
+	}
+	for _, it := range gaps {
+		sb.WriteString(fmt.Sprintf("- **%s** — _(no test exercises this)_\n", it.Symbol))
+	}
+	return sb.String()
+}
+
+// RelatedProximityResponse formats the graph-proximity recall section appended
+// to the exact affected-file list. Empty input yields an empty string (the
+// caller simply appends nothing). Pure.
+func RelatedProximityResponse(items []RelatedProximityItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n## Related by graph proximity\n\n")
+	sb.WriteString("_Ranked by distance in the fused code+reasoning graph (deterministic PPR, no embeddings)._\n\n")
+	for _, it := range items {
+		sb.WriteString(fmt.Sprintf("- **%s** [%s] `%s`\n", it.Title, it.Label, it.Ref))
+	}
+	return sb.String()
+}
+
 // ProblemsListResponse formats a list of problems with pre-fetched enrichment data. Pure.
 func ProblemsListResponse(items []artifact.ProblemListItem, navStrip string) string {
 	var sb strings.Builder
