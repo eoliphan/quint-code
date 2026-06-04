@@ -58,13 +58,18 @@ func TestEdgeResolverPort_GoComposesAndIsPluggable(t *testing.T) {
 		t.Fatalf("composed resolver should produce Run→util.Help, got %+v", edges)
 	}
 
-	// THE SEAM: languages without an adapter yet have no resolver — nil,
-	// gracefully, rather than a Go-specific assumption. Adding them is one
-	// adapter + one registry line.
-	if reg.ResolverForFile("x.py") != nil {
-		t.Fatal("Python must have no edge resolver yet — the pluggable seam")
+	// Python now has an edge resolver too (class-inheritance `extends` edges).
+	if py := reg.ResolverForFile("x.py"); py == nil || py.Language() != "python" {
+		t.Fatalf("Python should now have an edge resolver, got %v", py)
 	}
+
+	// THE SEAM still holds for languages without an adapter yet — nil gracefully,
+	// rather than a Go-specific assumption. Adding one is one adapter + one
+	// registry line (as Go and Python did).
 	if reg.ResolverForFile("x.rs") != nil {
 		t.Fatal("Rust must have no edge resolver yet — the pluggable seam")
+	}
+	if reg.ResolverForFile("x.c") != nil {
+		t.Fatal("C must have no edge resolver yet — the pluggable seam")
 	}
 }

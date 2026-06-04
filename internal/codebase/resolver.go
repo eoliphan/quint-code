@@ -89,6 +89,14 @@ func (g *GoLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath stri
 	// "method on a concrete-typed field" gap that left real callers unshown.
 	edges = append(edges, ResolveConcreteMethodCallEdges(relPath, fileSyms, sites, sigs, facts, lookup)...)
 
+	// 5. static implements edges: a type DECLARED here -> each package interface
+	// whose method set it structurally covers (answers "what implements I").
+	edges = append(edges, ResolveImplementsEdges(relPath, fileSyms, pkgSyms, interfaces)...)
+
+	// 6. static embeds edges: a type DECLARED here -> each package type it embeds
+	// (anonymous struct field / embedded interface = Go composition).
+	edges = append(edges, ResolveEmbedsEdges(relPath, fileSyms, pkgSyms, ExtractGoEmbeds(projectRoot, relPath))...)
+
 	return dedupeEdges(edges), nil
 }
 

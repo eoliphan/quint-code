@@ -14,6 +14,9 @@ type EdgeKind string
 const (
 	EdgeCall              EdgeKind = "call"
 	EdgeInterfaceDispatch EdgeKind = "interface_dispatch"
+	EdgeImplements        EdgeKind = "implements"
+	EdgeExtends           EdgeKind = "extends"
+	EdgeEmbeds            EdgeKind = "embeds"
 )
 
 // Provenance records how an edge was established. static = resolved directly

@@ -34,18 +34,24 @@ func NewRegistry() *Registry {
 		r.resolvers[ext] = goImpl
 	}
 
-	// Register JS/TS
+	// Register JS/TS (detector + import parser + code-graph edge resolver:
+	// class/interface `extends` + `implements` from explicit heritage clauses;
+	// call edges deferred)
 	jsImpl := &JSTSLang{}
 	r.detectors["jsts"] = jsImpl
 	for _, ext := range jsImpl.Extensions() {
 		r.parsers[ext] = jsImpl
+		r.resolvers[ext] = jsImpl
 	}
 
-	// Register Python
+	// Register Python (detector + import parser + code-graph edge resolver:
+	// class-inheritance `extends` edges; call edges deferred — Python dispatch is
+	// dynamic and not soundly resolvable from the AST alone)
 	pyImpl := &PythonLang{}
 	r.detectors["python"] = pyImpl
 	for _, ext := range pyImpl.Extensions() {
 		r.parsers[ext] = pyImpl
+		r.resolvers[ext] = pyImpl
 	}
 
 	// Register Rust

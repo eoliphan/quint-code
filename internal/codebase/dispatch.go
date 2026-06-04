@@ -219,6 +219,59 @@ func Satisfies(typeMethods map[string]bool, iface InterfaceDef) bool {
 	return true
 }
 
+// ResolveImplementsEdges synthesizes STATIC implements edges: for each concrete
+// type DECLARED in relPath whose method-name set covers an interface's methods,
+// emit type -> interface (answering "what implements this interface"). Same
+// precision class as interface_dispatch — method-NAME coverage, so a name match
+// with a different signature is a possible false positive; hence heuristic
+// provenance, not static. Empty interfaces never match (Satisfies excludes them).
+// Package-scoped via pkgSyms; reuses TypeMethodSets + Satisfies. Pure.
+func ResolveImplementsEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, interfaces map[string]InterfaceDef) []CodeEdge {
+	methodSets := TypeMethodSets(pkgSyms)
+	// Interface declarations are stored with kind "type" (the extractor does not
+	// distinguish interface from struct). The `interfaces` map — from AST
+	// extraction — is the source of truth for which names ARE interfaces; here we
+	// only need each name's symbol id, so index every type/interface declaration.
+	symByName := map[string]CodeSymbol{}
+	for _, s := range pkgSyms {
+		if s.Kind == "type" || s.Kind == "interface" {
+			if _, dup := symByName[s.Name]; !dup {
+				symByName[s.Name] = s
+			}
+		}
+	}
+
+	var edges []CodeEdge
+	for _, ts := range fileSyms {
+		if ts.Kind != "type" && ts.Kind != "struct" {
+			continue
+		}
+		methods := methodSets[ts.Name]
+		if len(methods) == 0 {
+			continue // a type with no methods implements no non-empty interface
+		}
+		for name, iface := range interfaces {
+			if name == ts.Name {
+				continue
+			}
+			isym, ok := symByName[name]
+			if !ok {
+				continue
+			}
+			if Satisfies(methods, iface) {
+				edges = append(edges, CodeEdge{
+					SrcID:      ts.ID,
+					DstID:      isym.ID,
+					Kind:       EdgeImplements,
+					FilePath:   relPath,
+					Provenance: ProvenanceHeuristic,
+				})
+			}
+		}
+	}
+	return edges
+}
+
 // ResolveInterfaceDispatchEdges synthesizes interface_dispatch edges (heuristic
 // provenance) from a call site through an interface to its concrete impls. The
 // precision bound: it fires ONLY when the call's receiver variable has a
