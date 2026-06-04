@@ -30,7 +30,7 @@ Call `mcp__haft__haft_decision(action="decide", ...)` with at minimum:
 - `counterargument` — the strongest argument AGAINST this decision (FPF DEC-08: self-deception check)
 - `why_not_others` — `[{variant: "...", reason: "..."}]` for at least one rejected alternative
 - `rollback` — `{triggers: [...], steps: [...], blast_radius: "..."}` — at least one trigger required
-- `predictions` — `[{claim, observable, threshold, verify_after?}]` — falsifiable claims the verify loop will check
+- `predictions` — `[{claim, observable, threshold, verify_after?, probability?}]` — falsifiable claims the verify loop will check. `probability` (optional, `[0,1]`) is your forecast that the claim will hold. Sample it as **2-3 independent estimates and pass their consensus**, never one authoritative number — it is one noisy vote, fed into the decomposed-Brier calibration profile once verified. Omit it freely; absence is fine and costs nothing.
 - `invariants` — what MUST hold at all times
 - `affected_files` — scope of this decision (governance + drift tracking)
 - `valid_until` — RFC3339 date when this decision should be re-evaluated

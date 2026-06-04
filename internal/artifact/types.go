@@ -655,6 +655,11 @@ type DecisionClaim struct {
 	Status        ClaimStatus          `json:"status,omitempty"`
 	VerifyAfter   string               `json:"verify_after,omitempty"`  // RFC3339 or YYYY-MM-DD — when async evidence should be gathered
 	Realizability RealizabilityVerdict `json:"realizability,omitempty"` // C.28 CounterfactualSamplingRealizabilityProfile verdict
+	// Probability is the optional elicited p(this claim holds) in [0,1], a noisy
+	// forecast captured at /h-decide time. Paired with the verified Status
+	// (supported→1 / refuted→0) it forms a Forecast for decomposed-Brier
+	// calibration (dec-20260603-c3c7fa88). Additive: nil means no forecast.
+	Probability *float64 `json:"probability,omitempty"`
 }
 
 // DecisionPrediction is a compatibility projection of a stored decision claim.
@@ -665,6 +670,7 @@ type DecisionPrediction struct {
 	Status        ClaimStatus          `json:"status,omitempty"`
 	VerifyAfter   string               `json:"verify_after,omitempty"`
 	Realizability RealizabilityVerdict `json:"realizability,omitempty"`
+	Probability   *float64             `json:"probability,omitempty"`
 }
 
 // EvidenceItem represents a single piece of evidence.

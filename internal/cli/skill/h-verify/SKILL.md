@@ -105,6 +105,13 @@ Kernel ties the verdict back to the predictions and surfaces:
 - Partial → some predictions held, some didn't → consider reopen or supersede
 - Failed → decision invalidated → consider supersede or rollback per the decision's rollback spec
 
+If any verified prediction carried a `probability` forecast (set at `/h-decide`),
+the measure response also appends a **Calibration** read: the decomposed-Brier
+profile (Brier = reliability − resolution + uncertainty) over all verified
+forecasts, plus a directional over/under-confidence bias. Below ~15 accumulated
+forecasts it reports cold-start and is not yet actionable — surface it to the
+operator but do not over-read a sparse profile.
+
 ## Step 7 — Handle stale or drifted decisions
 
 If verification reveals:

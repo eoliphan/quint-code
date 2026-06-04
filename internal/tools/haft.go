@@ -1079,6 +1079,7 @@ When you present the rationale (rejected alternatives, counterargument, weakest 
 							"threshold":     map[string]any{"type": "string", "description": "What counts as passing"},
 							"verify_after":  map[string]any{"type": "string", "description": "When to check (RFC3339 or YYYY-MM-DD) — for async claims that need time before evidence is available"},
 							"realizability": map[string]any{"type": "string", "enum": []string{"realizable", "nonrealizable", "unknown"}, "description": "C.28 CounterfactualSamplingRealizabilityProfile verdict; nonrealizable caps R_eff at 0.5 per CC-B3.9"},
+							"probability":   map[string]any{"type": "number", "description": "Optional elicited p(this claim holds) in [0,1] — a noisy forecast sampled at decide time, fed into decomposed-Brier calibration once verified. Sample 2-3 independent estimates and pass their consensus; never one authoritative number."},
 						},
 						"required": []string{"claim", "observable", "threshold"},
 					},
@@ -1589,6 +1590,9 @@ func (t *HaftDecisionTool) measure(ctx context.Context, args map[string]any) (ag
 	}
 
 	display := fmt.Sprintf("Measurement recorded: verdict=%s\nArtifact: %s", input.Verdict, result.Meta.ID)
+	if calibration := t.calibrationSummary(ctx); calibration != "" {
+		display += "\n\n" + calibration
+	}
 	return agent.ToolResult{
 		DisplayText: display,
 		Meta: &agent.ArtifactMeta{
@@ -1598,6 +1602,30 @@ func (t *HaftDecisionTool) measure(ctx context.Context, args map[string]any) (ag
 			MeasureVerdict: input.Verdict,
 		},
 	}, nil
+}
+
+// calibrationSummary reads the decomposed-Brier calibration profile over every
+// verified forecast in the graph and renders a one-paragraph operator-facing
+// read. It is invoked at measure (verify) time, off the hot path. Empty when no
+// probabilistic forecasts exist yet; honest about cold-start — below the minimum
+// forecast count the directional bias is reported as not-yet-actionable rather
+// than asserted (dec-20260603-c3c7fa88 weakest link).
+func (t *HaftDecisionTool) calibrationSummary(ctx context.Context) string {
+	v, err := artifact.CalibrationProfile(ctx, t.store)
+	if err != nil || v.Components.N == 0 {
+		return ""
+	}
+	c := v.Components
+	if c.N < artifact.CalibrationMinForecasts {
+		return fmt.Sprintf("── Calibration ──\nCold start: %d/%d verified forecasts accumulated — decomposed-Brier profile not yet actionable.",
+			c.N, artifact.CalibrationMinForecasts)
+	}
+	return fmt.Sprintf(
+		"── Calibration (decomposed Brier over %d verified forecasts) ──\n"+
+			"Brier %.3f = reliability %.3f − resolution %.3f + uncertainty %.3f\n"+
+			"Directional bias: %s (mean forecast %.2f vs realized %.2f).",
+		c.N, c.MeanBrier, c.Reliability, c.Resolution, c.Uncertainty, v.Direction, c.MeanForecast, c.BaseRate,
+	)
 }
 
 // ---------------------------------------------------------------------------

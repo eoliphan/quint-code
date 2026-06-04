@@ -92,6 +92,10 @@ type PredictionInput struct {
 	Threshold     string `json:"threshold"`
 	VerifyAfter   string `json:"verify_after,omitempty"`  // RFC3339 or YYYY-MM-DD — when async evidence should be gathered
 	Realizability string `json:"realizability,omitempty"` // C.28 verdict: realizable|nonrealizable|unknown
+	// Probability is the optional elicited p(this claim holds) in [0,1] — a noisy
+	// forecast sampled at /h-decide time, fed into decomposed-Brier calibration
+	// once verified (dec-20260603-c3c7fa88). nil means the operator declined.
+	Probability *float64 `json:"probability,omitempty"`
 }
 
 // RejectionReason explains why a variant was not selected.
@@ -207,6 +211,7 @@ func normalizePredictionInputs(values []PredictionInput) []PredictionInput {
 			Threshold:     strings.TrimSpace(value.Threshold),
 			VerifyAfter:   strings.TrimSpace(value.VerifyAfter),
 			Realizability: strings.TrimSpace(value.Realizability),
+			Probability:   value.Probability,
 		}
 
 		normalized = append(normalized, prediction)
@@ -453,6 +458,9 @@ func predictionValidationProblems(index int, prediction PredictionInput) []strin
 		problems = append([]string{
 			fmt.Sprintf("predictions[%d] must include claim, observable, and threshold together", index),
 		}, problems...)
+	}
+	if p := prediction.Probability; p != nil && (*p < 0 || *p > 1) {
+		problems = append(problems, fmt.Sprintf("predictions[%d].probability must be in [0,1], got %v", index, *p))
 	}
 
 	return problems

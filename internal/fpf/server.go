@@ -542,6 +542,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 								"threshold":     map[string]string{"type": "string"},
 								"verify_after":  map[string]string{"type": "string", "description": "When to check (RFC3339 or YYYY-MM-DD) — for async claims"},
 								"realizability": map[string]string{"type": "string", "description": "C.28 verdict: realizable|nonrealizable|unknown; nonrealizable caps R_eff at 0.5 per CC-B3.9"},
+								"probability":   map[string]string{"type": "number", "description": "Optional elicited p(this claim holds) in [0,1] — a noisy forecast sampled at decide time. Verified outcomes feed decomposed-Brier calibration. Sample 2-3 independent estimates and pass their consensus; never a single authoritative number."},
 							},
 							"required": []string{"claim", "observable", "threshold"},
 						},
