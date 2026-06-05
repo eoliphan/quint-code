@@ -17,7 +17,7 @@ func TestHandleQuintQuery_CheckActionReturnsCheckReport(t *testing.T) {
 		"action": "check",
 	}
 
-	result, err := handleQuintQuery(context.Background(), fixture.store, fixture.haftDir, args)
+	result, err := handleQuintQuery(context.Background(), fixture.store, nil, fixture.haftDir, args)
 	if err != nil {
 		t.Fatalf("handleQuintQuery(check) returned error: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestHandleQuintQuery_CheckMatchesCLIJSON(t *testing.T) {
 	fixture := newCheckTestProject(t)
 	seedGovernanceDebt(t, fixture)
 
-	mcpResult, err := handleQuintQuery(context.Background(), fixture.store, fixture.haftDir, map[string]any{"action": "check"})
+	mcpResult, err := handleQuintQuery(context.Background(), fixture.store, nil, fixture.haftDir, map[string]any{"action": "check"})
 	if err != nil {
 		t.Fatalf("MCP check: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestHandleQuintQuery_CheckMatchesCLIJSON(t *testing.T) {
 func TestHandleQuintQuery_CheckRejectsUnknownAction(t *testing.T) {
 	fixture := newCheckTestProject(t)
 
-	_, err := handleQuintQuery(context.Background(), fixture.store, fixture.haftDir, map[string]any{
+	_, err := handleQuintQuery(context.Background(), fixture.store, nil, fixture.haftDir, map[string]any{
 		"action": "wat",
 	})
 	if err == nil {

@@ -16,11 +16,14 @@ import (
 	"github.com/m0n0x41d/haft/internal/ceremony"
 	"github.com/m0n0x41d/haft/internal/codebase"
 	"github.com/m0n0x41d/haft/internal/codeintel"
+	"github.com/m0n0x41d/haft/internal/config"
 	"github.com/m0n0x41d/haft/internal/contextgraph"
+	"github.com/m0n0x41d/haft/internal/embedding"
 	"github.com/m0n0x41d/haft/internal/fpf"
 	"github.com/m0n0x41d/haft/internal/graph"
 	"github.com/m0n0x41d/haft/internal/present"
 	"github.com/m0n0x41d/haft/internal/project"
+	"github.com/m0n0x41d/haft/internal/recall"
 	"github.com/m0n0x41d/haft/internal/ui"
 	"github.com/m0n0x41d/haft/logger"
 
@@ -128,7 +131,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 					}
 				}()
 
-				server.SetV5Handler(makeV5Handler(artStore, haftDir, projCfg, indexStore))
+				searcher := buildHybridSearcher(artStore, database.GetRawDB())
+
+				server.SetV5Handler(makeV5Handler(artStore, searcher, haftDir, projCfg, indexStore))
 			}
 		}
 	} else {
@@ -146,7 +151,64 @@ func runServe(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func makeV5Handler(store *artifact.Store, haftDir string, projCfg *project.Config, indexStore *project.IndexStore) fpf.V5ToolHandler {
+// buildHybridSearcher wires the optional embedding layer over the artifact
+// store. The embedder is resolved lazily on first search, so startup never
+// blocks on a first-run model download. A nil result (provider disabled or any
+// setup fault) means search runs FTS5+PPR only — recall never hard-fails on the
+// optional layer (dec-20260605-fe77b358).
+func buildHybridSearcher(store *artifact.Store, rawDB *sql.DB) recall.Searcher {
+	embCfg := embedding.Config{Provider: embedding.ProviderLocal}
+	if cfg, err := config.Load(); err == nil && cfg != nil {
+		if cfg.Embedding.Provider != "" {
+			embCfg.Provider = cfg.Embedding.Provider
+		}
+		embCfg.Model = cfg.Embedding.Model
+		embCfg.Dim = cfg.Embedding.Dim
+	}
+
+	if strings.EqualFold(strings.TrimSpace(embCfg.Provider), embedding.ProviderNone) {
+		logger.Info().Msg("hybrid recall disabled by config — using FTS5+PPR")
+		return nil
+	}
+
+	newEmbedder := func() (embedding.Embedder, error) {
+		embedder, err := embedding.New(embCfg)
+		if err != nil {
+			if embedding.Degraded(err) {
+				logger.Info().Err(err).Msg("embedding layer unavailable — using FTS5+PPR")
+			} else {
+				logger.Warn().Err(err).Msg("embedding layer setup failed — using FTS5+PPR")
+			}
+			return nil, err
+		}
+		descriptor := embedder.Descriptor()
+		logger.Info().
+			Str("provider", descriptor.Provider).
+			Str("model", descriptor.Model).
+			Int("dim", descriptor.Dimensions).
+			Msg("hybrid recall enabled")
+		return embedder, nil
+	}
+
+	return recall.NewHybrid(store, newEmbedder, rawDB)
+}
+
+// searchArtifacts routes a query through the hybrid searcher when one is wired,
+// and falls back to the store's FTS ranking otherwise. Same contract either way.
+func searchArtifacts(ctx context.Context, store *artifact.Store, searcher recall.Searcher, query string, limit int) ([]*artifact.Artifact, error) {
+	if searcher == nil {
+		return artifact.FetchSearchResults(ctx, store, query, limit)
+	}
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	return searcher.Search(ctx, query, limit)
+}
+
+func makeV5Handler(store *artifact.Store, searcher recall.Searcher, haftDir string, projCfg *project.Config, indexStore *project.IndexStore) fpf.V5ToolHandler {
 	return func(ctx context.Context, toolName string, rawParams json.RawMessage) (string, error) {
 		var params struct {
 			Name      string         `json:"name"`
@@ -161,7 +223,7 @@ func makeV5Handler(store *artifact.Store, haftDir string, projCfg *project.Confi
 		start := time.Now()
 
 		// Dispatch
-		result, createdRef, toolErr := dispatchTool(ctx, store, haftDir, params.Name, params.Arguments)
+		result, createdRef, toolErr := dispatchTool(ctx, store, searcher, haftDir, params.Name, params.Arguments)
 
 		// Post-dispatch hooks
 		logger.ToolResult(params.Name, action, time.Since(start).Milliseconds(), toolErr)
@@ -188,7 +250,7 @@ func makeV5Handler(store *artifact.Store, haftDir string, projCfg *project.Confi
 // ID of the artifact created by this call (e.g. "dec-20260418-a3f7c1d2"); empty
 // string when the action does not create a primary artifact (e.g. read-only
 // queries, mutations of existing artifacts).
-func dispatchTool(ctx context.Context, store *artifact.Store, haftDir string, name string, args map[string]any) (string, string, error) {
+func dispatchTool(ctx context.Context, store *artifact.Store, searcher recall.Searcher, haftDir string, name string, args map[string]any) (string, string, error) {
 	switch name {
 	case "haft_note":
 		result, err := handleQuintNote(ctx, store, haftDir, args)
@@ -205,7 +267,7 @@ func dispatchTool(ctx context.Context, store *artifact.Store, haftDir string, na
 		result, err := handleQuintRefresh(ctx, store, haftDir, args)
 		return result, "", err
 	case "haft_query":
-		result, err := handleQuintQuery(ctx, store, haftDir, args)
+		result, err := handleQuintQuery(ctx, store, searcher, haftDir, args)
 		return result, "", err
 	case "haft_commission":
 		args = commissionArgsWithProjectRoot(args, filepath.Dir(haftDir))
@@ -1247,7 +1309,7 @@ func handleQuintRefresh(ctx context.Context, store *artifact.Store, haftDir stri
 	}
 }
 
-func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string, args map[string]any) (string, error) {
+func handleQuintQuery(ctx context.Context, store *artifact.Store, searcher recall.Searcher, haftDir string, args map[string]any) (string, error) {
 	action, _ := args["action"].(string)
 	contextName, _ := args["context"].(string)
 	navStrip := present.NavStrip(artifact.ComputeNavState(ctx, store, contextName))
@@ -1259,7 +1321,7 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		if l, ok := args["limit"].(float64); ok {
 			limit = int(l)
 		}
-		results, err := artifact.FetchSearchResults(ctx, store, query, limit)
+		results, err := searchArtifacts(ctx, store, searcher, query, limit)
 		if err != nil {
 			return "", err
 		}

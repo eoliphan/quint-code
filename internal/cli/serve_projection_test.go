@@ -50,7 +50,7 @@ func TestHandleQuintQuery_ProjectionRendersAuditView(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := handleQuintQuery(ctx, store, haftDir, map[string]any{
+	result, err := handleQuintQuery(ctx, store, nil, haftDir, map[string]any{
 		"action":  "projection",
 		"view":    "audit",
 		"context": "payments",
@@ -113,7 +113,7 @@ func TestHandleQuintQuery_ProjectionRendersDelegatedBriefAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := handleQuintQuery(ctx, store, haftDir, map[string]any{
+	result, err := handleQuintQuery(ctx, store, nil, haftDir, map[string]any{
 		"action":  "projection",
 		"view":    "handoff",
 		"context": "payments",
@@ -185,7 +185,7 @@ func TestHandleQuintQuery_ProjectionRendersChangeRationaleAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := handleQuintQuery(ctx, store, haftDir, map[string]any{
+	result, err := handleQuintQuery(ctx, store, nil, haftDir, map[string]any{
 		"action":  "projection",
 		"view":    "pr",
 		"context": "payments",

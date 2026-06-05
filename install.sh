@@ -23,6 +23,7 @@ BIN_NAME="haft"
 BIN_DIRS=("$HOME/.local/bin" "/usr/local/bin")
 TUI_INSTALL_DIR="$HOME/.haft/tui"
 OPEN_SLEIGH_INSTALL_DIR="$HOME/.haft/runtimes/open-sleigh/current"
+HAFT_EMBED_INSTALL_DIR="$HOME/.haft/runtimes/haft-embed/current"
 
 print_logo() {
     local ORANGE='\033[38;5;208m'
@@ -183,12 +184,67 @@ install_open_sleigh_runtime_from_dir() {
     )
 }
 
+# The embedding sidecar (haft-embed) powers optional hybrid semantic recall.
+# It is OPTIONAL: when absent, haft search degrades to FTS5+PPR. So unlike the
+# Open-Sleigh runtime, a missing toolchain/binary here WARNS and continues —
+# never aborts the install.
+find_archive_haft_embed_runtime() {
+    local archive_root="$1"
+    local candidates=(
+        "$archive_root/runtimes/haft-embed/bin/haft-embed"
+        "$archive_root/haft-embed"
+        "$archive_root/bin/haft-embed"
+    )
+
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [[ -x "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+install_haft_embed_runtime_from_binary() {
+    local binary="$1"
+
+    if [[ ! -x "$binary" ]]; then
+        printf "${YELLOW}   ⚠ haft-embed binary not found at $binary — semantic recall disabled${RESET}\n"
+        return 1
+    fi
+
+    rm -rf "$HAFT_EMBED_INSTALL_DIR"
+    mkdir -p "$HAFT_EMBED_INSTALL_DIR/bin"
+    cp "$binary" "$HAFT_EMBED_INSTALL_DIR/bin/haft-embed"
+    chmod +x "$HAFT_EMBED_INSTALL_DIR/bin/haft-embed"
+}
+
+build_haft_embed_runtime_from_source() {
+    local repo_dir="$1"
+
+    if ! command -v cargo >/dev/null 2>&1; then
+        printf "${YELLOW}   ⚠ Rust/cargo not found — skipping optional embedding sidecar${RESET}\n"
+        printf "${DIM}   Install Rust (https://rustup.rs) and re-run to enable hybrid semantic search; search works without it (FTS5+PPR).${RESET}\n"
+        return 0
+    fi
+
+    (
+        cd "$repo_dir/embed-sidecar"
+        cargo build --release
+    ) &
+    spinner $! "Building embedding sidecar (haft-embed)"
+    install_haft_embed_runtime_from_binary "$repo_dir/embed-sidecar/target/release/haft-embed" || true
+}
+
 install_from_release_archive() {
     local archive_root="$1"
     local bin_dir="$2"
     local archive_binary
     local archive_tui
     local archive_open_sleigh
+    local archive_haft_embed
 
     archive_binary=$(find_archive_binary "$archive_root") || {
         printf "${RED}   ✗ Binary not found in archive${RESET}\n"
@@ -210,6 +266,12 @@ install_from_release_archive() {
     else
         printf "${YELLOW}   ⚠ Open-Sleigh runtime not found in release archive${RESET}\n"
         printf "${DIM}   Harness runs will require --runtime or a newer Haft release.${RESET}\n"
+    fi
+
+    if archive_haft_embed=$(find_archive_haft_embed_runtime "$archive_root"); then
+        install_haft_embed_runtime_from_binary "$archive_haft_embed" || true
+    else
+        printf "${DIM}   ⓘ Embedding sidecar not in release archive — semantic recall optional, search uses FTS5+PPR${RESET}\n"
     fi
 }
 
@@ -241,6 +303,8 @@ install_from_source_checkout() {
     ) &
     spinner $! "Building Open-Sleigh runtime"
     install_open_sleigh_runtime_from_dir "$repo_dir/open-sleigh/_build/prod/rel/open_sleigh"
+
+    build_haft_embed_runtime_from_source "$repo_dir"
 }
 
 main() {
@@ -294,6 +358,9 @@ main() {
     printf "   ${GREEN}✓${RESET} Installed TUI to ${WHITE}$TUI_INSTALL_DIR/bundle.mjs${RESET}\n"
     if [[ -x "$OPEN_SLEIGH_INSTALL_DIR/bin/open_sleigh" ]]; then
         printf "   ${GREEN}✓${RESET} Installed Open-Sleigh runtime to ${WHITE}$OPEN_SLEIGH_INSTALL_DIR${RESET}\n"
+    fi
+    if [[ -x "$HAFT_EMBED_INSTALL_DIR/bin/haft-embed" ]]; then
+        printf "   ${GREEN}✓${RESET} Installed embedding sidecar to ${WHITE}$HAFT_EMBED_INSTALL_DIR${RESET} (hybrid semantic recall)\n"
     fi
 
     # Check PATH

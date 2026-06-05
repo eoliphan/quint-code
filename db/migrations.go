@@ -421,4 +421,25 @@ var kernelMigrations = []Migration{
 			`CREATE INDEX IF NOT EXISTS idx_spec_section_baselines_project ON spec_section_baselines(project_id)`,
 		},
 	},
+	{
+		Version:     29,
+		Description: "Add artifact_embeddings cache for the optional hybrid recall layer",
+		Statements: []string{
+			// Optional vector cache for hybrid recall (dec-20260605-fe77b358).
+			// One row per (artifact, model contract); content_hash gates re-embed
+			// when an artifact changes; vector is float32 little-endian (dim*4
+			// bytes). Additive — dropping it just forces a recompute, never a
+			// migration to reverse. Search stays brute-force in-memory cosine.
+			`CREATE TABLE IF NOT EXISTS artifact_embeddings (
+				artifact_id TEXT NOT NULL,
+				provider TEXT NOT NULL,
+				model TEXT NOT NULL,
+				dim INTEGER NOT NULL,
+				content_hash TEXT NOT NULL,
+				vector BLOB NOT NULL,
+				updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (artifact_id, provider, model, dim)
+			)`,
+		},
+	},
 }

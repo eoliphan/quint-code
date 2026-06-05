@@ -1,0 +1,22 @@
+[package]
+name = "haft-embed"
+version = "0.1.0"
+edition = "2021"
+description = "Local embedding sidecar for haft — EmbeddingGemma over stdio JSON, augments FTS5+PPR recall"
+license = "Apache-2.0"
+
+[[bin]]
+name = "haft-embed"
+path = "src/main.rs"
+
+[dependencies]
+fastembed = "5.16"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

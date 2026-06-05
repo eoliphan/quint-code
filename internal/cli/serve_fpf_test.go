@@ -22,7 +22,7 @@ func TestHandleQuintQuery_FPFSupportsExplainFullAndLimit(t *testing.T) {
 
 	store := setupCLIArtifactStore(t)
 
-	result, err := handleQuintQuery(context.Background(), store, t.TempDir(), map[string]any{
+	result, err := handleQuintQuery(context.Background(), store, nil, t.TempDir(), map[string]any{
 		"action":  "fpf",
 		"query":   "boundary",
 		"limit":   float64(1),
@@ -54,7 +54,7 @@ func TestHandleQuintQuery_FPFSupportsExperimentalTreeMode(t *testing.T) {
 
 	store := setupCLIArtifactStore(t)
 
-	result, err := handleQuintQuery(context.Background(), store, t.TempDir(), map[string]any{
+	result, err := handleQuintQuery(context.Background(), store, nil, t.TempDir(), map[string]any{
 		"action":  "fpf",
 		"query":   "boundary deontics",
 		"limit":   float64(3),
@@ -80,7 +80,7 @@ func TestHandleQuintQuery_FPFQueryOnlyStaysBackwardCompatible(t *testing.T) {
 
 	store := setupCLIArtifactStore(t)
 
-	result, err := handleQuintQuery(context.Background(), store, t.TempDir(), map[string]any{
+	result, err := handleQuintQuery(context.Background(), store, nil, t.TempDir(), map[string]any{
 		"action": "fpf",
 		"query":  "A.6",
 	})
@@ -109,7 +109,7 @@ func TestHandleQuintQuery_FPFQueryOnlyUsesSharedDefaultLimit(t *testing.T) {
 
 	store := setupCLIArtifactStore(t)
 
-	result, err := handleQuintQuery(context.Background(), store, t.TempDir(), map[string]any{
+	result, err := handleQuintQuery(context.Background(), store, nil, t.TempDir(), map[string]any{
 		"action": "fpf",
 		"query":  "governance",
 	})
@@ -131,7 +131,7 @@ func TestHandleQuintQuery_FPFEmptyStateKeepsNavStrip(t *testing.T) {
 
 	store := setupCLIArtifactStore(t)
 
-	result, err := handleQuintQuery(context.Background(), store, t.TempDir(), map[string]any{
+	result, err := handleQuintQuery(context.Background(), store, nil, t.TempDir(), map[string]any{
 		"action": "fpf",
 		"query":  "definitely-not-present",
 	})
@@ -164,7 +164,7 @@ func TestHandleQuintQuery_RelatedArtifactIDReturnsProblemCardJSON(t *testing.T) 
 		t.Fatalf("create problem: %v", err)
 	}
 
-	result, err := handleQuintQuery(ctx, store, t.TempDir(), map[string]any{
+	result, err := handleQuintQuery(ctx, store, nil, t.TempDir(), map[string]any{
 		"action":      "related",
 		"artifact_id": problem.Meta.ID,
 	})
