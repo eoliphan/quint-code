@@ -132,8 +132,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 				}()
 
 				searcher := buildHybridSearcher(artStore, database.GetRawDB())
+				crossHybrid := buildCrossProjectHybrid(indexStore)
 
-				server.SetV5Handler(makeV5Handler(artStore, searcher, haftDir, projCfg, indexStore))
+				server.SetV5Handler(makeV5Handler(artStore, searcher, crossHybrid, haftDir, projCfg, indexStore))
 			}
 		}
 	} else {
@@ -157,15 +158,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 // setup fault) means search runs FTS5+PPR only — recall never hard-fails on the
 // optional layer (dec-20260605-fe77b358).
 func buildHybridSearcher(store *artifact.Store, rawDB *sql.DB) recall.Searcher {
-	embCfg := embedding.Config{Provider: embedding.ProviderLocal}
-	if cfg, err := config.Load(); err == nil && cfg != nil {
-		if cfg.Embedding.Provider != "" {
-			embCfg.Provider = cfg.Embedding.Provider
-		}
-		embCfg.Model = cfg.Embedding.Model
-		embCfg.Dim = cfg.Embedding.Dim
-	}
-
+	embCfg := embeddingConfigFromFile()
 	if strings.EqualFold(strings.TrimSpace(embCfg.Provider), embedding.ProviderNone) {
 		logger.Info().Msg("hybrid recall disabled by config — using FTS5+PPR")
 		return nil
@@ -192,6 +185,48 @@ func buildHybridSearcher(store *artifact.Store, rawDB *sql.DB) recall.Searcher {
 
 	hybrid := recall.NewHybrid(store, newEmbedder, rawDB)
 	hybrid.Prewarm() // warm the corpus index in the background so the first search is fast
+	return hybrid
+}
+
+// embeddingConfigFromFile resolves the embedding provider/model/dim from
+// ~/.haft/config.yaml, defaulting to the local sidecar.
+func embeddingConfigFromFile() embedding.Config {
+	embCfg := embedding.Config{Provider: embedding.ProviderLocal}
+	if cfg, err := config.Load(); err == nil && cfg != nil {
+		if cfg.Embedding.Provider != "" {
+			embCfg.Provider = cfg.Embedding.Provider
+		}
+		embCfg.Model = cfg.Embedding.Model
+		embCfg.Dim = cfg.Embedding.Dim
+	}
+	return embCfg
+}
+
+// buildCrossProjectHybrid wires the optional embedding layer over the
+// cross-project index, mirroring buildHybridSearcher. nil (provider disabled /
+// no index) means cross-project recall runs the FTS path (now AND+OR) only.
+func buildCrossProjectHybrid(indexStore *project.IndexStore) *project.CrossHybrid {
+	if indexStore == nil {
+		return nil
+	}
+	embCfg := embeddingConfigFromFile()
+	if strings.EqualFold(strings.TrimSpace(embCfg.Provider), embedding.ProviderNone) {
+		return nil
+	}
+	newEmbedder := func() (embedding.Embedder, error) {
+		embedder, err := embedding.New(embCfg)
+		if err != nil {
+			if embedding.Degraded(err) {
+				logger.Info().Err(err).Msg("embedding layer unavailable — cross-project recall uses FTS5")
+			} else {
+				logger.Warn().Err(err).Msg("embedding layer setup failed — cross-project recall uses FTS5")
+			}
+			return nil, err
+		}
+		return embedder, nil
+	}
+	hybrid := project.NewCrossHybrid(indexStore, newEmbedder)
+	hybrid.Prewarm() // background-warm the cross-project index so the first frame recall is fast
 	return hybrid
 }
 
@@ -225,7 +260,7 @@ func searchArtifacts(ctx context.Context, store *artifact.Store, searcher recall
 	return searcher.Search(ctx, query, limit)
 }
 
-func makeV5Handler(store *artifact.Store, searcher recall.Searcher, haftDir string, projCfg *project.Config, indexStore *project.IndexStore) fpf.V5ToolHandler {
+func makeV5Handler(store *artifact.Store, searcher recall.Searcher, crossHybrid *project.CrossHybrid, haftDir string, projCfg *project.Config, indexStore *project.IndexStore) fpf.V5ToolHandler {
 	return func(ctx context.Context, toolName string, rawParams json.RawMessage) (string, error) {
 		var params struct {
 			Name      string         `json:"name"`
@@ -246,9 +281,9 @@ func makeV5Handler(store *artifact.Store, searcher recall.Searcher, haftDir stri
 		logger.ToolResult(params.Name, action, time.Since(start).Milliseconds(), toolErr)
 
 		if toolErr == nil {
-			result = applyCrossProjectRecall(ctx, result, params.Name, action, params.Arguments, store, projCfg, indexStore)
+			result = applyCrossProjectRecall(ctx, result, params.Name, action, params.Arguments, store, projCfg, indexStore, crossHybrid)
 			result = applyGraphSeededRecall(ctx, result, params.Name, action, params.Arguments, store, haftDir)
-			applyCrossProjectIndex(ctx, params.Name, action, params.Arguments, createdRef, store, projCfg, indexStore)
+			applyCrossProjectIndex(ctx, params.Name, action, params.Arguments, createdRef, store, projCfg, indexStore, crossHybrid)
 			invalidateRecall(searcher, createdRef)
 		}
 
@@ -326,8 +361,10 @@ func logToolEntry(name, action string, args map[string]any) {
 	logger.ToolCall(name, action, logParams)
 }
 
-// applyCrossProjectRecall appends cross-project history to frame results.
-func applyCrossProjectRecall(ctx context.Context, result, name, action string, args map[string]any, store *artifact.Store, projCfg *project.Config, indexStore *project.IndexStore) string {
+// applyCrossProjectRecall appends cross-project history to frame results. When
+// the cross-project hybrid is wired it fuses semantic recall over FTS; otherwise
+// it falls back to the FTS path (now AND+OR) directly.
+func applyCrossProjectRecall(ctx context.Context, result, name, action string, args map[string]any, store *artifact.Store, projCfg *project.Config, indexStore *project.IndexStore, crossHybrid *project.CrossHybrid) string {
 	if name != "haft_problem" || action != "frame" || indexStore == nil || projCfg == nil {
 		return result
 	}
@@ -335,7 +372,14 @@ func applyCrossProjectRecall(ctx context.Context, result, name, action string, a
 	title, _ := args["title"].(string)
 	query := title + " " + signal
 	primaryLang := project.DetectPrimaryLanguage(store.DB())
-	recalls, err := indexStore.Search(ctx, query, projCfg.ID, primaryLang, 3)
+
+	var recalls []project.IndexRecall
+	var err error
+	if crossHybrid != nil {
+		recalls, err = crossHybrid.Search(ctx, query, projCfg.ID, primaryLang, 3)
+	} else {
+		recalls, err = indexStore.Search(ctx, query, projCfg.ID, primaryLang, 3)
+	}
 	if err != nil || len(recalls) == 0 {
 		return result
 	}
@@ -394,7 +438,7 @@ func applyGraphSeededRecall(ctx context.Context, result, name, action string, ar
 // decision_id MUST be the canonical artifact ID (e.g. "dec-20260418-a3f7c1d2"),
 // not the user-supplied selected_title — two decisions in one project can
 // legitimately share the same selected option label without colliding.
-func applyCrossProjectIndex(ctx context.Context, name, action string, args map[string]any, createdRef string, store *artifact.Store, projCfg *project.Config, indexStore *project.IndexStore) {
+func applyCrossProjectIndex(ctx context.Context, name, action string, args map[string]any, createdRef string, store *artifact.Store, projCfg *project.Config, indexStore *project.IndexStore, crossHybrid *project.CrossHybrid) {
 	if name != "haft_decision" || action != "decide" || indexStore == nil || projCfg == nil {
 		return
 	}
@@ -420,6 +464,13 @@ func applyCrossProjectIndex(ctx context.Context, name, action string, args map[s
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 	})
 	logger.Debug().Str("project", projCfg.ID).Str("decision", createdRef).Str("title", selectedTitle).Msg("index.write")
+
+	// A freshly-decided cross-project decision becomes semantically searchable
+	// same-session: rebuild the cross-project index in the background (cached
+	// vectors reused, only the new decision embeds).
+	if crossHybrid != nil {
+		crossHybrid.Invalidate()
+	}
 }
 
 // applyRefreshReminder appends a reminder if >5 days since last stale scan.
