@@ -27,12 +27,14 @@ func FetchCodeContext(ctx context.Context, store *artifact.Store, g *graph.Store
 	}
 	linked := fileLinked
 	granularity := ""
+	var symbolLinked []*artifact.Artifact
 
 	if target.Symbol != "" {
-		symbolLinked, gran, err := fetchSymbolLinked(ctx, store, target)
+		sl, gran, err := fetchSymbolLinked(ctx, store, target)
 		if err != nil {
 			return CodeContext{}, err
 		}
+		symbolLinked = sl
 		granularity = gran
 		linked = dedupeArtifacts(append(fileLinked, symbolLinked...))
 	}
@@ -44,10 +46,43 @@ func FetchCodeContext(ctx context.Context, store *artifact.Store, g *graph.Store
 
 	module, moduleDecisions := moduleStatus(ctx, g, target.File)
 
-	cc := BuildCodeContext(target, linked, invariants, module, len(moduleDecisions) > 0)
+	// A symbol view asserts "must hold here" ONLY for invariants whose decision
+	// governs the symbol directly; the file's module-level invariants become
+	// context, not constraints on this symbol.
+	binding, contextInv := partitionInvariants(invariants, target.Symbol, symbolLinked)
+
+	cc := BuildCodeContext(target, linked, binding, module, len(moduleDecisions) > 0)
 	cc.SymbolGranularity = granularity
 	cc.ModuleDecisions = moduleDecisions
+	cc.ContextInvariants = contextInv
 	return cc, nil
+}
+
+// partitionInvariants splits the file's invariants into those that BIND the
+// target and those that are merely module/file CONTEXT. For a file-level view
+// (no symbol) every invariant binds the file. For a symbol view only invariants
+// whose source decision governs the symbol directly (matched via affected_symbols)
+// bind it; the rest — pulled in by the file's module-level governance — are
+// context, so a roadmap invariant is never asserted as a constraint on a symbol
+// it does not govern. Pure.
+func partitionInvariants(invariants []graph.Invariant, symbol string, symbolLinked []*artifact.Artifact) (binding, contextInv []graph.Invariant) {
+	if symbol == "" {
+		return invariants, nil
+	}
+	symbolDecisions := make(map[string]bool, len(symbolLinked))
+	for _, a := range symbolLinked {
+		if a != nil && a.Meta.Kind == artifact.KindDecisionRecord {
+			symbolDecisions[a.Meta.ID] = true
+		}
+	}
+	for _, inv := range invariants {
+		if symbolDecisions[inv.DecisionID] {
+			binding = append(binding, inv)
+		} else {
+			contextInv = append(contextInv, inv)
+		}
+	}
+	return binding, contextInv
 }
 
 // fetchSymbolLinked resolves the symbol-scoped artifacts for a target, preferring

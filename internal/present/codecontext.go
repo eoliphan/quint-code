@@ -53,6 +53,14 @@ func CodeContextResponse(cc contextgraph.CodeContext) string {
 		b.WriteString("\n")
 	}
 
+	if len(cc.ContextInvariants) > 0 {
+		b.WriteString("### Module context — invariants of module-governing decisions (may not bind this symbol)\n")
+		for _, inv := range cc.ContextInvariants {
+			fmt.Fprintf(&b, "- %s _(from %s)_\n", inv.Text, inv.DecisionTitle)
+		}
+		b.WriteString("\n")
+	}
+
 	return b.String()
 }
 

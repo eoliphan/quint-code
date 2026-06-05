@@ -35,9 +35,16 @@ type CodeContext struct {
 	Problems   []*artifact.Artifact // ProblemCards framed around this code
 	Portfolios []*artifact.Artifact // SolutionPortfolios — the variants explored
 	Notes      []*artifact.Artifact // micro-decisions / rationale captured here
-	Invariants []graph.Invariant    // invariants that must hold here
+	Invariants []graph.Invariant    // invariants that bind the TARGET (must hold here)
 	Module     string               // module the file belongs to ("" if none)
 	Governed   bool                 // module carries ≥1 decision (vs. blind)
+
+	// ContextInvariants are invariants from decisions governing the file's MODULE
+	// that do NOT bind the target symbol directly. Surfaced as context, never as
+	// "must hold here", so module-level (e.g. roadmap) invariants are not asserted
+	// as constraints on a symbol they do not govern. Empty for a file-level view
+	// (where every file invariant binds the target).
+	ContextInvariants []graph.Invariant
 
 	// ModuleDecisions are the decisions governing the file's MODULE — surfaced
 	// so a symbol with no symbol-level link still shows "module governed by
@@ -56,7 +63,7 @@ type CodeContext struct {
 // Empty reports that no recorded reasoning touches this code — a signal the
 // agent can treat as "nothing decided here yet", not "lookup failed".
 func (c CodeContext) Empty() bool {
-	return len(c.Decisions)+len(c.Problems)+len(c.Portfolios)+len(c.Notes)+len(c.Invariants) == 0
+	return len(c.Decisions)+len(c.Problems)+len(c.Portfolios)+len(c.Notes)+len(c.Invariants)+len(c.ContextInvariants) == 0
 }
 
 // BuildCodeContext groups a flat, already-deduplicated slice of linked
