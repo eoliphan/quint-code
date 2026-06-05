@@ -130,12 +130,16 @@ func identChildren(clause *sitter.Node, content []byte) []string {
 	return out
 }
 
-// ResolveFileEdges makes JSTSLang an EdgeResolver: it emits `extends` and
-// `implements` edges from the explicit JS/TS heritage clauses, resolving each
-// base to exactly one package-local class/interface symbol. A base that does not
-// resolve locally (imported / third-party / ambiguous) is dropped, never guessed.
-// Call edges are deferred. Heuristic provenance: the clause is explicit, but name
-// resolution here is directory-scoped without module/import analysis.
+// ResolveFileEdges makes JSTSLang an EdgeResolver. It emits two edge families:
+//   - `extends` / `implements` edges from the explicit JS/TS heritage clauses,
+//     resolved directory-locally (heuristic provenance — no import analysis);
+//   - `call` edges, resolved through relative-import analysis (file-local defs,
+//     named imports `{Foo}`, and namespaced `ns.foo()` calls) with the same
+//     exactly-1-or-drop discipline (static provenance).
+//
+// A base or call that does not resolve to exactly one symbol is dropped, never
+// guessed. Default imports and instance-method calls (`obj.method()`) are left
+// unresolved — their target cannot be named soundly from the AST alone.
 func (j *JSTSLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath string, symbols SymbolView) ([]CodeEdge, error) {
 	lang := tsGrammarForExt(filepath.Ext(relPath))
 	if lang == nil {
@@ -143,10 +147,6 @@ func (j *JSTSLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath st
 	}
 	content, err := os.ReadFile(filepath.Join(projectRoot, relPath))
 	if err != nil {
-		return nil, nil
-	}
-	rels := extractTSHeritage(content, lang)
-	if len(rels) == 0 {
 		return nil, nil
 	}
 
@@ -157,6 +157,29 @@ func (j *JSTSLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath st
 	pkgSyms, err := symbols.GetByDir(ctx, filepath.Dir(relPath))
 	if err != nil {
 		return nil, err
+	}
+
+	var edges []CodeEdge
+	edges = append(edges, tsHeritageEdges(content, lang, relPath, fileSyms, pkgSyms)...)
+
+	lookup := func(name string) []CodeSymbol {
+		s, _ := symbols.GetByName(ctx, name)
+		return s
+	}
+	imports := extractTSImports(content, lang, filepath.Dir(relPath))
+	calls := extractTSCalls(content, lang)
+	edges = append(edges, resolveTSCallEdges(relPath, fileSyms, pkgSyms, calls, imports, lookup)...)
+
+	return dedupeEdges(edges), nil
+}
+
+// tsHeritageEdges resolves `extends` / `implements` edges from explicit heritage
+// clauses to exactly one directory-local class/interface symbol. A base that does
+// not resolve locally (imported / external / ambiguous) is dropped. Pure.
+func tsHeritageEdges(content []byte, lang *sitter.Language, relPath string, fileSyms, pkgSyms []CodeSymbol) []CodeEdge {
+	rels := extractTSHeritage(content, lang)
+	if len(rels) == 0 {
+		return nil
 	}
 
 	pkgByName := map[string][]CodeSymbol{}
@@ -194,5 +217,5 @@ func (j *JSTSLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath st
 			Provenance: ProvenanceHeuristic,
 		})
 	}
-	return dedupeEdges(edges), nil
+	return edges
 }

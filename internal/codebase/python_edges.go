@@ -79,20 +79,19 @@ func simpleBaseName(n *sitter.Node, content []byte) string {
 	return ""
 }
 
-// ResolveFileEdges makes PythonLang an EdgeResolver: it emits `extends` edges
-// (subclass -> base) for class inheritance resolvable WITHIN the file's package.
-// A base that does not resolve to exactly one local class (stdlib / third-party /
-// cross-module / ambiguous) is dropped — an unresolved base is an absent edge,
-// never a wrong one. Call edges are deferred (Python's dynamic dispatch cannot be
-// resolved soundly from the AST alone). Heuristic provenance: the base is explicit
-// in source, but name resolution here is package-scoped without import analysis.
+// ResolveFileEdges makes PythonLang an EdgeResolver. It emits two edge families:
+//   - `extends` edges (subclass -> base) from class inheritance, resolved within
+//     the file's package (heuristic provenance — no import analysis on bases);
+//   - `call` edges, resolved through import analysis (file-local defs, names
+//     imported via `from M import N`, and module-qualified `m.foo()` calls) with
+//     the same exactly-1-or-drop discipline (static provenance).
+//
+// Every unresolved base or call is an absent edge, never a guessed one. Dynamic
+// instance-method dispatch (`obj.method()` where obj is not an imported module)
+// is deliberately dropped — it cannot be typed soundly from the AST alone.
 func (p *PythonLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath string, symbols SymbolView) ([]CodeEdge, error) {
 	content, err := os.ReadFile(filepath.Join(projectRoot, relPath))
 	if err != nil {
-		return nil, nil
-	}
-	classes := extractPythonClassBases(content)
-	if len(classes) == 0 {
 		return nil, nil
 	}
 
@@ -105,8 +104,29 @@ func (p *PythonLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath 
 		return nil, err
 	}
 
-	// Package-local class symbols by name (for base resolution) and this file's
-	// class symbols (for the subclass endpoint).
+	var edges []CodeEdge
+	edges = append(edges, pythonHeritageEdges(content, relPath, fileSyms, pkgSyms)...)
+
+	lookup := func(name string) []CodeSymbol {
+		s, _ := symbols.GetByName(ctx, name)
+		return s
+	}
+	imports := extractPythonImports(content, filepath.Dir(relPath))
+	calls := extractPythonCalls(content)
+	edges = append(edges, resolvePythonCallEdges(relPath, fileSyms, pkgSyms, calls, imports, lookup)...)
+
+	return dedupeEdges(edges), nil
+}
+
+// pythonHeritageEdges resolves class-inheritance `extends` edges within the
+// package: a base that does not resolve to exactly one local class (stdlib /
+// third-party / cross-module / ambiguous) is dropped, never guessed. Pure.
+func pythonHeritageEdges(content []byte, relPath string, fileSyms, pkgSyms []CodeSymbol) []CodeEdge {
+	classes := extractPythonClassBases(content)
+	if len(classes) == 0 {
+		return nil
+	}
+
 	pkgClasses := map[string][]CodeSymbol{}
 	for _, s := range pkgSyms {
 		if s.Kind == "class" {
@@ -143,5 +163,5 @@ func (p *PythonLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath 
 			})
 		}
 	}
-	return dedupeEdges(edges), nil
+	return edges
 }
