@@ -106,35 +106,31 @@ func (p *PythonLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath 
 		return nil, err
 	}
 
-	var edges []CodeEdge
-	edges = append(edges, pythonHeritageEdges(root, content, relPath, fileSyms, pkgSyms)...)
-
 	lookup := func(name string) []CodeSymbol {
 		s, _ := symbols.GetByName(ctx, name)
 		return s
 	}
 	imports := extractPythonImports(root, content, filepath.Dir(relPath))
+
+	var edges []CodeEdge
+	edges = append(edges, pythonHeritageEdges(root, content, relPath, fileSyms, imports, lookup)...)
 	calls, callbacks := extractPythonCallsAndCallbacks(root, content)
 	edges = append(edges, resolvePythonCallEdges(relPath, fileSyms, pkgSyms, calls, callbacks, imports, lookup)...)
 
 	return dedupeEdges(edges), nil
 }
 
-// pythonHeritageEdges resolves class-inheritance `extends` edges within the
-// package: a base that does not resolve to exactly one local class (stdlib /
-// third-party / cross-module / ambiguous) is dropped, never guessed. Pure.
-func pythonHeritageEdges(root *sitter.Node, content []byte, relPath string, fileSyms, pkgSyms []CodeSymbol) []CodeEdge {
+// pythonHeritageEdges resolves class-inheritance `extends` edges with IMPORT
+// AWARENESS: a base resolves to a same-file class or to an explicitly imported
+// class, never to an unimported same-named class in a sibling module. A base that
+// resolves to neither (stdlib / third-party / unresolved) or to both (a shadowed
+// redefinition) is dropped — never guessed. Pure.
+func pythonHeritageEdges(root *sitter.Node, content []byte, relPath string, fileSyms []CodeSymbol, imports pythonImports, lookup func(string) []CodeSymbol) []CodeEdge {
 	classes := extractPythonClassBases(root, content)
 	if len(classes) == 0 {
 		return nil
 	}
 
-	pkgClasses := map[string][]CodeSymbol{}
-	for _, s := range pkgSyms {
-		if s.Kind == "class" {
-			pkgClasses[s.Name] = append(pkgClasses[s.Name], s)
-		}
-	}
 	fileClass := map[string]CodeSymbol{}
 	for _, s := range fileSyms {
 		if s.Kind == "class" {
@@ -152,13 +148,13 @@ func pythonHeritageEdges(root *sitter.Node, content []byte, relPath string, file
 			if b == c.name {
 				continue
 			}
-			cands := pkgClasses[b]
-			if len(cands) != 1 {
-				continue // unresolved (external) or ambiguous — drop, don't guess
+			dst := resolvePyBaseClass(b, fileClass, imports, lookup)
+			if dst == nil {
+				continue
 			}
 			edges = append(edges, CodeEdge{
 				SrcID:      sub.ID,
-				DstID:      cands[0].ID,
+				DstID:      dst.ID,
 				Kind:       EdgeExtends,
 				FilePath:   relPath,
 				Provenance: ProvenanceHeuristic,
@@ -166,4 +162,25 @@ func pythonHeritageEdges(root *sitter.Node, content []byte, relPath string, file
 		}
 	}
 	return edges
+}
+
+// resolvePyBaseClass resolves a base-class name to exactly one class symbol with
+// import awareness: an explicit `from M import Base` binding is authoritative for
+// the name in this file (resolved cross-module); else a same-file class. A name
+// that is BOTH imported and locally defined (a shadowed redefinition) or NEITHER
+// is dropped. Without this an unimported same-named class in a sibling module
+// would wrongly shadow the real imported base — a fabricated edge.
+func resolvePyBaseClass(b string, fileClass map[string]CodeSymbol, imports pythonImports, lookup func(string) []CodeSymbol) *CodeSymbol {
+	bind, imported := imports.names[b]
+	local, isLocal := fileClass[b]
+	if imported && isLocal {
+		return nil // shadowed redefinition — ambiguous, drop
+	}
+	if imported {
+		return resolveImportedName(bind.orig, bind.frag, lookup)
+	}
+	if isLocal {
+		return &local
+	}
+	return nil
 }

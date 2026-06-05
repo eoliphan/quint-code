@@ -12,12 +12,14 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
-// MethodSig is a method's structural signature for satisfaction matching: name
-// plus parameter arity. Arity raises precision over name-only matching (the
-// precision cliff) without full type comparison.
+// MethodSig is a method's name for satisfaction matching. Matching is NAME-
+// coverage only — no signature/arity comparison — so a same-name method with a
+// different signature is a possible false positive, which is exactly why
+// implements / interface_dispatch edges carry heuristic provenance. (Arity-based
+// precision would also need the CONCRETE side's arity, which the symbol store does
+// not extract; deferred rather than half-claimed.)
 type MethodSig struct {
-	Name  string
-	Arity int
+	Name string
 }
 
 // InterfaceDef is a Go interface and its method set, extracted structurally.
@@ -98,15 +100,7 @@ func ExtractGoInterfaces(projectRoot, relPath string) ([]InterfaceDef, error) {
 			if nameNode == nil {
 				continue
 			}
-			arity := 0
-			if params := child.ChildByFieldName("parameters"); params != nil {
-				for j := 0; j < int(params.NamedChildCount()); j++ {
-					if pc := params.NamedChild(j); pc != nil && pc.Type() == "parameter_declaration" {
-						arity++
-					}
-				}
-			}
-			def.Methods = append(def.Methods, MethodSig{Name: nameNode.Content(content), Arity: arity})
+			def.Methods = append(def.Methods, MethodSig{Name: nameNode.Content(content)})
 		}
 		if len(def.Methods) > 0 { // skip empty / marker interfaces
 			defs = append(defs, def)

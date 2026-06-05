@@ -68,3 +68,53 @@ class Cat extends External {}
 		t.Fatalf("expected exactly 4 heritage edges, got %d: %v", len(edges), got)
 	}
 }
+
+// TestTSHeritage_ImportedBaseNotShadowed is the regression for the heritage
+// wrong-edge bug: an imported base type must resolve to the imported one, never
+// to an unimported same-named type in a sibling module (the decoy).
+func TestTSHeritage_ImportedBaseNotShadowed(t *testing.T) {
+	st, root := newSymbolStore(t)
+	ctx := context.Background()
+
+	for _, d := range []string{"pkg", "other"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(rel, src string) {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.IndexFileSymbols(ctx, root, rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join("other", "real.ts"), "export class Animal {}\n")
+	write(filepath.Join("pkg", "decoy.ts"), "export class Animal {}\n") // shadow — must NOT win
+	zooRel := filepath.Join("pkg", "zoo.ts")
+	write(zooRel, "import { Animal } from '../other/real'\n\nclass Dog extends Animal {}\n")
+
+	js := &JSTSLang{}
+	edges, err := js.ResolveFileEdges(ctx, root, zooRel, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var extendsEdges int
+	for _, e := range edges {
+		if e.Kind != EdgeExtends {
+			continue
+		}
+		extendsEdges++
+		dst, ok, err := st.GetByID(ctx, e.DstID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || filepath.ToSlash(dst.FilePath) != "other/real.ts" {
+			t.Errorf("Dog should extend other/real.ts::Animal (the import), got %s::%s — decoy shadowed the imported base", dst.FilePath, dst.Name)
+		}
+	}
+	if extendsEdges != 1 {
+		t.Errorf("expected exactly 1 extends edge (Dog->imported Animal), got %d", extendsEdges)
+	}
+}

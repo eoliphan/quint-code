@@ -161,14 +161,15 @@ func (j *JSTSLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath st
 		return nil, err
 	}
 
-	var edges []CodeEdge
-	edges = append(edges, tsHeritageEdges(root, content, relPath, fileSyms, pkgSyms)...)
-
 	lookup := func(name string) []CodeSymbol {
 		s, _ := symbols.GetByName(ctx, name)
 		return s
 	}
 	imports := extractTSImports(root, content, filepath.Dir(relPath), loadTSProjectResolution(projectRoot))
+
+	var edges []CodeEdge
+	edges = append(edges, tsHeritageEdges(root, content, relPath, fileSyms, imports, lookup)...)
+
 	calls, callbacks := extractTSCallsAndCallbacks(root, content, lang)
 	callEdges := resolveTSCallEdges(relPath, fileSyms, pkgSyms, calls, callbacks, imports, lookup)
 	edges = append(edges, callEdges...)
@@ -181,20 +182,16 @@ func (j *JSTSLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath st
 }
 
 // tsHeritageEdges resolves `extends` / `implements` edges from explicit heritage
-// clauses to exactly one directory-local class/interface symbol. A base that does
-// not resolve locally (imported / external / ambiguous) is dropped. Pure.
-func tsHeritageEdges(root *sitter.Node, content []byte, relPath string, fileSyms, pkgSyms []CodeSymbol) []CodeEdge {
+// clauses with IMPORT AWARENESS: a base resolves to a same-file class/interface
+// or to an explicitly imported one, never to an unimported same-named type in a
+// sibling module. A base that resolves to neither (external / unresolved) or to
+// both (a shadowed redefinition) is dropped — never guessed. Pure.
+func tsHeritageEdges(root *sitter.Node, content []byte, relPath string, fileSyms []CodeSymbol, imports tsImports, lookup func(string) []CodeSymbol) []CodeEdge {
 	rels := extractTSHeritage(root, content)
 	if len(rels) == 0 {
 		return nil
 	}
 
-	pkgByName := map[string][]CodeSymbol{}
-	for _, s := range pkgSyms {
-		if s.Kind == "class" || s.Kind == "interface" {
-			pkgByName[s.Name] = append(pkgByName[s.Name], s)
-		}
-	}
 	fileByName := map[string]CodeSymbol{}
 	for _, s := range fileSyms {
 		if s.Kind == "class" || s.Kind == "interface" {
@@ -208,9 +205,9 @@ func tsHeritageEdges(root *sitter.Node, content []byte, relPath string, fileSyms
 		if !ok || r.baseName == r.subType {
 			continue
 		}
-		cands := pkgByName[r.baseName]
-		if len(cands) != 1 {
-			continue // imported / external / ambiguous — drop, don't guess
+		dst := resolveTSBaseType(r.baseName, fileByName, imports, lookup)
+		if dst == nil {
+			continue
 		}
 		kind := EdgeImplements
 		if r.extends {
@@ -218,11 +215,40 @@ func tsHeritageEdges(root *sitter.Node, content []byte, relPath string, fileSyms
 		}
 		edges = append(edges, CodeEdge{
 			SrcID:      sub.ID,
-			DstID:      cands[0].ID,
+			DstID:      dst.ID,
 			Kind:       kind,
 			FilePath:   relPath,
 			Provenance: ProvenanceHeuristic,
 		})
 	}
 	return edges
+}
+
+// resolveTSBaseType resolves a base type name to exactly one class/interface with
+// import awareness: an explicit named import is authoritative for the name in this
+// file (resolved cross-module), else a same-file type. A name that is BOTH
+// imported and locally defined, or NEITHER, is dropped. Without this an unimported
+// same-named type in a sibling module would wrongly shadow the imported base.
+func resolveTSBaseType(b string, fileByName map[string]CodeSymbol, imports tsImports, lookup func(string) []CodeSymbol) *CodeSymbol {
+	bind, imported := imports.names[b]
+	local, isLocal := fileByName[b]
+	if imported && isLocal {
+		return nil // shadowed redefinition — ambiguous, drop
+	}
+	if imported {
+		var cands []CodeSymbol
+		for _, s := range lookup(bind.orig) {
+			if (s.Kind == "class" || s.Kind == "interface") && tsFileMatchesBase(s.FilePath, bind.base) {
+				cands = append(cands, s)
+			}
+		}
+		if len(cands) != 1 {
+			return nil
+		}
+		return &cands[0]
+	}
+	if isLocal {
+		return &local
+	}
+	return nil
 }
