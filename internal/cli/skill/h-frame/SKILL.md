@@ -111,9 +111,15 @@ mcp__haft__haft_problem(
   observation_indicators=["<Anti-Goodhart watch 1>"],
   blast_radius="<what systems/teams affected>",
   reversibility="low|medium|high",
+  seed_file="<file the framing is about, if any>",
   mode="tactical|standard|deep"
 )
 ```
+
+When the problem is about a concrete file, pass `seed_file`: the response then
+appends the artifacts the fused code+reasoning graph ranks nearest it — surfacing
+a decision that already governs that code but which keyword recall would miss
+(phrased differently). Check it before re-deciding what may already be decided.
 
 ### Step 10 — On success
 

@@ -168,6 +168,7 @@ func makeV5Handler(store *artifact.Store, haftDir string, projCfg *project.Confi
 
 		if toolErr == nil {
 			result = applyCrossProjectRecall(ctx, result, params.Name, action, params.Arguments, store, projCfg, indexStore)
+			result = applyGraphSeededRecall(ctx, result, params.Name, action, params.Arguments, store, haftDir)
 			applyCrossProjectIndex(ctx, params.Name, action, params.Arguments, createdRef, store, projCfg, indexStore)
 		}
 
@@ -270,6 +271,42 @@ func applyCrossProjectRecall(ctx context.Context, result, name, action string, a
 			r.DecisionID, r.Title, truncateStr(r.WhySelected, 120), clLabel, r.ProjectName)
 	}
 	return result + "\n"
+}
+
+// applyGraphSeededRecall appends, on a frame that names a seed_file, the artifacts
+// the FUSED code+reasoning graph ranks NEAREST that file — closing the gap where
+// the keyword-based recall (recallRelated FTS5) misses a decision governing the
+// exact file but phrased differently. Best-effort: any error or empty result
+// leaves the frame response unchanged. Lives in the shell because the artifact
+// core cannot import the code-graph (codeintel).
+func applyGraphSeededRecall(ctx context.Context, result, name, action string, args map[string]any, store *artifact.Store, haftDir string) string {
+	if name != "haft_problem" || action != "frame" {
+		return result
+	}
+	seedFileRaw, _ := args["seed_file"].(string)
+	seedFile := strings.TrimSpace(seedFileRaw)
+	if seedFile == "" {
+		return result
+	}
+	projectRoot := filepath.Dir(haftDir)
+	ranked, err := codeintel.NewService(store).RelatedToFile(ctx, projectRoot, seedFile, 6)
+	if err != nil || len(ranked) == 0 {
+		return result
+	}
+	lines := make([]string, 0, len(ranked))
+	for _, r := range ranked {
+		if r.Kind != codeintel.RelatedArtifact {
+			continue // symbols are not recall — only governing/related artifacts
+		}
+		lines = append(lines, fmt.Sprintf("- **%s** `%s`", r.Title, r.ID))
+	}
+	if len(lines) == 0 {
+		return result
+	}
+	result += fmt.Sprintf("\n## Governed nearby (graph recall for %s)\n\n", seedFile)
+	result += strings.Join(lines, "\n") + "\n"
+	result += "\n_Nearest artifacts in the fused graph — surfaced because keyword recall can miss a decision phrased differently. Check before re-deciding._\n"
+	return result
 }
 
 // applyCrossProjectIndex writes decision summaries to the global index on

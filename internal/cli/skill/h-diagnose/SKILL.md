@@ -40,9 +40,37 @@ mcp__haft__haft_problem(
 
 Capture the returned `prob-...` ID for downstream subagent calls.
 
+## Step 2.5 — Ground the failing symbol in the graph (when the signal names code)
+
+If the signal names a concrete failing symbol or file, run this ONCE in THIS
+orchestrator. The Step 4 hypothesis subagents are read-only investigators and
+**cannot call `haft_query`** — only you can pull the graph and pass it down, so do
+it here:
+
+```
+mcp__haft__haft_query(action="code_context", file="<file>", symbol="<failing symbol>")
+```
+
+Extract a compact **graph-context block** from the result:
+- the **invariants that must hold here** (each `_(from dec-…)_`) — a *violated*
+  invariant is a concrete, named root-cause hypothesis, not a guess;
+- the **trust-decay tags** on the governing decisions (`[refresh-due]`,
+  `· N/M predictions unverified`). A STALE governing decision is itself a prime
+  suspect: if the decision governing this code was never verified, its assumptions
+  may no longer hold. Agents systematically MISS this hypothesis class because they
+  reason about the code, not about the decay of the reasoning ABOUT the code.
+
+If the signal does NOT name code (environmental, data, flaky infra), SKIP this step
+— the graph adds nothing there; do not force it. Keep the block; you inject it into
+every Step 4 subagent.
+
 ## Step 3 — Generate ≥3 hypotheses (B.5.2 abductive)
 
 Produce 3-5 candidate root causes. They MUST differ in kind, not degree (FPF EXP-08). If you have three cache hypotheses, force at least one that ISN'T cache-related (data flow, race condition, environmental, etc.).
+
+When Step 2.5 surfaced governed code, make at least one hypothesis structural: a
+**violated invariant** or a **stale governing decision** whose assumptions may no
+longer hold. This is the hypothesis class abduction-on-code-alone misses.
 
 For each hypothesis state:
 - One sentence claim
@@ -64,6 +92,11 @@ Agent(
     Your hypothesis: <hypothesis claim>
     Why-plausible: <one-line>
     Discriminating probe: <one-line probe>
+
+    Graph context (the orchestrator pulled this from haft's fused graph — you
+    CANNOT query it yourself, so use what is given):
+    <the Step 2.5 graph-context block: invariants that must hold here + governing
+    decisions with their trust-decay; or "none — this code is ungoverned">
 
     Allowed tools: Read, Grep, Glob, Bash (test runners only — no edits).
     NOT allowed: Write, Edit, NotebookEdit. You are READ-ONLY.

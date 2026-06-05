@@ -284,6 +284,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 							"type":        "string",
 							"description": "(frame) What systems/teams are affected",
 						},
+						"seed_file": map[string]string{
+							"type":        "string",
+							"description": "(frame) Optional file the framing is about. When set, the response appends the artifacts the fused code+reasoning graph ranks nearest that file — catching a decision governing it that keyword recall would miss.",
+						},
 						"reversibility": map[string]string{
 							"type":        "string",
 							"description": "(frame) How easy to undo — low/medium/high",
