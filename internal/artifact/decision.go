@@ -1128,6 +1128,11 @@ func CheckDrift(ctx context.Context, store ArtifactStore, projectRoot string) ([
 	// Notes are observations, not implementations — skip baseline/drift checks for them
 
 	var reports []DriftReport
+	// Memoize the per-scope tree walk across decisions: many decisions share the
+	// whole-repo "." scope, so without this /h-status re-walks the entire tree
+	// once per such decision — the dominant cost of the session-mandatory status
+	// check. One walk per distinct scope per drift pass.
+	scopeCache := map[string][]string{}
 
 	for _, d := range decisions {
 		decisionArtifact, err := store.Get(ctx, d.Meta.ID)
@@ -1211,7 +1216,7 @@ func CheckDrift(ctx context.Context, store ArtifactStore, projectRoot string) ([
 			}
 		}
 
-		addedFiles, err := detectAddedFiles(projectRoot, files, decisionFields.DriftManifests)
+		addedFiles, err := detectAddedFiles(projectRoot, files, decisionFields.DriftManifests, scopeCache)
 		if err != nil {
 			return nil, fmt.Errorf("detect added files for %s: %w", d.Meta.ID, err)
 		}
@@ -1294,6 +1299,7 @@ func detectAddedFiles(
 	projectRoot string,
 	files []AffectedFile,
 	manifests []DriftScopeManifest,
+	scopeCache map[string][]string,
 ) ([]string, error) {
 	if len(manifests) == 0 {
 		return nil, nil
@@ -1311,7 +1317,7 @@ func detectAddedFiles(
 			baselinedFiles[normalizeProjectPath(path)] = struct{}{}
 		}
 
-		scopeFiles, err := listScopeFiles(projectRoot, manifest.Scope)
+		scopeFiles, err := listScopeFilesCached(projectRoot, manifest.Scope, scopeCache)
 		if err != nil {
 			return nil, fmt.Errorf("list scope %s: %w", manifest.Scope, err)
 		}
@@ -1332,6 +1338,26 @@ func detectAddedFiles(
 	sort.Strings(addedFiles)
 
 	return addedFiles, nil
+}
+
+// listScopeFilesCached memoizes listScopeFiles by normalized scope within one
+// drift pass, so a scope walked for many decisions (especially the whole-repo
+// ".") is walked only once. nil cache falls through to a direct walk.
+func listScopeFilesCached(projectRoot, scope string, cache map[string][]string) ([]string, error) {
+	scope = normalizeDriftScope(scope)
+	if cache != nil {
+		if v, ok := cache[scope]; ok {
+			return v, nil
+		}
+	}
+	files, err := listScopeFiles(projectRoot, scope)
+	if err != nil {
+		return nil, err
+	}
+	if cache != nil {
+		cache[scope] = files
+	}
+	return files, nil
 }
 
 func listScopeFiles(projectRoot string, scope string) ([]string, error) {
