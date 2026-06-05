@@ -17,6 +17,12 @@ const (
 	EdgeImplements        EdgeKind = "implements"
 	EdgeExtends           EdgeKind = "extends"
 	EdgeEmbeds            EdgeKind = "embeds"
+	// EdgeCallback is a synthesized indirect-call edge: a named function passed
+	// as a callback argument (`register(handler)`, `emitter.on("x", handler)`) is
+	// invoked later through dynamic dispatch the AST cannot follow directly. The
+	// edge wires the registration site to the handler so callback-only functions
+	// are not falsely shown as having zero callers. Always heuristic provenance.
+	EdgeCallback EdgeKind = "callback"
 )
 
 // Provenance records how an edge was established. static = resolved directly

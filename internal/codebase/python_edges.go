@@ -16,27 +16,19 @@ type classBases struct {
 	bases []string
 }
 
-// extractPythonClassBases parses a Python file and returns each class with the
-// identifier names in its superclass list. Pure relative to file content; uses
-// the same tree-sitter grammar as symbol extraction. A base that is not a plain
-// identifier or a `pkg.Base` attribute (e.g. a keyword arg metaclass=…, or a
-// subscript Generic[T]) yields nothing for that base — never a guessed name.
-func extractPythonClassBases(content []byte) []classBases {
-	parser := sitter.NewParser()
-	parser.SetLanguage(python.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, content)
-	if err != nil {
-		return nil
-	}
-	defer tree.Close()
-
+// extractPythonClassBases returns each class in a parsed Python file with the
+// identifier names in its superclass list. Pure relative to (root, content). A
+// base that is not a plain identifier or a `pkg.Base` attribute (e.g. a keyword
+// arg metaclass=…, or a subscript Generic[T]) yields nothing for that base —
+// never a guessed name.
+func extractPythonClassBases(root *sitter.Node, content []byte) []classBases {
 	q, err := sitter.NewQuery([]byte("(class_definition) @c"), python.GetLanguage())
 	if err != nil {
 		return nil
 	}
 	defer q.Close()
 	qc := sitter.NewQueryCursor()
-	qc.Exec(q, tree.RootNode())
+	qc.Exec(q, root)
 
 	var out []classBases
 	for {
@@ -95,6 +87,16 @@ func (p *PythonLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath 
 		return nil, nil
 	}
 
+	// Parse the file ONCE; every extractor reads the shared tree.
+	parser := sitter.NewParser()
+	parser.SetLanguage(python.GetLanguage())
+	tree, err := parser.ParseCtx(ctx, nil, content)
+	if err != nil {
+		return nil, nil
+	}
+	defer tree.Close()
+	root := tree.RootNode()
+
 	fileSyms, err := symbols.GetByFile(ctx, relPath)
 	if err != nil {
 		return nil, err
@@ -105,15 +107,15 @@ func (p *PythonLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath 
 	}
 
 	var edges []CodeEdge
-	edges = append(edges, pythonHeritageEdges(content, relPath, fileSyms, pkgSyms)...)
+	edges = append(edges, pythonHeritageEdges(root, content, relPath, fileSyms, pkgSyms)...)
 
 	lookup := func(name string) []CodeSymbol {
 		s, _ := symbols.GetByName(ctx, name)
 		return s
 	}
-	imports := extractPythonImports(content, filepath.Dir(relPath))
-	calls := extractPythonCalls(content)
-	edges = append(edges, resolvePythonCallEdges(relPath, fileSyms, pkgSyms, calls, imports, lookup)...)
+	imports := extractPythonImports(root, content, filepath.Dir(relPath))
+	calls, callbacks := extractPythonCallsAndCallbacks(root, content)
+	edges = append(edges, resolvePythonCallEdges(relPath, fileSyms, pkgSyms, calls, callbacks, imports, lookup)...)
 
 	return dedupeEdges(edges), nil
 }
@@ -121,8 +123,8 @@ func (p *PythonLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath 
 // pythonHeritageEdges resolves class-inheritance `extends` edges within the
 // package: a base that does not resolve to exactly one local class (stdlib /
 // third-party / cross-module / ambiguous) is dropped, never guessed. Pure.
-func pythonHeritageEdges(content []byte, relPath string, fileSyms, pkgSyms []CodeSymbol) []CodeEdge {
-	classes := extractPythonClassBases(content)
+func pythonHeritageEdges(root *sitter.Node, content []byte, relPath string, fileSyms, pkgSyms []CodeSymbol) []CodeEdge {
+	classes := extractPythonClassBases(root, content)
 	if len(classes) == 0 {
 		return nil
 	}

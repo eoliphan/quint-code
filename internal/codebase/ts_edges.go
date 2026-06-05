@@ -36,15 +36,7 @@ func tsGrammarForExt(ext string) *sitter.Language {
 // relation (extends / implements), reading the explicit clauses from the AST.
 // Pure relative to file content. JS has only class `extends`; TS adds class
 // `implements` and interface `extends`.
-func extractTSHeritage(content []byte, lang *sitter.Language) []heritageRel {
-	parser := sitter.NewParser()
-	parser.SetLanguage(lang)
-	tree, err := parser.ParseCtx(context.Background(), nil, content)
-	if err != nil {
-		return nil
-	}
-	defer tree.Close()
-
+func extractTSHeritage(root *sitter.Node, content []byte) []heritageRel {
 	var out []heritageRel
 	var walk func(n *sitter.Node)
 	walk = func(n *sitter.Node) {
@@ -71,7 +63,7 @@ func extractTSHeritage(content []byte, lang *sitter.Language) []heritageRel {
 			walk(n.NamedChild(i))
 		}
 	}
-	walk(tree.RootNode())
+	walk(root)
 	return out
 }
 
@@ -150,6 +142,16 @@ func (j *JSTSLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath st
 		return nil, nil
 	}
 
+	// Parse the file ONCE; every extractor reads the shared tree.
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(ctx, nil, content)
+	if err != nil {
+		return nil, nil
+	}
+	defer tree.Close()
+	root := tree.RootNode()
+
 	fileSyms, err := symbols.GetByFile(ctx, relPath)
 	if err != nil {
 		return nil, err
@@ -160,15 +162,15 @@ func (j *JSTSLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath st
 	}
 
 	var edges []CodeEdge
-	edges = append(edges, tsHeritageEdges(content, lang, relPath, fileSyms, pkgSyms)...)
+	edges = append(edges, tsHeritageEdges(root, content, relPath, fileSyms, pkgSyms)...)
 
 	lookup := func(name string) []CodeSymbol {
 		s, _ := symbols.GetByName(ctx, name)
 		return s
 	}
-	imports := extractTSImports(content, lang, filepath.Dir(relPath))
-	calls := extractTSCalls(content, lang)
-	edges = append(edges, resolveTSCallEdges(relPath, fileSyms, pkgSyms, calls, imports, lookup)...)
+	imports := extractTSImports(root, content, filepath.Dir(relPath), loadTSProjectResolution(projectRoot))
+	calls, callbacks := extractTSCallsAndCallbacks(root, content, lang)
+	edges = append(edges, resolveTSCallEdges(relPath, fileSyms, pkgSyms, calls, callbacks, imports, lookup)...)
 
 	return dedupeEdges(edges), nil
 }
@@ -176,8 +178,8 @@ func (j *JSTSLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath st
 // tsHeritageEdges resolves `extends` / `implements` edges from explicit heritage
 // clauses to exactly one directory-local class/interface symbol. A base that does
 // not resolve locally (imported / external / ambiguous) is dropped. Pure.
-func tsHeritageEdges(content []byte, lang *sitter.Language, relPath string, fileSyms, pkgSyms []CodeSymbol) []CodeEdge {
-	rels := extractTSHeritage(content, lang)
+func tsHeritageEdges(root *sitter.Node, content []byte, relPath string, fileSyms, pkgSyms []CodeSymbol) []CodeEdge {
+	rels := extractTSHeritage(root, content)
 	if len(rels) == 0 {
 		return nil
 	}

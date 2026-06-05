@@ -402,6 +402,11 @@ func rankSymbolMatches(syms []CodeSymbol, q string) {
 		if ti, tj := tier(syms[i]), tier(syms[j]); ti != tj {
 			return ti < tj
 		}
+		// A generated stub (protobuf, mock, codegen) shares names with the
+		// hand-written code it wraps — surface the real implementation first.
+		if gi, gj := textsearch.IsGeneratedPath(syms[i].FilePath), textsearch.IsGeneratedPath(syms[j].FilePath); gi != gj {
+			return !gi
+		}
 		if syms[i].Exported != syms[j].Exported {
 			return syms[i].Exported // exported API before internals
 		}

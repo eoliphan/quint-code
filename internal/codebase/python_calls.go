@@ -1,7 +1,6 @@
 package codebase
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 
@@ -73,19 +72,11 @@ func pyModuleFrag(mod *sitter.Node, content []byte, fileDir string) string {
 	return ""
 }
 
-// extractPythonImports reads the import statements of a Python file and resolves
-// each to a module path fragment. Pure relative to content + fileDir.
-func extractPythonImports(content []byte, fileDir string) pythonImports {
+// extractPythonImports reads the import statements of a parsed Python file and
+// resolves each to a module path fragment. Pure relative to (root, content,
+// fileDir); the caller owns the tree (parsed once per file).
+func extractPythonImports(root *sitter.Node, content []byte, fileDir string) pythonImports {
 	res := pythonImports{names: map[string]pyNameImport{}, modules: map[string]string{}}
-	parser := sitter.NewParser()
-	parser.SetLanguage(python.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, content)
-	if err != nil {
-		return res
-	}
-	defer tree.Close()
-
-	root := tree.RootNode()
 	for i := 0; i < int(root.NamedChildCount()); i++ {
 		n := root.NamedChild(i)
 		switch n.Type() {
@@ -147,34 +138,30 @@ func collectPythonFromStmt(n *sitter.Node, content []byte, fileDir string, res *
 	}
 }
 
-// extractPythonCalls walks a Python file's call expressions. An unqualified call
-// (`foo()`) has empty Qualifier; an attribute call (`m.foo()`, `a.b.foo()`) carries
-// the object's full text as Qualifier. Pure relative to content.
-func extractPythonCalls(content []byte) []CallSite {
-	parser := sitter.NewParser()
-	parser.SetLanguage(python.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, content)
-	if err != nil {
-		return nil
-	}
-	defer tree.Close()
-
+// extractPythonCallsAndCallbacks walks a parsed Python file's call expressions in
+// ONE pass, returning the call sites (callee + qualifier) and the bare-identifier
+// arguments of each call (candidate callbacks tagged with the call's callee, so a
+// precision gate can keep only callback-shaped sinks). Pure relative to (root,
+// content).
+func extractPythonCallsAndCallbacks(root *sitter.Node, content []byte) ([]CallSite, []callbackRef) {
 	q, err := sitter.NewQuery([]byte(`(call) @c`), python.GetLanguage())
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	defer q.Close()
 	qc := sitter.NewQueryCursor()
-	qc.Exec(q, tree.RootNode())
+	qc.Exec(q, root)
 
 	var sites []CallSite
+	var refs []callbackRef
 	for {
 		m, ok := qc.NextMatch()
 		if !ok {
 			break
 		}
 		for _, capture := range m.Captures {
-			fn := capture.Node.ChildByFieldName("function")
+			call := capture.Node
+			fn := call.ChildByFieldName("function")
 			if fn == nil {
 				continue
 			}
@@ -196,10 +183,92 @@ func extractPythonCalls(content []byte) []CallSite {
 			if callee == "" {
 				continue
 			}
-			sites = append(sites, CallSite{Callee: callee, Qualifier: qualifier, Line: int(capture.Node.StartPoint().Row) + 1})
+			line := int(call.StartPoint().Row) + 1
+			sites = append(sites, CallSite{Callee: callee, Qualifier: qualifier, Line: line})
+			if args := call.ChildByFieldName("arguments"); args != nil {
+				for i := 0; i < int(args.NamedChildCount()); i++ {
+					if a := args.NamedChild(i); a.Type() == "identifier" {
+						refs = append(refs, callbackRef{callee: callee, name: a.Content(content), line: line})
+					}
+				}
+			}
 		}
 	}
-	return sites
+	return sites, refs
+}
+
+// callbackRef is one function-reference argument passed to a call — a candidate
+// callback whose enclosing function is wired to it through indirect dispatch.
+// callee is the called name, used to gate on callback-shaped sinks.
+type callbackRef struct {
+	callee string
+	name   string
+	line   int
+}
+
+// callbackSinkNames are call targets that conventionally ACCEPT a callback — a
+// function-reference argument to one of these is treated as a wired callback; a
+// function passed to any other call is plain data, not a callback.
+var callbackSinkNames = map[string]bool{
+	"subscribe": true, "addlistener": true, "addeventlistener": true,
+	"removeeventlistener": true, "addcallback": true, "addhandler": true,
+	"register": true, "connect": true, "listen": true, "watch": true,
+	"bind": true, "on": true, "once": true, "off": true,
+	"then": true, "catch": true, "finally": true,
+	"map": true, "filter": true, "foreach": true, "reduce": true,
+	"find": true, "some": true, "every": true, "flatmap": true, "sorted": true,
+	"settimeout": true, "setinterval": true, "setimmediate": true,
+	"nexttick": true, "defer": true, "use": true, "pipe": true, "tap": true,
+}
+
+// looksLikeCallbackSink reports whether a call target conventionally accepts a
+// callback: a known sink name, or an `on<Capital>` / `on_<x>` registrar.
+func looksLikeCallbackSink(callee string) bool {
+	if callbackSinkNames[strings.ToLower(callee)] {
+		return true
+	}
+	if len(callee) >= 3 && (callee[0] == 'o' || callee[0] == 'O') && callee[1] == 'n' {
+		r := callee[2]
+		return r == '_' || (r >= 'A' && r <= 'Z')
+	}
+	return false
+}
+
+// synthesizeCallbackEdges wires each callback-argument reference to the single
+// FUNCTION it names, as a heuristic EdgeCallback from the enclosing function. A
+// reference that resolves to a variable, a class, an unknown, or an ambiguous
+// name is dropped — the no-wrong-edge discipline, applied to indirect calls. A
+// pair already connected by a direct call edge is skipped (the call subsumes it).
+func synthesizeCallbackEdges(relPath string, fileSyms []CodeSymbol, refs []callbackRef, callPairs map[string]bool, resolve func(name string) *CodeSymbol) []CodeEdge {
+	seen := map[string]bool{}
+	var edges []CodeEdge
+	for _, r := range refs {
+		if !looksLikeCallbackSink(r.callee) {
+			continue // the call is not a callback sink — the arg is plain data, not a callback
+		}
+		caller := enclosingSymbol(fileSyms, r.line)
+		if caller == nil {
+			continue
+		}
+		dst := resolve(r.name)
+		if dst == nil || dst.Kind != "func" || dst.ID == caller.ID {
+			continue
+		}
+		key := caller.ID + "->" + dst.ID
+		if seen[key] || callPairs[key] {
+			continue
+		}
+		seen[key] = true
+		edges = append(edges, CodeEdge{
+			SrcID:      caller.ID,
+			DstID:      dst.ID,
+			Kind:       EdgeCallback,
+			FilePath:   relPath,
+			Line:       r.line,
+			Provenance: ProvenanceHeuristic,
+		})
+	}
+	return edges
 }
 
 // pyFileMatchesModule reports whether a stored file path is the module named by a
@@ -216,7 +285,7 @@ func pyFileMatchesModule(file, frag string) bool {
 // def, then a `from M import N` binding, then a package-local def. A qualified
 // call resolves only when the qualifier is an imported module. Pure — symbols +
 // calls + imports in, edges out (lookup injected so the resolver stays storeless).
-func resolvePythonCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, calls []CallSite, imports pythonImports, lookup func(name string) []CodeSymbol) []CodeEdge {
+func resolvePythonCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, calls []CallSite, callbacks []callbackRef, imports pythonImports, lookup func(name string) []CodeSymbol) []CodeEdge {
 	// A callable target is a function/method (Kind "func") or a class (calling it
 	// constructs an instance — a real call edge).
 	fileFuncs := map[string][]CodeSymbol{}
@@ -232,7 +301,7 @@ func resolvePythonCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, call
 		}
 	}
 
-	seen := map[string]bool{}
+	callPairs := map[string]bool{}
 	var edges []CodeEdge
 	for _, cs := range calls {
 		caller := enclosingSymbol(fileSyms, cs.Line)
@@ -249,10 +318,10 @@ func resolvePythonCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, call
 			continue
 		}
 		key := caller.ID + "->" + dst.ID
-		if seen[key] {
+		if callPairs[key] {
 			continue
 		}
-		seen[key] = true
+		callPairs[key] = true
 		edges = append(edges, CodeEdge{
 			SrcID:      caller.ID,
 			DstID:      dst.ID,
@@ -262,6 +331,11 @@ func resolvePythonCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, call
 			Provenance: ProvenanceStatic,
 		})
 	}
+
+	resolve := func(name string) *CodeSymbol {
+		return resolvePyUnqualified(name, fileFuncs, pkgFuncs, imports, lookup)
+	}
+	edges = append(edges, synthesizeCallbackEdges(relPath, fileSyms, callbacks, callPairs, resolve)...)
 	return edges
 }
 

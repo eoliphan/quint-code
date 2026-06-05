@@ -65,3 +65,59 @@ function run() {
 		t.Errorf("expected exactly 2 call edges (missing() and obj.method() dropped), got %d: %v", len(calls), calls)
 	}
 }
+
+// TestTSCallbackEdges confirms a function passed as a callback argument gets a
+// heuristic callback edge from the enclosing function, while a non-function
+// argument is dropped.
+func TestTSCallbackEdges(t *testing.T) {
+	st, root := newSymbolStore(t)
+	ctx := context.Background()
+
+	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handlers := `export function onClick() { return 1 }
+`
+	main := `import { onClick } from './handlers'
+
+function setup(btn) {
+  btn.addEventListener('click', onClick)
+  console.log(btn)
+}
+`
+	write := func(rel, src string) {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.IndexFileSymbols(ctx, root, rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join("pkg", "handlers.ts"), handlers)
+	mainRel := filepath.Join("pkg", "main.ts")
+	write(mainRel, main)
+
+	jsts := &JSTSLang{}
+	edges, err := jsts.ResolveFileEdges(ctx, root, mainRel, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cb := 0
+	found := false
+	for _, e := range edges {
+		if e.Kind != EdgeCallback {
+			continue
+		}
+		cb++
+		if edgeName(t, ctx, st, e.SrcID) == "setup" && edgeName(t, ctx, st, e.DstID) == "onClick" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing callback edge setup->onClick")
+	}
+	if cb != 1 {
+		t.Errorf("expected exactly 1 callback edge (console.log(btn) arg is not a function), got %d", cb)
+	}
+}

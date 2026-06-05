@@ -1,7 +1,6 @@
 package codebase
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 
@@ -26,20 +25,13 @@ type tsImports struct {
 	namespaces map[string]string
 }
 
-// extractTSImports reads the relative `import ... from './path'` statements of a
-// JS/TS file and resolves each module specifier to a project-relative base path
-// (extension stripped) against the importing file's directory. Pure.
-func extractTSImports(content []byte, lang *sitter.Language, fileDir string) tsImports {
+// extractTSImports reads the `import ... from '<spec>'` statements of a JS/TS file
+// and resolves each specifier to a project-relative base path (extension
+// stripped): relative paths against the importing dir, plus tsconfig path aliases
+// and monorepo workspace packages via projRes. A genuinely external specifier is
+// skipped. Pure relative to (root, content, fileDir, projRes); caller owns the tree.
+func extractTSImports(root *sitter.Node, content []byte, fileDir string, projRes tsProjectResolution) tsImports {
 	res := tsImports{names: map[string]tsNameImport{}, namespaces: map[string]string{}}
-	parser := sitter.NewParser()
-	parser.SetLanguage(lang)
-	tree, err := parser.ParseCtx(context.Background(), nil, content)
-	if err != nil {
-		return res
-	}
-	defer tree.Close()
-
-	root := tree.RootNode()
 	for i := 0; i < int(root.NamedChildCount()); i++ {
 		n := root.NamedChild(i)
 		if n.Type() != "import_statement" {
@@ -50,10 +42,10 @@ func extractTSImports(content []byte, lang *sitter.Language, fileDir string) tsI
 			continue
 		}
 		raw := strings.Trim(source.Content(content), "'\"`")
-		if !strings.HasPrefix(raw, ".") {
+		base, ok := resolveTSModuleSpecifier(raw, fileDir, projRes)
+		if !ok {
 			continue // external dependency — never a project node
 		}
-		base := strings.TrimPrefix(filepath.ToSlash(filepath.Join(fileDir, raw)), "/")
 		clause := firstChildOfType(n, "import_clause")
 		if clause == nil {
 			continue
@@ -94,34 +86,29 @@ func collectTSImportClause(clause *sitter.Node, content []byte, base string, res
 	}
 }
 
-// extractTSCalls walks a JS/TS file's call expressions. An unqualified call
-// (`foo()`) has empty Qualifier; a member call (`ns.foo()`, `obj.foo()`) carries
-// the object's text as Qualifier. Pure relative to content.
-func extractTSCalls(content []byte, lang *sitter.Language) []CallSite {
-	parser := sitter.NewParser()
-	parser.SetLanguage(lang)
-	tree, err := parser.ParseCtx(context.Background(), nil, content)
-	if err != nil {
-		return nil
-	}
-	defer tree.Close()
-
+// extractTSCallsAndCallbacks walks a parsed JS/TS file's call expressions in ONE
+// pass, returning the call sites (callee + qualifier) and the bare-identifier
+// arguments of each call (candidate callbacks tagged with the call's callee for
+// the precision gate). Pure relative to (root, content).
+func extractTSCallsAndCallbacks(root *sitter.Node, content []byte, lang *sitter.Language) ([]CallSite, []callbackRef) {
 	q, err := sitter.NewQuery([]byte(`(call_expression) @c`), lang)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	defer q.Close()
 	qc := sitter.NewQueryCursor()
-	qc.Exec(q, tree.RootNode())
+	qc.Exec(q, root)
 
 	var sites []CallSite
+	var refs []callbackRef
 	for {
 		m, ok := qc.NextMatch()
 		if !ok {
 			break
 		}
 		for _, capture := range m.Captures {
-			fn := capture.Node.ChildByFieldName("function")
+			call := capture.Node
+			fn := call.ChildByFieldName("function")
 			if fn == nil {
 				continue
 			}
@@ -143,10 +130,18 @@ func extractTSCalls(content []byte, lang *sitter.Language) []CallSite {
 			if callee == "" {
 				continue
 			}
-			sites = append(sites, CallSite{Callee: callee, Qualifier: qualifier, Line: int(capture.Node.StartPoint().Row) + 1})
+			line := int(call.StartPoint().Row) + 1
+			sites = append(sites, CallSite{Callee: callee, Qualifier: qualifier, Line: line})
+			if args := call.ChildByFieldName("arguments"); args != nil {
+				for i := 0; i < int(args.NamedChildCount()); i++ {
+					if a := args.NamedChild(i); a.Type() == "identifier" {
+						refs = append(refs, callbackRef{callee: callee, name: a.Content(content), line: line})
+					}
+				}
+			}
 		}
 	}
-	return sites
+	return sites, refs
 }
 
 // tsFileMatchesBase reports whether a stored file path is the module named by a
@@ -176,7 +171,7 @@ func resolveTSImportedName(name, base string, lookup func(string) []CodeSymbol) 
 // exactly-1-or-drop guard. Unqualified resolution order: a file-local def, then a
 // named import, then a directory-local def. A member call resolves only when the
 // qualifier is a namespace import. Pure — lookup injected so it stays storeless.
-func resolveTSCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, calls []CallSite, imports tsImports, lookup func(name string) []CodeSymbol) []CodeEdge {
+func resolveTSCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, calls []CallSite, callbacks []callbackRef, imports tsImports, lookup func(name string) []CodeSymbol) []CodeEdge {
 	fileDefs := map[string][]CodeSymbol{}
 	for _, s := range fileSyms {
 		if s.Kind == "func" || s.Kind == "class" {
@@ -190,7 +185,7 @@ func resolveTSCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, calls []
 		}
 	}
 
-	seen := map[string]bool{}
+	callPairs := map[string]bool{}
 	var edges []CodeEdge
 	for _, cs := range calls {
 		caller := enclosingSymbol(fileSyms, cs.Line)
@@ -207,10 +202,10 @@ func resolveTSCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, calls []
 			continue
 		}
 		key := caller.ID + "->" + dst.ID
-		if seen[key] {
+		if callPairs[key] {
 			continue
 		}
-		seen[key] = true
+		callPairs[key] = true
 		edges = append(edges, CodeEdge{
 			SrcID:      caller.ID,
 			DstID:      dst.ID,
@@ -220,6 +215,11 @@ func resolveTSCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, calls []
 			Provenance: ProvenanceStatic,
 		})
 	}
+
+	resolve := func(name string) *CodeSymbol {
+		return resolveTSUnqualified(name, fileDefs, pkgDefs, imports, lookup)
+	}
+	edges = append(edges, synthesizeCallbackEdges(relPath, fileSyms, callbacks, callPairs, resolve)...)
 	return edges
 }
 

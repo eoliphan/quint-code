@@ -41,3 +41,38 @@ func IsTestPath(path string) bool {
 	}
 	return false
 }
+
+// generatedSuffixes are high-confidence machine-generated file suffixes across the
+// common ecosystems (protobuf/gRPC stubs, ORM/codegen output, mocks).
+var generatedSuffixes = []string{
+	".pb.go", ".pb.gw.go", "_grpc.pb.go", "_pb2.py", "_pb2_grpc.py",
+	".gen.go", "_generated.go", "_mock.go",
+	".g.dart", ".freezed.dart",
+	".designer.cs", ".generated.cs",
+	".generated.ts", ".gen.ts",
+}
+
+// IsGeneratedPath reports whether a file path looks like machine-generated code
+// (protobuf/gRPC stubs, ORM/codegen output, mocks). Such files routinely share
+// symbol names with the hand-written code they wrap, so search ranks them last so
+// the real implementation surfaces first on a name collision. Pure, path-based
+// over high-confidence cross-language generator conventions.
+func IsGeneratedPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	lower := strings.ToLower(path)
+	base := lower
+	if i := strings.LastIndexByte(lower, '/'); i >= 0 {
+		base = lower[i+1:]
+	}
+	if strings.HasPrefix(base, "mock_") || strings.HasPrefix(base, "zz_generated") {
+		return true
+	}
+	for _, suf := range generatedSuffixes {
+		if strings.HasSuffix(base, suf) {
+			return true
+		}
+	}
+	return false
+}

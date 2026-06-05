@@ -123,19 +123,137 @@ def build():
 	}
 }
 
-// edgeName resolves a symbol ID to its name via a whole-project lookup.
-func edgeName(t *testing.T, ctx context.Context, st *SymbolStore, id string) string {
-	t.Helper()
-	for _, dir := range []string{"pkg"} {
-		syms, err := st.GetByDir(ctx, dir)
-		if err != nil {
+// TestPythonCallbackEdges confirms a function passed as a callback argument gets
+// a heuristic callback edge from the enclosing function, while a non-function
+// argument is dropped (no wrong edge).
+func TestPythonCallbackEdges(t *testing.T) {
+	st, root := newSymbolStore(t)
+	ctx := context.Background()
+
+	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handlers := `def on_click():
+    return 1
+`
+	ui := `from pkg.handlers import on_click
+
+
+def setup(button):
+    button.connect(on_click)
+    print(button)
+`
+	write := func(rel, src string) {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(src), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		for _, s := range syms {
-			if s.ID == id {
-				return s.Name
-			}
+		if err := st.IndexFileSymbols(ctx, root, rel); err != nil {
+			t.Fatal(err)
 		}
 	}
-	return id
+	write(filepath.Join("pkg", "handlers.py"), handlers)
+	uiRel := filepath.Join("pkg", "ui.py")
+	write(uiRel, ui)
+
+	py := &PythonLang{}
+	edges, err := py.ResolveFileEdges(ctx, root, uiRel, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cb := 0
+	found := false
+	for _, e := range edges {
+		if e.Kind != EdgeCallback {
+			continue
+		}
+		cb++
+		if e.Provenance != ProvenanceHeuristic {
+			t.Errorf("callback edge must be heuristic, got %s", e.Provenance)
+		}
+		if edgeName(t, ctx, st, e.SrcID) == "setup" && edgeName(t, ctx, st, e.DstID) == "on_click" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing callback edge setup->on_click")
+	}
+	if cb != 1 {
+		t.Errorf("expected exactly 1 callback edge (print(button) arg is not a function), got %d", cb)
+	}
+}
+
+// TestPythonCallbackGate_NonSinkDropped isolates the precision gate: a real
+// function passed to a NON-callback-sink call gets no edge, while the same kind
+// of function passed to a registrar (sink) does.
+func TestPythonCallbackGate_NonSinkDropped(t *testing.T) {
+	st, root := newSymbolStore(t)
+	ctx := context.Background()
+
+	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handlers := `def handler_a():
+    return 1
+
+
+def handler_b():
+    return 2
+`
+	ui := `from pkg.handlers import handler_a, handler_b
+
+
+def run():
+    transform(handler_a)
+    register(handler_b)
+`
+	write := func(rel, src string) {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.IndexFileSymbols(ctx, root, rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join("pkg", "handlers.py"), handlers)
+	uiRel := filepath.Join("pkg", "ui.py")
+	write(uiRel, ui)
+
+	py := &PythonLang{}
+	edges, err := py.ResolveFileEdges(ctx, root, uiRel, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	toB, toA := false, false
+	for _, e := range edges {
+		if e.Kind != EdgeCallback {
+			continue
+		}
+		switch edgeName(t, ctx, st, e.DstID) {
+		case "handler_b":
+			toB = true
+		case "handler_a":
+			toA = true
+		}
+	}
+	if !toB {
+		t.Errorf("register(handler_b) is a sink — expected callback edge run->handler_b")
+	}
+	if toA {
+		t.Errorf("transform(handler_a) is NOT a sink — must not produce a callback edge run->handler_a")
+	}
+}
+
+// edgeName resolves a symbol ID to its name (dir-agnostic, whole-project).
+func edgeName(t *testing.T, ctx context.Context, st *SymbolStore, id string) string {
+	t.Helper()
+	s, ok, err := st.GetByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		return id
+	}
+	return s.Name
 }
