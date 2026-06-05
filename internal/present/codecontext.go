@@ -40,7 +40,7 @@ func CodeContextResponse(cc contextgraph.CodeContext) string {
 		return b.String()
 	}
 
-	renderContextArtifacts(&b, "Decisions governing this code", cc.Decisions)
+	renderGoverningDecisions(&b, cc.Decisions)
 	renderContextArtifacts(&b, "Problems framed around it", cc.Problems)
 	renderContextArtifacts(&b, "Solution variants explored", cc.Portfolios)
 	renderContextArtifacts(&b, "Notes", cc.Notes)
@@ -73,6 +73,47 @@ func moduleDecisionList(decisions []graph.Node) string {
 		parts = append(parts, fmt.Sprintf("`%s` (%s)", d.ID, d.Name))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// renderGoverningDecisions lists the decisions governing this code, each tagged
+// with how much it can still be trusted: its non-active status (refresh-due /
+// superseded) and how many of its predictions remain unverified. So a decision
+// whose claims were never checked does not read as fully authoritative — the
+// trust-decay signal surfaces exactly where the agent reads the rationale.
+func renderGoverningDecisions(b *strings.Builder, items []*artifact.Artifact) {
+	if len(items) == 0 {
+		return
+	}
+	b.WriteString("### Decisions governing this code\n")
+	for _, a := range items {
+		suffix := ""
+		if a.Meta.Status != artifact.StatusActive {
+			suffix = fmt.Sprintf(" [%s]", a.Meta.Status)
+		}
+		fmt.Fprintf(b, "- **%s** `%s`%s%s\n", a.Meta.Title, a.Meta.ID, suffix, decisionVerificationTag(a))
+	}
+	b.WriteString("\n")
+}
+
+// decisionVerificationTag reports how many of a decision's predictions remain
+// unverified, so a governing decision whose claims were never checked is not read
+// as authoritative. Pure over the artifact's stored claims; empty when there are
+// no claims or all are verified.
+func decisionVerificationTag(a *artifact.Artifact) string {
+	df := a.UnmarshalDecisionFields()
+	if len(df.Claims) == 0 {
+		return ""
+	}
+	unverified := 0
+	for _, c := range df.Claims {
+		if c.Status == "" || c.Status == artifact.ClaimStatusUnverified {
+			unverified++
+		}
+	}
+	if unverified == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" · %d/%d predictions unverified", unverified, len(df.Claims))
 }
 
 // renderContextArtifacts lists a kind-group, pairing every artifact ID with
