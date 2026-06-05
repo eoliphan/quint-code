@@ -138,6 +138,16 @@ func (e *EdgeStore) InEdges(ctx context.Context, dstID string) ([]CodeEdge, erro
 	return scanEdges(rows)
 }
 
+// edgePairs builds the set of "src->dst" pairs present in edges (kind-agnostic),
+// used to suppress a synthesized edge a direct edge already covers.
+func edgePairs(edges []CodeEdge) map[string]bool {
+	out := make(map[string]bool, len(edges))
+	for _, e := range edges {
+		out[e.SrcID+"->"+e.DstID] = true
+	}
+	return out
+}
+
 func scanEdges(rows *sql.Rows) ([]CodeEdge, error) {
 	var out []CodeEdge
 	for rows.Next() {

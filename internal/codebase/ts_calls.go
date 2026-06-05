@@ -223,6 +223,150 @@ func resolveTSCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, calls []
 	return edges
 }
 
+// emitterReg is a `x.on("event", handler)` registration; emitterDispatch is a
+// `x.emit("event")` site. Paired by event name, they synthesize a dispatcher ->
+// handler edge for the dynamic dispatch the AST cannot follow directly.
+type emitterReg struct {
+	event   string
+	handler string
+	line    int
+}
+
+type emitterDispatch struct {
+	event string
+	line  int
+}
+
+var emitterRegisterNames = map[string]bool{"on": true, "once": true, "addlistener": true, "addeventlistener": true}
+var emitterDispatchNames = map[string]bool{"emit": true, "fire": true, "dispatchevent": true, "trigger": true}
+
+const emitterFanoutCap = 6 // skip an event with more handlers/dispatchers than this — too generic to pair confidently
+
+// extractTSEmitterSites collects EventEmitter `.on("e", h)` registrations and
+// `.emit("e")` dispatches from a parsed JS/TS file. A second query over the shared
+// tree (no re-parse). Pure relative to (root, content, lang).
+func extractTSEmitterSites(root *sitter.Node, content []byte, lang *sitter.Language) ([]emitterReg, []emitterDispatch) {
+	q, err := sitter.NewQuery([]byte(`(call_expression) @c`), lang)
+	if err != nil {
+		return nil, nil
+	}
+	defer q.Close()
+	qc := sitter.NewQueryCursor()
+	qc.Exec(q, root)
+
+	var regs []emitterReg
+	var dispatches []emitterDispatch
+	for {
+		m, ok := qc.NextMatch()
+		if !ok {
+			break
+		}
+		for _, capture := range m.Captures {
+			call := capture.Node
+			fn := call.ChildByFieldName("function")
+			if fn == nil || fn.Type() != "member_expression" {
+				continue
+			}
+			prop := fn.ChildByFieldName("property")
+			args := call.ChildByFieldName("arguments")
+			if prop == nil || args == nil || args.NamedChildCount() == 0 {
+				continue
+			}
+			arg0 := args.NamedChild(0)
+			if arg0.Type() != "string" {
+				continue
+			}
+			event := strings.Trim(arg0.Content(content), "'\"`")
+			if event == "" {
+				continue
+			}
+			name := strings.ToLower(prop.Content(content))
+			line := int(call.StartPoint().Row) + 1
+			switch {
+			case emitterRegisterNames[name] && args.NamedChildCount() >= 2:
+				if h := tsHandlerName(args.NamedChild(1), content); h != "" {
+					regs = append(regs, emitterReg{event: event, handler: h, line: line})
+				}
+			case emitterDispatchNames[name]:
+				dispatches = append(dispatches, emitterDispatch{event: event, line: line})
+			}
+		}
+	}
+	return regs, dispatches
+}
+
+// tsHandlerName names a handler argument: a bare identifier, or the property of a
+// `this.method` / `obj.method` member reference. An inline arrow/function literal
+// is anonymous and yields "".
+func tsHandlerName(n *sitter.Node, content []byte) string {
+	switch n.Type() {
+	case "identifier":
+		return n.Content(content)
+	case "member_expression":
+		if prop := n.ChildByFieldName("property"); prop != nil {
+			return prop.Content(content)
+		}
+	}
+	return ""
+}
+
+// synthesizeEmitterEdges pairs same-event registrations and dispatches WITHIN a
+// file: for each event (fan-out capped), each dispatch site's enclosing function
+// gets a heuristic EdgeCallback to each handler that resolves to exactly one
+// file-local function/method. Generic high-fan-out events (error/data/...) are
+// skipped — they need cross-instance type info to pair soundly.
+func synthesizeEmitterEdges(relPath string, fileSyms []CodeSymbol, regs []emitterReg, dispatches []emitterDispatch, callPairs map[string]bool) []CodeEdge {
+	handlersByEvent := map[string][]string{}
+	for _, r := range regs {
+		handlersByEvent[r.event] = append(handlersByEvent[r.event], r.handler)
+	}
+	dispatchesByEvent := map[string][]emitterDispatch{}
+	for _, d := range dispatches {
+		dispatchesByEvent[d.event] = append(dispatchesByEvent[d.event], d)
+	}
+	fileFns := map[string][]CodeSymbol{}
+	for _, s := range fileSyms {
+		if s.Kind == "func" || s.Kind == "method" {
+			fileFns[s.Name] = append(fileFns[s.Name], s)
+		}
+	}
+
+	seen := map[string]bool{}
+	var edges []CodeEdge
+	for event, handlers := range handlersByEvent {
+		disps := dispatchesByEvent[event]
+		if len(disps) == 0 || len(handlers) > emitterFanoutCap || len(disps) > emitterFanoutCap {
+			continue
+		}
+		for _, h := range handlers {
+			hs := fileFns[h]
+			if len(hs) != 1 {
+				continue // unresolved or ambiguous handler — drop, don't guess
+			}
+			for _, d := range disps {
+				caller := enclosingSymbol(fileSyms, d.line)
+				if caller == nil || caller.ID == hs[0].ID {
+					continue
+				}
+				key := caller.ID + "->" + hs[0].ID
+				if seen[key] || callPairs[key] {
+					continue
+				}
+				seen[key] = true
+				edges = append(edges, CodeEdge{
+					SrcID:      caller.ID,
+					DstID:      hs[0].ID,
+					Kind:       EdgeCallback,
+					FilePath:   relPath,
+					Line:       d.line,
+					Provenance: ProvenanceHeuristic,
+				})
+			}
+		}
+	}
+	return edges
+}
+
 func resolveTSUnqualified(callee string, fileDefs, pkgDefs map[string][]CodeSymbol, imports tsImports, lookup func(string) []CodeSymbol) *CodeSymbol {
 	local := fileDefs[callee]
 	b, imported := imports.names[callee]

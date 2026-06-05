@@ -66,6 +66,57 @@ function run() {
 	}
 }
 
+// TestTSEmitterSynthesis confirms an intra-file EventEmitter dispatch synthesizes
+// a dispatcher->handler edge: this.on("change", this.handleChange) paired with
+// this.emit("change") wires update -> handleChange. A high-fan-out event is not
+// tested here (capped); a generic event would be skipped.
+func TestTSEmitterSynthesis(t *testing.T) {
+	st, root := newSymbolStore(t)
+	ctx := context.Background()
+
+	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := `class Store {
+  setup() {
+    this.on('change', this.handleChange)
+  }
+
+  handleChange() {
+    return 1
+  }
+
+  update() {
+    this.emit('change')
+  }
+}
+`
+	rel := filepath.Join("pkg", "store.ts")
+	if err := os.WriteFile(filepath.Join(root, rel), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.IndexFileSymbols(ctx, root, rel); err != nil {
+		t.Fatal(err)
+	}
+
+	jsts := &JSTSLang{}
+	edges, err := jsts.ResolveFileEdges(ctx, root, rel, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+	for _, e := range edges {
+		if e.Kind == EdgeCallback && e.Provenance == ProvenanceHeuristic &&
+			edgeName(t, ctx, st, e.SrcID) == "update" && edgeName(t, ctx, st, e.DstID) == "handleChange" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected synthesized emit->handler edge update->handleChange; got %v", edges)
+	}
+}
+
 // TestTSCallbackEdges confirms a function passed as a callback argument gets a
 // heuristic callback edge from the enclosing function, while a non-function
 // argument is dropped.

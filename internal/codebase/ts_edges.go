@@ -170,7 +170,12 @@ func (j *JSTSLang) ResolveFileEdges(ctx context.Context, projectRoot, relPath st
 	}
 	imports := extractTSImports(root, content, filepath.Dir(relPath), loadTSProjectResolution(projectRoot))
 	calls, callbacks := extractTSCallsAndCallbacks(root, content, lang)
-	edges = append(edges, resolveTSCallEdges(relPath, fileSyms, pkgSyms, calls, callbacks, imports, lookup)...)
+	callEdges := resolveTSCallEdges(relPath, fileSyms, pkgSyms, calls, callbacks, imports, lookup)
+	edges = append(edges, callEdges...)
+
+	// Intra-file EventEmitter dispatch: pair .on("e", h) with .emit("e").
+	regs, dispatches := extractTSEmitterSites(root, content, lang)
+	edges = append(edges, synthesizeEmitterEdges(relPath, fileSyms, regs, dispatches, edgePairs(callEdges))...)
 
 	return dedupeEdges(edges), nil
 }
