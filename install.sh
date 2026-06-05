@@ -21,7 +21,6 @@ WHITE='\033[37m'
 REPO="m0n0x41d/haft"
 BIN_NAME="haft"
 BIN_DIRS=("$HOME/.local/bin" "/usr/local/bin")
-TUI_INSTALL_DIR="$HOME/.haft/tui"
 OPEN_SLEIGH_INSTALL_DIR="$HOME/.haft/runtimes/open-sleigh/current"
 HAFT_EMBED_INSTALL_DIR="$HOME/.haft/runtimes/haft-embed/current"
 
@@ -91,27 +90,6 @@ find_archive_binary() {
     return 1
 }
 
-find_archive_tui_bundle() {
-    local archive_root="$1"
-    local candidates=(
-        "$archive_root/tui.mjs"
-        "$archive_root/tui/bundle.mjs"
-        "$archive_root/tui/tui.mjs"
-        "$archive_root/bundle.mjs"
-        "$archive_root/tui/dist/tui.mjs"
-    )
-
-    local candidate
-    for candidate in "${candidates[@]}"; do
-        if [[ -f "$candidate" ]]; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
 find_archive_open_sleigh_runtime() {
     local archive_root="$1"
     local candidates=(
@@ -134,11 +112,6 @@ find_archive_open_sleigh_runtime() {
 require_source_build_toolchain() {
     if ! command -v go >/dev/null 2>&1; then
         printf "${RED}   ✗ Go is not installed${RESET}\n"
-        exit 1
-    fi
-
-    if ! command -v npm >/dev/null 2>&1; then
-        printf "${RED}   ✗ npm is required to build the TUI from source${RESET}\n"
         exit 1
     fi
 }
@@ -242,7 +215,6 @@ install_from_release_archive() {
     local archive_root="$1"
     local bin_dir="$2"
     local archive_binary
-    local archive_tui
     local archive_open_sleigh
     local archive_haft_embed
 
@@ -252,13 +224,6 @@ install_from_release_archive() {
     }
     cp "$archive_binary" "$bin_dir/$BIN_NAME"
     chmod +x "$bin_dir/$BIN_NAME"
-
-    if archive_tui=$(find_archive_tui_bundle "$archive_root"); then
-        mkdir -p "$TUI_INSTALL_DIR"
-        cp "$archive_tui" "$TUI_INSTALL_DIR/bundle.mjs"
-    else
-        printf "${DIM}   ⓘ TUI bundle not in release archive — skipped${RESET}\n"
-    fi
 
     if archive_open_sleigh=$(find_archive_open_sleigh_runtime "$archive_root"); then
         install_open_sleigh_runtime_from_dir "$archive_open_sleigh"
@@ -283,16 +248,6 @@ install_from_source_checkout() {
         go build -o "$bin_dir/$BIN_NAME" -trimpath ./cmd/haft/
     ) &
     spinner $! "Building binary"
-
-    (
-        cd "$repo_dir/tui"
-        npm ci
-        npm run build
-    ) &
-    spinner $! "Building TUI bundle"
-
-    mkdir -p "$TUI_INSTALL_DIR"
-    cp "$repo_dir/tui/dist/tui.mjs" "$TUI_INSTALL_DIR/bundle.mjs"
 
     ensure_elixir_toolchain
     (
@@ -319,10 +274,8 @@ main() {
     # Try downloading release
     local api_url="https://api.github.com/repos/${REPO}/releases/latest"
     local download_url
-    # Anchor on `/haft-${os_arch}.tar.gz` (leading slash) so the CLI archive
-    # is picked, not `haft-desktop-${os_arch}.tar.gz` which sorts first in
-    # the GitHub API response and contains the Tauri shell binary, not
-    # the CLI `haft` binary.
+    # Anchor on `/haft-${os_arch}.tar.gz` so the platform-specific CLI archive
+    # is selected precisely from the GitHub API response.
     download_url=$(curl -s "$api_url" \
         | grep -E "\"browser_download_url\":[[:space:]]*\".*/haft-${os_arch}\.tar\.gz\"" \
         | sed -E 's/.*"([^"]+)".*/\1/' \
@@ -354,9 +307,6 @@ main() {
     fi
 
     printf "   ${GREEN}✓${RESET} Installed to ${WHITE}$bin_dir/$BIN_NAME${RESET}\n"
-    if [[ -f "$TUI_INSTALL_DIR/bundle.mjs" ]]; then
-        printf "   ${GREEN}✓${RESET} Installed TUI to ${WHITE}$TUI_INSTALL_DIR/bundle.mjs${RESET}\n"
-    fi
     if [[ -x "$OPEN_SLEIGH_INSTALL_DIR/bin/open_sleigh" ]]; then
         printf "   ${GREEN}✓${RESET} Installed Open-Sleigh runtime to ${WHITE}$OPEN_SLEIGH_INSTALL_DIR${RESET}\n"
     fi

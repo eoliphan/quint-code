@@ -161,15 +161,23 @@ func (s *SymbolStore) GetByFile(ctx context.Context, filePath string) ([]CodeSym
 // the files in one directory, not nested). Used to scope impl resolution to a
 // single package so bare receiver names don't collide across packages.
 func (s *SymbolStore) GetByDir(ctx context.Context, dir string) ([]CodeSymbol, error) {
-	rows, err := s.db.QueryContext(ctx, codeSymbolSelect+` WHERE file_path LIKE ? ORDER BY file_path, start_line`, dir+"/%")
+	dir = filepath.Clean(dir)
+	pattern := dir + "/%"
+	if dir == "." {
+		pattern = "%"
+	}
+
+	rows, err := s.db.QueryContext(ctx, codeSymbolSelect+` WHERE file_path LIKE ? ORDER BY file_path, start_line`, pattern)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+
 	all, err := scanCodeSymbols(rows)
 	if err != nil {
 		return nil, err
 	}
+
 	out := make([]CodeSymbol, 0, len(all))
 	for _, sym := range all {
 		if filepath.Dir(sym.FilePath) == dir {

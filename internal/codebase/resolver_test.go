@@ -73,3 +73,54 @@ func TestEdgeResolverPort_GoComposesAndIsPluggable(t *testing.T) {
 		t.Fatal("C must have no edge resolver yet — the pluggable seam")
 	}
 }
+
+func TestEdgeResolverPort_GoRootPackageCrossFileCalls(t *testing.T) {
+	st, root := newSymbolStore(t)
+	ctx := context.Background()
+
+	write := func(name, src string) {
+		full := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a.go", "package root\n\nfunc Run() { Shared() }\n")
+	write("shared.go", "package root\n\nfunc Shared() {}\n")
+	write("nested/other.go", "package nested\n\nfunc Shared() {}\n")
+
+	for _, f := range []string{"a.go", "shared.go", "nested/other.go"} {
+		if err := st.IndexFileSymbols(ctx, root, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resolver := NewRegistry().ResolverForFile("a.go")
+	edges, err := resolver.ResolveFileEdges(ctx, root, "a.go", st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runNodes, _ := st.GetByName(ctx, "Run")
+	sharedNodes, _ := st.GetByName(ctx, "Shared")
+	if len(runNodes) != 1 || len(sharedNodes) != 2 {
+		t.Fatalf("expected one Run and two Shared symbols, got %d / %d", len(runNodes), len(sharedNodes))
+	}
+	var rootSharedID string
+	for _, sym := range sharedNodes {
+		if sym.FilePath == "shared.go" {
+			rootSharedID = sym.ID
+		}
+	}
+
+	found := false
+	for _, edge := range edges {
+		if edge.SrcID == runNodes[0].ID && edge.DstID == rootSharedID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected root cross-file Run→Shared edge, got %+v", edges)
+	}
+}

@@ -67,6 +67,43 @@ func TestScanSymbols_PopulatesAcrossFiles(t *testing.T) {
 	}
 }
 
+func TestSymbolStore_GetByDirIncludesRootPackageFiles(t *testing.T) {
+	st, root := newSymbolStore(t)
+	ctx := context.Background()
+	files := map[string]string{
+		"a.go":     "package p\nfunc Alpha() {}\n",
+		"b.go":     "package p\nfunc Beta() {}\n",
+		"sub/c.go": "package sub\nfunc Gamma() {}\n",
+	}
+	for name, src := range files {
+		full := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.IndexFileSymbols(ctx, root, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	syms, err := st.GetByDir(ctx, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, sym := range syms {
+		got[sym.Name] = true
+	}
+	if !got["Alpha"] || !got["Beta"] {
+		t.Fatalf("expected root package symbols Alpha and Beta, got %+v", syms)
+	}
+	if got["Gamma"] {
+		t.Fatalf("expected nested package symbol Gamma to be excluded, got %+v", syms)
+	}
+}
+
 // TestSymbolStore_OverloadNodesAndByteExactSlice is the P0 gate for the node
 // store: two same-name methods persist as DISTINCT nodes, and each node's
 // stored byte offsets slice the file back to its EXACT body.
