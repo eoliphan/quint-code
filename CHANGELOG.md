@@ -64,7 +64,13 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
   atomic `observations` (rationale optional) and anchor a fact to
   decisions/problems/notes via typed `anchors`, persisted as real graph edges
   that surface in `related` / backlinks. A dead anchor (missing target) is
-  rejected, never silently kept.
+  rejected, never silently kept. Anchors now also accept **code symbols**
+  (`Name` or `Name@file` to disambiguate): a fact attaches to the exact symbol
+  and surfaces at it in `code_context` / `node` — the same fusion payoff
+  artifact anchors give. Symbol resolution lives in the CLI shell (the artifact
+  core never imports `codebase`); a dead or ambiguous symbol anchor rejects the
+  whole note, the same no-dead-edge invariant in both directions
+  (`dec-20260604-26be1e4b`).
 - **`haft init` installs/updates project `CLAUDE.md` haft section** — new
   step in the init flow. Writes a haft-managed section delimited by
   `<!-- haft:start -->` / `<!-- haft:end -->` HTML-comment markers.
@@ -217,6 +223,73 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
   operator binds the mode (Transformer Mandate). Pure core in `internal/ceremony`
   (functional core / imperative shell), wired into `/h-frame`, `/h-explore`,
   `/h-compare`.
+- **Hybrid semantic recall over FTS5 + PPR (optional EmbeddingGemma
+  sidecar).** `haft_query(action="search")` can now fuse keyword (FTS5) and
+  semantic (embedding cosine) recall via Reciprocal Rank Fusion (k=60, 0.15
+  cosine floor) over the decisions+notes corpus — the graph stays primary and
+  the layer **augments, never replaces** FTS5+PPR, degrading silently to
+  keyword+graph recall when the embedder is absent. Embeddings come from an
+  optional out-of-process Rust sidecar (`embed-sidecar/` — `haft-embed`,
+  EmbeddingGemma 768-dim via fastembed-rs, newline-JSON stdio); haft's own Go
+  build gains no new cgo. Hexagonal port-adapter (`internal/embedding` —
+  `local` | `openai` | `none`), brute-force in-memory cosine index (no vector
+  DB), corpus vectors cached in `artifact_embeddings` (migration v29) keyed by
+  model contract + content hash. `install.sh` delivers the sidecar to
+  `~/.haft/runtimes/` (OPTIONAL — a missing Rust toolchain warns and
+  continues); `config.embedding` controls provider/model/dim,
+  `embedding.provider=none` disables. Implements `dec-20260605-fe77b358` (Rust
+  fastembed-rs sidecar) and closes the spike gate `dec-20260604-3aaad199`. A
+  live R@k eval over the real `.haft/decisions` corpus (16 paraphrased queries)
+  measured hybrid beating FTS5-alone by +25% R@10 (0.75 → 1.00), MRR +0.319 —
+  well above the decision's 10% threshold.
+- **Decomposed-Brier calibration on decision predictions.** A decision
+  prediction can now carry an optional `probability` in `[0,1]` (sampled as
+  2–3 noisy votes, never one authoritative number); verified outcomes feed a
+  Murphy (1973) Brier decomposition (reliability − resolution + uncertainty),
+  so `/h-verify` reports whether the project's forecasts are over- or
+  under-confident. Pure deterministic core (`internal/reff/calibration.go`),
+  additive storage (probability rides the existing `structured_data` JSON — no
+  migration), scored only at decide/verify time and honest about cold-start
+  below 15 forecasts. Implements `dec-20260603-c3c7fa88`.
+- **Cross-module `call` edges for Python and TypeScript.** Python and TS were
+  structural-only (`extends`/`implements` from in-file heritage); they now also
+  emit `call` edges resolved across modules — Python `from M import N`,
+  module-qualified `m.foo()`, relative imports, and class construction; TS named
+  + namespace imports with base-path + extension/index resolution. Closes the
+  "directory-scoped for now" follow-up flagged on the multi-language edges entry
+  above. Honest coverage held end to end: every unresolved, ambiguous, external,
+  or instance-method (`obj.method()`) call is a **dropped** edge, never a guessed
+  one (`dec-20260603-5825abc6`, extend-in-place).
+- **Dynamic-dispatch callback edges + TS module resolution.** A new heuristic
+  `callback` edge wires a named function passed to a callback **sink**
+  (`emitter.on("x", onX)`, `signal.connect(handler)`, `addEventListener`,
+  `subscribe`, …) from the enclosing function to the handler, closing the
+  "callback-only function shows zero callers" hole; a function passed as plain
+  data is never wired (exactly-one-or-drop). Intra-file EventEmitter dispatch is
+  paired by event name (`.on`/`.once`/`.addListener` ↔
+  `.emit`/`.fire`/`.dispatchEvent`) so "what runs when this emits" exists in the
+  graph. TS module resolution learned `tsconfig`/`jsconfig` `paths` + `baseUrl`
+  (JSONC-tolerant) and npm workspaces, with the per-project cache invalidated on
+  a config-file mtime change. Plus polish: each Py/TS file is tree-sitter-parsed
+  once per pass (was 4×), and generated files (`*.pb.go`, `*_pb2.py`, `*.gen.go`,
+  …) are down-ranked behind hand-written code on a name collision.
+- **Trust-decay signal on governing decisions in `code_context` (V2).** Each
+  decision in the "Decisions governing this code" block now surfaces how far it
+  can still be trusted — its non-active status (refresh-due / superseded) plus
+  how many of its predictions remain unverified (`· N/M predictions
+  unverified`) — so a decision whose claims were never checked no longer reads
+  as fully authoritative right where the agent reads the *why*. Pure over the
+  stored claims, no extra DB fetch; full evidence-based R_eff remains a
+  follow-up.
+- **Graph-grounded `h-diagnose` and `h-frame` (V3).** `h-diagnose` gained a
+  Step 2.5 that pulls `code_context` once for the failing symbol and injects its
+  invariants + trust-decay into each (read-only) hypothesis subagent, making a
+  **stale governing decision** a first-class root-cause suspect that
+  reasoning-on-code-alone systematically misses. `h-frame` gained an optional
+  `seed_file` that runs the shipped PPR over the fused graph and appends the
+  nearest governing artifacts to its keyword recall. Both live in the shell
+  (best-effort, non-regressing). A 12-agent design workflow refuted adding the
+  same hook to `h-explore` (it would anchor the diversity that is explore's job).
 
 ### Changed
 
@@ -319,6 +392,15 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
   [moved from A.6.Q; `evaluativeAscription` → `qualityTermAscription`],
   C.30.P). Embedded SQLite index (`internal/cli/fpf.db`) rebuilt — 5607
   chunks (5541 spec + 66 patterns).
+- **`CheckDrift` per-scope tree walk memoized** — `/h-status` (the
+  session-mandatory first action) was re-running `filepath.WalkDir` once per
+  decision per drift scope; many decisions share the whole-repo `"."` scope, so
+  the same ~24k-file tree walk ran ~8× per status (~3.6s dominated by the
+  redundant walks, not git subprocesses). The walk is now memoized by
+  normalized scope within a single `CheckDrift` pass — identical files per
+  scope, computed once instead of N times. Behavior unchanged; no cache-coherence
+  surface (the memo lives only for the one pass). (`internal/artifact/decision.go`.)
+- Embedded FPF spec index regenerated (`data/FPF` + `internal/cli/fpf.db`).
 
 ### Fixed
 
@@ -333,6 +415,24 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
   `verbose=true` restores the full dump.
 - **Nav-hint feedback loop** — dropped dead `/h-char` and `/h-refresh` nav
   hints that pointed at removed/renamed commands.
+- **Import-aware heritage resolution — no shadowed-base wrong edge** (Py + TS).
+  `pythonHeritageEdges` / `tsHeritageEdges` resolved a base class/interface
+  directory-locally and ignored the import surface, so an unimported same-named
+  class in a sibling module could shadow an imported base and emit a **wrong**
+  `extends`/`implements` edge to the decoy — violating the no-wrong-edge
+  invariant. Heritage now resolves with import awareness (an explicit import
+  wins, resolved cross-module; else a same-file type; a name that is both — a
+  shadowed redefinition — or neither is dropped), the same exactly-one-or-drop
+  discipline the call resolver already used. Also removed a dead `MethodSig.Arity`
+  field whose doc-comment claimed a precision mechanism that never ran.
+- **Module-level invariants no longer mislabeled "must hold here" on a
+  symbol.** A symbol-targeted `code_context` / `explore` was asserting
+  module-level invariants (e.g. a roadmap decision's phase gates) as invariants
+  binding a symbol they do not govern. The file's invariants are now
+  partitioned: only those whose source decision governs the symbol directly (via
+  `affected_symbols`) stay under "must hold here"; the rest move to a "Module
+  context (may not bind this symbol)" section. File-level views (no symbol) are
+  unchanged — every file invariant binds the file. (`internal/contextgraph`.)
 
 ## [8.0.0] — 2026-05-14
 
