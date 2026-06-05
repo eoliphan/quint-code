@@ -250,16 +250,15 @@ install_from_release_archive() {
         printf "${RED}   ✗ Binary not found in archive${RESET}\n"
         exit 1
     }
-    archive_tui=$(find_archive_tui_bundle "$archive_root") || {
-        printf "${RED}   ✗ TUI bundle not found in archive${RESET}\n"
-        exit 1
-    }
-
     cp "$archive_binary" "$bin_dir/$BIN_NAME"
     chmod +x "$bin_dir/$BIN_NAME"
 
-    mkdir -p "$TUI_INSTALL_DIR"
-    cp "$archive_tui" "$TUI_INSTALL_DIR/bundle.mjs"
+    if archive_tui=$(find_archive_tui_bundle "$archive_root"); then
+        mkdir -p "$TUI_INSTALL_DIR"
+        cp "$archive_tui" "$TUI_INSTALL_DIR/bundle.mjs"
+    else
+        printf "${DIM}   ⓘ TUI bundle not in release archive — skipped${RESET}\n"
+    fi
 
     if archive_open_sleigh=$(find_archive_open_sleigh_runtime "$archive_root"); then
         install_open_sleigh_runtime_from_dir "$archive_open_sleigh"
@@ -355,7 +354,9 @@ main() {
     fi
 
     printf "   ${GREEN}✓${RESET} Installed to ${WHITE}$bin_dir/$BIN_NAME${RESET}\n"
-    printf "   ${GREEN}✓${RESET} Installed TUI to ${WHITE}$TUI_INSTALL_DIR/bundle.mjs${RESET}\n"
+    if [[ -f "$TUI_INSTALL_DIR/bundle.mjs" ]]; then
+        printf "   ${GREEN}✓${RESET} Installed TUI to ${WHITE}$TUI_INSTALL_DIR/bundle.mjs${RESET}\n"
+    fi
     if [[ -x "$OPEN_SLEIGH_INSTALL_DIR/bin/open_sleigh" ]]; then
         printf "   ${GREEN}✓${RESET} Installed Open-Sleigh runtime to ${WHITE}$OPEN_SLEIGH_INSTALL_DIR${RESET}\n"
     fi

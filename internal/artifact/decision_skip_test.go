@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -30,6 +31,43 @@ func TestDecide_TacticalSkipMechanism_BypassRequiredFields(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("tactical-mode decision with explicit skips should accept; got error: %v", err)
+	}
+}
+
+func TestDecide_TacticalSkipMechanism_PersistsAcknowledgement(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	skips := []string{
+		"selection_policy",
+		"counterargument",
+		"weakest_link",
+		"why_not_others",
+		"rollback",
+	}
+	reason := "Tactical 5-line change, reversible by file revert; full DRR ceremony overhead exceeds decision blast radius"
+
+	decision, _, err := Decide(ctx, store, t.TempDir(), DecideInput{
+		SelectedTitle: "Use sync.Map",
+		WhySelected:   "Concurrent reads dominate; sync.Map is idiomatic.",
+		Mode:          string(ModeTactical),
+		Skips:         skips,
+		SkipReason:    reason,
+	})
+	if err != nil {
+		t.Fatalf("tactical-mode decision with explicit skips should accept; got error: %v", err)
+	}
+
+	reloaded, err := store.Get(ctx, decision.Meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := reloaded.UnmarshalDecisionFields()
+
+	if !slices.Equal(fields.Skips, skips) {
+		t.Fatalf("persisted skips = %v, want %v", fields.Skips, skips)
+	}
+	if fields.SkipReason != reason {
+		t.Fatalf("persisted skip reason = %q, want %q", fields.SkipReason, reason)
 	}
 }
 
@@ -141,7 +179,7 @@ func TestDecide_StructuredErrorIncludesReferences(t *testing.T) {
 		"FPF discipline violation",
 		"Missing required fields:",
 		"How to proceed:",
-		"_mode\": \"tactical\"",
+		"mode\": \"tactical\"",
 		"_skips\":",
 		"_skip_reason\":",
 		"References:",

@@ -341,6 +341,8 @@ type DecisionFields struct {
 	Admissibility        []string             `json:"admissibility,omitempty"`
 	EvidenceRequirements []string             `json:"evidence_requirements,omitempty"`
 	RefreshTriggers      []string             `json:"refresh_triggers,omitempty"`
+	Skips                []string             `json:"_skips,omitempty"`
+	SkipReason           string               `json:"_skip_reason,omitempty"`
 	FirstModuleCoverage  bool                 `json:"first_module_coverage,omitempty"`
 	DriftManifests       []DriftScopeManifest `json:"drift_manifests,omitempty"`
 	// GovernanceMode declares how affected_files relate to drift detection.

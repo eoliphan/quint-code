@@ -353,7 +353,7 @@ func buildSkipSet(input DecideInput) (map[string]bool, error) {
 		return nil, fmt.Errorf(
 			"_skips is only valid in tactical or note mode (got mode=%q); "+
 				"standard and deep decisions cannot bypass required DRR fields; "+
-				"to skip fields, switch to tactical mode with _mode=\"tactical\"",
+				"to skip fields, switch to tactical mode with mode=\"tactical\"",
 			mode,
 		)
 	}
@@ -420,7 +420,7 @@ func formatStructuredValidationError(missing []missingField, input DecideInput) 
 	if mode == string(ModeStandard) || mode == string(ModeDeep) {
 		b.WriteString("- Option 2: If this is a tactical change (<2-week reversible blast radius),\n")
 		b.WriteString("  switch to tactical mode and explicitly acknowledge the skip:\n")
-		b.WriteString("    \"_mode\": \"tactical\",\n")
+		b.WriteString("    \"mode\": \"tactical\",\n")
 		b.WriteString("    \"_skips\": [\"<field1>\", \"<field2>\"],\n")
 		b.WriteString("    \"_skip_reason\": \"<why the operator accepts the gap>\"\n")
 		b.WriteString("  The skip + reason are persisted in the DecisionRecord audit trail.\n")
@@ -548,6 +548,8 @@ func BuildDecisionArtifact(dctx DecideContext, input DecideInput) (*Artifact, er
 		Admissibility:        input.Admissibility,
 		EvidenceRequirements: input.EvidenceReqs,
 		RefreshTriggers:      input.RefreshTriggers,
+		Skips:                cloneStringSlice(input.Skips),
+		SkipReason:           input.SkipReason,
 		FirstModuleCoverage:  input.FirstModuleCoverage,
 		GovernanceMode:       GovernanceMode(strings.TrimSpace(input.GovernanceMode)),
 	}
