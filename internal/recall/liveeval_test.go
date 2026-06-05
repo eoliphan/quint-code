@@ -72,6 +72,9 @@ func TestLiveDecisionRecallEval(t *testing.T) {
 	hybrid := NewHybrid(store, func() (embedding.Embedder, error) {
 		return embedding.New(embedding.Config{Provider: embedding.ProviderLocal})
 	}, conn)
+	if err := hybrid.Warm(ctx); err != nil {
+		t.Fatalf("warm hybrid corpus: %v", err)
+	}
 
 	ftsRanks := make([]int, 0, len(liveQueries))
 	hybridRanks := make([]int, 0, len(liveQueries))

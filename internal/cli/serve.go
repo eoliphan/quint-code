@@ -190,7 +190,24 @@ func buildHybridSearcher(store *artifact.Store, rawDB *sql.DB) recall.Searcher {
 		return embedder, nil
 	}
 
-	return recall.NewHybrid(store, newEmbedder, rawDB)
+	hybrid := recall.NewHybrid(store, newEmbedder, rawDB)
+	hybrid.Prewarm() // warm the corpus index in the background so the first search is fast
+	return hybrid
+}
+
+// invalidateRecall tells the hybrid searcher to rebuild its semantic index when
+// a decision/note is created or updated, so it becomes searchable the same
+// session. No-op for the plain FTS searcher or non-corpus artifacts.
+func invalidateRecall(searcher recall.Searcher, createdRef string) {
+	if createdRef == "" {
+		return
+	}
+	if !strings.HasPrefix(createdRef, "dec-") && !strings.HasPrefix(createdRef, "note-") {
+		return
+	}
+	if invalidator, ok := searcher.(interface{ Invalidate() }); ok {
+		invalidator.Invalidate()
+	}
 }
 
 // searchArtifacts routes a query through the hybrid searcher when one is wired,
@@ -232,6 +249,7 @@ func makeV5Handler(store *artifact.Store, searcher recall.Searcher, haftDir stri
 			result = applyCrossProjectRecall(ctx, result, params.Name, action, params.Arguments, store, projCfg, indexStore)
 			result = applyGraphSeededRecall(ctx, result, params.Name, action, params.Arguments, store, haftDir)
 			applyCrossProjectIndex(ctx, params.Name, action, params.Arguments, createdRef, store, projCfg, indexStore)
+			invalidateRecall(searcher, createdRef)
 		}
 
 		logAudit(ctx, store.DB(), params.Name, action, params.Arguments, toolErr)

@@ -18,6 +18,7 @@ import (
 
 	"github.com/m0n0x41d/haft/internal/artifact"
 	"github.com/m0n0x41d/haft/internal/embedding"
+	"github.com/m0n0x41d/haft/logger"
 )
 
 const (
@@ -45,33 +46,76 @@ type Searcher interface {
 }
 
 // Hybrid fuses FTS ranking from the store with cosine ranking from an in-memory
-// embedding index. The embedder is resolved lazily (so server startup never
-// blocks on a first-run model download) and the index is built on first Search,
-// cached to the artifact_embeddings table so restarts re-embed only changed
-// artifacts.
+// embedding index. The corpus index is built in the BACKGROUND: search never
+// blocks on a cold (or re-warming) index — it returns FTS5+PPR until the index
+// is ready, then fuses. The embedder is resolved lazily (so startup never
+// blocks on a first-run model download) and vectors are cached to
+// artifact_embeddings so re-warms re-embed only changed artifacts.
 type Hybrid struct {
 	source      ArtifactSource
 	newEmbedder func() (embedding.Embedder, error)
 	cache       vectorCache
 
-	mu       sync.Mutex
-	embedder embedding.Embedder
-	index    *embedding.Index
-	byID     map[string]*artifact.Artifact
-	warmed   bool
+	mu                  sync.Mutex
+	embedder            embedding.Embedder
+	embedderUnavailable bool
+	index               *embedding.Index
+	byID                map[string]*artifact.Artifact
+	built               bool // a usable index has been installed at least once
+	building            bool // a background build is in flight
+	dirty               bool // corpus changed since the last build → rebuild needed
 }
 
-// NewHybrid builds the hybrid layer. newEmbedder is invoked once, on the first
-// Search, to spawn/connect the embedder — a nil factory (or one that errors,
+// NewHybrid builds the hybrid layer. newEmbedder is invoked once, in the
+// background, to spawn/connect the embedder — a nil factory (or one that errors,
 // e.g. the sidecar is absent) makes Search transparently delegate to the
 // store's FTS ranking for the rest of the session.
 func NewHybrid(source ArtifactSource, newEmbedder func() (embedding.Embedder, error), db *sql.DB) *Hybrid {
 	return &Hybrid{source: source, newEmbedder: newEmbedder, cache: vectorCache{db: db}}
 }
 
+// Prewarm kicks the background corpus build so the index is ready before the
+// first search rather than warming on it. Non-blocking.
+func (h *Hybrid) Prewarm() {
+	if h.newEmbedder != nil {
+		h.ensureWarming()
+	}
+}
+
+// Invalidate marks the corpus stale so the next search triggers a background
+// rebuild — cheap, since cached vectors are reused and only changed artifacts
+// re-embed. The existing index keeps serving until the rebuild swaps in, so
+// there is no semantic-blind window after the first warm. Call it when a
+// decision/note is created or updated.
+func (h *Hybrid) Invalidate() {
+	h.mu.Lock()
+	h.dirty = true
+	h.mu.Unlock()
+	h.ensureWarming()
+}
+
+// Warm builds the index synchronously, blocking until ready. Production search
+// uses the non-blocking background path; this is for callers that must have the
+// semantic index available before searching (tests, explicit pre-warm).
+func (h *Hybrid) Warm(ctx context.Context) error {
+	index, byID, err := h.buildIndex(ctx)
+	if err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if index != nil {
+		h.index = index
+		h.byID = byID
+	}
+	h.built = true
+	return nil
+}
+
 // Search returns artifacts for the query, fusing keyword and semantic ranking.
-// It always falls back to FTS-only on any semantic-path issue, never erroring
-// out recall for a missing/faulty embedder.
+// It always falls back to FTS-only on any semantic-path issue — a cold index, a
+// rebuild in flight, a missing embedder, or an embed fault — never erroring out
+// recall for the optional semantic layer.
 func (h *Hybrid) Search(ctx context.Context, query string, limit int) ([]*artifact.Artifact, error) {
 	if limit <= 0 {
 		limit = 20
@@ -79,7 +123,10 @@ func (h *Hybrid) Search(ctx context.Context, query string, limit int) ([]*artifa
 	if h.newEmbedder == nil {
 		return h.source.Search(ctx, query, limit)
 	}
-	if err := h.warm(ctx); err != nil || h.index == nil || h.index.Len() == 0 {
+
+	h.ensureWarming()
+	embedder, index, byID, ready := h.snapshot()
+	if !ready {
 		return h.source.Search(ctx, query, limit)
 	}
 
@@ -90,45 +137,105 @@ func (h *Hybrid) Search(ctx context.Context, query string, limit int) ([]*artifa
 		return nil, err
 	}
 
-	queryVectors, err := h.embedder.Embed(ctx, embedding.RoleQuery, []string{query})
+	queryVectors, err := embedder.Embed(ctx, embedding.RoleQuery, []string{query})
 	if err != nil || len(queryVectors) == 0 {
+		if err != nil {
+			logger.Warn().Err(err).Msg("hybrid query embed failed — returning FTS5+PPR results")
+		}
 		return truncate(ftsResults, limit), nil
 	}
-	semantic := h.index.Search(queryVectors[0], pool)
+	semantic := index.Search(queryVectors[0], pool)
 
 	fused := fuseRRF([][]string{idsOf(ftsResults), semanticIDs(semantic, minSemanticSimilarity)}, rrfK)
-	return h.resolve(fused, ftsResults, limit), nil
+	return resolveOrder(byID, fused, ftsResults, limit), nil
 }
 
-// warm lazily embeds the decision/note corpus (reusing cached vectors for
-// unchanged artifacts) and builds the in-memory cosine index. Idempotent.
-func (h *Hybrid) warm(ctx context.Context) error {
+// snapshot returns the current ready index, embedder and lookup — even while a
+// rebuild is in flight, the existing index keeps serving until the new one
+// swaps in (no semantic-blind window mid-rewarm).
+func (h *Hybrid) snapshot() (embedding.Embedder, *embedding.Index, map[string]*artifact.Artifact, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.warmed {
+	if h.index == nil || h.index.Len() == 0 {
+		return nil, nil, nil, false
+	}
+	return h.embedder, h.index, h.byID, true
+}
+
+// ensureWarming starts a background corpus build when one is needed (cold or
+// dirty) and not already running. Non-blocking.
+func (h *Hybrid) ensureWarming() {
+	h.mu.Lock()
+	if h.embedderUnavailable || h.building || (h.built && !h.dirty) {
+		h.mu.Unlock()
+		return
+	}
+	h.building = true
+	h.dirty = false
+	h.mu.Unlock()
+	go h.warmAsync()
+}
+
+func (h *Hybrid) warmAsync() {
+	index, byID, err := h.buildIndex(context.Background())
+	h.mu.Lock()
+	h.building = false
+	if err != nil {
+		h.mu.Unlock()
+		logger.Warn().Err(err).Msg("hybrid recall corpus warm failed — search uses FTS5+PPR until the next attempt")
+		return
+	}
+	if index != nil {
+		h.index = index
+		h.byID = byID
+	}
+	h.built = true
+	h.mu.Unlock()
+}
+
+// resolveEmbedder spawns the embedder once and reuses it across rebuilds. A nil
+// factory or factory error (sidecar absent / disabled) marks it permanently
+// unavailable, so the build does not respawn on every search — that is a
+// degrade to FTS5+PPR, not a failure.
+func (h *Hybrid) resolveEmbedder() embedding.Embedder {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.embedderUnavailable || h.newEmbedder == nil {
+		h.embedderUnavailable = true
 		return nil
 	}
+	if h.embedder != nil {
+		return h.embedder
+	}
+	embedder, err := h.newEmbedder()
+	if err != nil {
+		h.embedderUnavailable = true
+		logger.Info().Err(err).Msg("embedding sidecar unavailable — hybrid recall degrades to FTS5+PPR")
+		return nil
+	}
+	h.embedder = embedder
+	return embedder
+}
 
-	if h.embedder == nil {
-		embedder, err := h.newEmbedder()
-		if err != nil {
-			// Sidecar absent / provider disabled — degrade to FTS for this
-			// session rather than retrying the spawn on every search.
-			h.warmed = true
-			return nil
-		}
-		h.embedder = embedder
+// buildIndex embeds the decision/note corpus (reusing cached vectors) into a
+// fresh in-memory cosine index. Runs OFF the lock so the slow embed never
+// blocks concurrent searches. Returns a nil index (no error) when the embedder
+// is unavailable.
+func (h *Hybrid) buildIndex(ctx context.Context) (*embedding.Index, map[string]*artifact.Artifact, error) {
+	embedder := h.resolveEmbedder()
+	if embedder == nil {
+		return nil, nil, nil
 	}
 
-	descriptor := h.embedder.Descriptor()
+	descriptor := embedder.Descriptor()
 	cached, err := h.cache.load(ctx, descriptor)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	corpus, err := h.loadCorpus(ctx)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	byID := make(map[string]*artifact.Artifact, len(corpus))
@@ -151,19 +258,15 @@ func (h *Hybrid) warm(ctx context.Context) error {
 		missTexts = append(missTexts, text)
 	}
 
-	if err := h.embedMisses(ctx, descriptor, missIDs, missHashes, missTexts, vectors); err != nil {
-		return err
+	if err := h.embedMisses(ctx, embedder, descriptor, missIDs, missHashes, missTexts, vectors); err != nil {
+		return nil, nil, err
 	}
 
 	index := embedding.NewIndex(len(vectors))
 	for id, vector := range vectors {
 		index.Add(id, vector)
 	}
-
-	h.index = index
-	h.byID = byID
-	h.warmed = true
-	return nil
+	return index, byID, nil
 }
 
 func (h *Hybrid) loadCorpus(ctx context.Context) ([]*artifact.Artifact, error) {
@@ -182,6 +285,7 @@ func (h *Hybrid) loadCorpus(ctx context.Context) ([]*artifact.Artifact, error) {
 // back to the cache, populating vectors in place.
 func (h *Hybrid) embedMisses(
 	ctx context.Context,
+	embedder embedding.Embedder,
 	descriptor embedding.Descriptor,
 	ids, hashes, texts []string,
 	vectors map[string][]float32,
@@ -189,7 +293,7 @@ func (h *Hybrid) embedMisses(
 	if len(ids) == 0 {
 		return nil
 	}
-	embedded, err := h.embedder.Embed(ctx, embedding.RoleDocument, texts)
+	embedded, err := embedder.Embed(ctx, embedding.RoleDocument, texts)
 	if err != nil {
 		return err
 	}
@@ -205,11 +309,11 @@ func (h *Hybrid) embedMisses(
 	return nil
 }
 
-// resolve maps the fused id ordering back to artifacts, preferring the corpus
-// lookup but falling back to FTS result objects for non-corpus kinds.
-func (h *Hybrid) resolve(orderedIDs []string, ftsResults []*artifact.Artifact, limit int) []*artifact.Artifact {
-	lookup := make(map[string]*artifact.Artifact, len(h.byID)+len(ftsResults))
-	maps.Copy(lookup, h.byID)
+// resolveOrder maps the fused id ordering back to artifacts, preferring the
+// corpus lookup but falling back to FTS result objects for non-corpus kinds.
+func resolveOrder(byID map[string]*artifact.Artifact, orderedIDs []string, ftsResults []*artifact.Artifact, limit int) []*artifact.Artifact {
+	lookup := make(map[string]*artifact.Artifact, len(byID)+len(ftsResults))
+	maps.Copy(lookup, byID)
 	for _, item := range ftsResults {
 		lookup[item.Meta.ID] = item
 	}

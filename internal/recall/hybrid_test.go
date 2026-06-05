@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/m0n0x41d/haft/db"
 	"github.com/m0n0x41d/haft/internal/artifact"
@@ -14,7 +16,10 @@ import (
 
 // fakeEmbedder maps text topics to fixed orthogonal unit vectors so the test
 // controls the cosine ranking exactly. It counts Embed calls to prove caching.
+// Embed is mutex-guarded like the real sidecar adapter, so background warms race
+// cleanly under -race.
 type fakeEmbedder struct {
+	mu    sync.Mutex
 	calls int
 }
 
@@ -23,12 +28,20 @@ func (f *fakeEmbedder) Descriptor() embedding.Descriptor {
 }
 
 func (f *fakeEmbedder) Embed(_ context.Context, _ embedding.Role, texts []string) ([][]float32, error) {
+	f.mu.Lock()
 	f.calls++
+	f.mu.Unlock()
 	out := make([][]float32, len(texts))
 	for i, text := range texts {
 		out[i] = topicVector(text)
 	}
 	return out, nil
+}
+
+func (f *fakeEmbedder) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
 func (f *fakeEmbedder) Close() error { return nil }
@@ -103,6 +116,9 @@ func TestHybridPromotesSemanticHit(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{}
 	hybrid := NewHybrid(source, staticFactory(embedder), testDB(t))
+	if err := hybrid.Warm(context.Background()); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
 
 	results, err := hybrid.Search(context.Background(), "how do we run vectors locally", 3)
 	if err != nil {
@@ -124,21 +140,29 @@ func TestHybridCachesCorpusEmbeddings(t *testing.T) {
 	source := fakeSource{corpus: corpus, ftsOrder: corpus}
 
 	first := &fakeEmbedder{}
-	if _, err := NewHybrid(source, staticFactory(first), conn).Search(context.Background(), "vectors", 5); err != nil {
+	firstHybrid := NewHybrid(source, staticFactory(first), conn)
+	if err := firstHybrid.Warm(context.Background()); err != nil {
+		t.Fatalf("first warm: %v", err)
+	}
+	if _, err := firstHybrid.Search(context.Background(), "vectors", 5); err != nil {
 		t.Fatalf("first search: %v", err)
 	}
-	// First run: one corpus document batch + one query = 2 calls.
-	if first.calls != 2 {
-		t.Fatalf("first run embed calls = %d, want 2 (corpus + query)", first.calls)
+	// First run: one corpus document batch (warm) + one query (search) = 2 calls.
+	if first.callCount() != 2 {
+		t.Fatalf("first run embed calls = %d, want 2 (corpus + query)", first.callCount())
 	}
 
 	second := &fakeEmbedder{}
-	if _, err := NewHybrid(source, staticFactory(second), conn).Search(context.Background(), "vectors", 5); err != nil {
+	secondHybrid := NewHybrid(source, staticFactory(second), conn)
+	if err := secondHybrid.Warm(context.Background()); err != nil {
+		t.Fatalf("second warm: %v", err)
+	}
+	if _, err := secondHybrid.Search(context.Background(), "vectors", 5); err != nil {
 		t.Fatalf("second search: %v", err)
 	}
 	// Second run: corpus hits the cache, so only the query is embedded.
-	if second.calls != 1 {
-		t.Fatalf("second run embed calls = %d, want 1 (query only — corpus cached)", second.calls)
+	if second.callCount() != 1 {
+		t.Fatalf("second run embed calls = %d, want 1 (query only — corpus cached)", second.callCount())
 	}
 }
 
@@ -158,6 +182,62 @@ func TestHybridDegradesWithoutEmbedder(t *testing.T) {
 	}
 	if orderIDs(results) != "dec-1,dec-2" {
 		t.Fatalf("nil embedder should pass through FTS order, got %s", orderIDs(results))
+	}
+}
+
+// TestHybridSearchNonBlockingBeforeWarm proves a search issued before the index
+// is ready returns promptly with results (no block, no error) instead of waiting
+// on the corpus embed.
+func TestHybridSearchNonBlockingBeforeWarm(t *testing.T) {
+	corpus := []*artifact.Artifact{
+		decisionArtifact("dec-1", "A", "alpha"),
+		decisionArtifact("dec-2", "B", "beta"),
+	}
+	src := fakeSource{corpus: corpus, ftsOrder: corpus}
+	hybrid := NewHybrid(src, staticFactory(&fakeEmbedder{}), testDB(t))
+
+	// No Warm: the first search must return immediately with FTS results.
+	results, err := hybrid.Search(context.Background(), "alpha", 5)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("first search before warm should still return FTS results, got none")
+	}
+}
+
+// TestHybridInvalidatePicksUpNewArtifact proves Invalidate triggers a background
+// rebuild that brings a decision recorded mid-session into the semantic index —
+// so it becomes semantically searchable without a restart.
+func TestHybridInvalidatePicksUpNewArtifact(t *testing.T) {
+	original := decisionArtifact("dec-a", "Rust embedding sidecar", "fastembed gemma vectors")
+	src := &fakeSource{corpus: []*artifact.Artifact{original}, ftsOrder: []*artifact.Artifact{original}}
+	hybrid := NewHybrid(src, staticFactory(&fakeEmbedder{}), testDB(t))
+	if err := hybrid.Warm(context.Background()); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	// A new auth decision is recorded mid-session; keyword still ranks dec-a first.
+	authDoc := decisionArtifact("dec-b", "Auth token rotation", "rotate oauth secrets on a schedule")
+	src.corpus = append(src.corpus, authDoc)
+	src.ftsOrder = []*artifact.Artifact{original, authDoc}
+	hybrid.Invalidate()
+
+	// Invalidate rebuilds in the background; poll until dec-b is semantically
+	// promoted above the keyword-first dec-a.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		results, err := hybrid.Search(context.Background(), "rotate authentication credentials", 5)
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		if len(results) > 0 && results[0].Meta.ID == "dec-b" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Invalidate did not surface dec-b semantically within 2s; got %s", orderIDs(results))
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
