@@ -46,6 +46,30 @@ func (f *fakeEmbedder) callCount() int {
 
 func (f *fakeEmbedder) Close() error { return nil }
 
+type blockingEmbedder struct {
+	fakeEmbedder
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newBlockingEmbedder() *blockingEmbedder {
+	return &blockingEmbedder{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (b *blockingEmbedder) Embed(ctx context.Context, role embedding.Role, texts []string) ([][]float32, error) {
+	if role == embedding.RoleDocument {
+		b.once.Do(func() {
+			close(b.started)
+			<-b.release
+		})
+	}
+	return b.fakeEmbedder.Embed(ctx, role, texts)
+}
+
 func staticFactory(embedder embedding.Embedder) func() (embedding.Embedder, error) {
 	return func() (embedding.Embedder, error) { return embedder, nil }
 }
@@ -82,6 +106,37 @@ func (s fakeSource) ListByKind(_ context.Context, kind artifact.Kind, _ int) ([]
 		}
 	}
 	return out, nil
+}
+
+type mutableFakeSource struct {
+	mu       sync.Mutex
+	corpus   []*artifact.Artifact
+	ftsOrder []*artifact.Artifact
+}
+
+func (s *mutableFakeSource) Search(_ context.Context, _ string, limit int) ([]*artifact.Artifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return truncate(s.ftsOrder, limit), nil
+}
+
+func (s *mutableFakeSource) ListByKind(_ context.Context, kind artifact.Kind, _ int) ([]*artifact.Artifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []*artifact.Artifact
+	for _, item := range s.corpus {
+		if item.Meta.Kind == kind {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (s *mutableFakeSource) replace(corpus, ftsOrder []*artifact.Artifact) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.corpus = corpus
+	s.ftsOrder = ftsOrder
 }
 
 func decisionArtifact(id, title, body string) *artifact.Artifact {
@@ -238,6 +293,47 @@ func TestHybridInvalidatePicksUpNewArtifact(t *testing.T) {
 			t.Fatalf("Invalidate did not surface dec-b semantically within 2s; got %s", orderIDs(results))
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestHybridInvalidateDuringWarmRewarms(t *testing.T) {
+	original := decisionArtifact("dec-a", "Rust embedding sidecar", "fastembed gemma vectors")
+	authDoc := decisionArtifact("dec-b", "Auth token rotation", "rotate oauth secrets on a schedule")
+	src := &mutableFakeSource{
+		corpus:   []*artifact.Artifact{original},
+		ftsOrder: []*artifact.Artifact{original, authDoc},
+	}
+	embedder := newBlockingEmbedder()
+	hybrid := NewHybrid(src, staticFactory(embedder), testDB(t))
+
+	hybrid.Prewarm()
+	select {
+	case <-embedder.started:
+	case <-time.After(1 * time.Second):
+		t.Fatal("background warm did not start")
+	}
+
+	src.replace([]*artifact.Artifact{original, authDoc}, []*artifact.Artifact{original, authDoc})
+	hybrid.Invalidate()
+	close(embedder.release)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if embedder.callCount() >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Invalidate during warm did not schedule a second build; embed calls = %d", embedder.callCount())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	results, err := hybrid.Search(context.Background(), "rotate authentication credentials", 5)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) == 0 || results[0].Meta.ID != "dec-b" {
+		t.Fatalf("second build did not surface dec-b semantically; got %s", orderIDs(results))
 	}
 }
 

@@ -190,7 +190,11 @@ func (h *Hybrid) warmAsync() {
 		h.byID = byID
 	}
 	h.built = true
+	needRewarm := h.dirty
 	h.mu.Unlock()
+	if needRewarm {
+		h.ensureWarming()
+	}
 }
 
 // resolveEmbedder spawns the embedder once and reuses it across rebuilds. A nil
