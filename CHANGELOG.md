@@ -241,7 +241,28 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
   fastembed-rs sidecar) and closes the spike gate `dec-20260604-3aaad199`. A
   live R@k eval over the real `.haft/decisions` corpus (16 paraphrased queries)
   measured hybrid beating FTS5-alone by +25% R@10 (0.75 → 1.00), MRR +0.319 —
-  well above the decision's 10% threshold.
+  well above the decision's 10% threshold. The sidecar is **self-healing** — a
+  mid-session fault (crash / timeout) respawns the process once and retries, so a
+  fault costs one query, not FTS for the rest of the session. The corpus index
+  warms in the **background** (search returns FTS5+PPR immediately while cold and
+  during re-warms — never blocking on a first-run model download), and a
+  created/updated decision **invalidates** it so it becomes semantically
+  searchable the same session.
+- **Cross-project semantic recall at the index boundary.** The cross-project
+  decision recall surfaced on `/h-frame` (the `Cross-Project History` section)
+  was FTS5-only and paraphrase-blind — a frame whose problem reworded a prior
+  cross-project decision missed it. It now reuses the embedding layer at the
+  boundary. `IndexStore.Search` gains an **OR-fallback** (AND-first,
+  OR-on-shortfall) that recovers paraphrased recall even without embeddings; a
+  `CrossHybrid` (`internal/project`) fuses **AND-precise** FTS with embedding
+  cosine via RRF over the cross-project corpus, **degrades byte-identically** to
+  `IndexStore.Search` when the sidecar is absent, and guarantees hybrid recall
+  **≥** FTS (additive invariant, via a tail recall-floor top-up). Corpus vectors
+  are cached in `global_embeddings` on the index DB (additive; drop = recompute).
+  A live R@k eval on the real cross-project corpus measured R@10 0.00 (old
+  AND-only) → 0.75 (OR-fallback) → 1.00 (hybrid), MRR → 1.00. Implements
+  `dec-20260605-8096a563`; the shipped per-project recall is untouched and
+  `internal/project` gains no `recall` import (no cycle).
 - **Decomposed-Brier calibration on decision predictions.** A decision
   prediction can now carry an optional `probability` in `[0,1]` (sampled as
   2–3 noisy votes, never one authoritative number); verified outcomes feed a
