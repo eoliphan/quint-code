@@ -30,18 +30,40 @@ type tsProjectResolution struct {
 
 // tsResolutionCache memoizes the project resolution per project root. Loading
 // parses tsconfig + walks workspace dirs, so re-running it for every file in a
-// scan would be wasteful; the cache is session-scoped (a rebuild is a fresh
-// process, so a mid-session config edit needs a restart to take effect).
-var tsResolutionCache sync.Map // projectRoot -> tsProjectResolution
+// scan would be wasteful. The entry is invalidated when a root config file's
+// mtime changes, so a mid-session edit to tsconfig/package.json takes effect on
+// the next resolve without a restart. (A member package.json edit is not yet
+// fingerprinted — that needs a re-index.)
+var tsResolutionCache sync.Map // projectRoot -> tsResolutionEntry
+
+type tsResolutionEntry struct {
+	fingerprint int64
+	res         tsProjectResolution
+}
+
+// tsConfigFingerprint combines the mtimes of the root config files that feed
+// resolution, so any edit to them invalidates the cached entry.
+func tsConfigFingerprint(projectRoot string) int64 {
+	var fp int64
+	for _, name := range []string{"tsconfig.json", "jsconfig.json", "package.json"} {
+		if fi, err := os.Stat(filepath.Join(projectRoot, name)); err == nil {
+			fp = fp*131 + fi.ModTime().UnixNano()
+		}
+	}
+	return fp
+}
 
 func loadTSProjectResolution(projectRoot string) tsProjectResolution {
+	fp := tsConfigFingerprint(projectRoot)
 	if v, ok := tsResolutionCache.Load(projectRoot); ok {
-		return v.(tsProjectResolution)
+		if e := v.(tsResolutionEntry); e.fingerprint == fp {
+			return e.res
+		}
 	}
 	res := tsProjectResolution{baseURL: ".", workspaces: map[string]string{}}
 	res.baseURL, res.aliases = loadTSAliases(projectRoot)
 	res.workspaces = loadTSWorkspaces(projectRoot)
-	tsResolutionCache.Store(projectRoot, res)
+	tsResolutionCache.Store(projectRoot, tsResolutionEntry{fingerprint: fp, res: res})
 	return res
 }
 
