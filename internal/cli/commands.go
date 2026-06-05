@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	_ "embed"
 	"fmt"
 	"os"
@@ -235,30 +234,6 @@ func writeCodexSkill(skillsRoot, name, content string, allowImplicit bool) error
 	return writeCodexSkillPolicy(skillDir, allowImplicit)
 }
 
-func transformCodexCommandSkill(name, content string) string {
-	description := extractFrontmatterDescription(content)
-	if description == "" {
-		description = "Haft command: " + name
-	}
-
-	body := stripMarkdownFrontmatter(content)
-	body = transformCodexSkillReferences(body)
-	body = strings.ReplaceAll(body, "$ARGUMENTS", "Use the user's explicit skill invocation text as the request context.")
-	body = strings.TrimSpace(body)
-
-	return fmt.Sprintf(`---
-name: %s
-description: %s
----
-
-## Codex Invocation
-
-This skill is explicit-only. Use it only when the user invokes $%s; treat the text after the skill name as the request context.
-
-%s
-`, name, yamlDoubleQuote(description), name, body)
-}
-
 func transformCodexSkillReferences(content string) string {
 	replacer := strings.NewReplacer(
 		"/h-", "$h-",
@@ -272,59 +247,11 @@ func transformCodexSkillReferences(content string) string {
 	return replacer.Replace(content)
 }
 
-func stripMarkdownFrontmatter(content string) string {
-	if !strings.HasPrefix(content, "---\n") {
-		return content
-	}
-
-	end := strings.Index(content[4:], "\n---")
-	if end < 0 {
-		return content
-	}
-
-	start := 4 + end + len("\n---")
-	return strings.TrimLeft(content[start:], "\r\n")
-}
-
-func extractFrontmatterDescription(content string) string {
-	if !strings.HasPrefix(content, "---\n") {
-		return ""
-	}
-
-	end := strings.Index(content[4:], "\n---")
-	if end < 0 {
-		return ""
-	}
-
-	frontmatter := content[4 : 4+end]
-	scanner := bufio.NewScanner(strings.NewReader(frontmatter))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "description:") {
-			continue
-		}
-
-		value := strings.TrimSpace(strings.TrimPrefix(line, "description:"))
-		return strings.Trim(value, `"`)
-	}
-
-	return ""
-}
-
-func yamlDoubleQuote(value string) string {
-	replacer := strings.NewReplacer(
-		`\`, `\\`,
-		`"`, `\"`,
-		"\n", `\n`,
-	)
-	return `"` + replacer.Replace(value) + `"`
-}
-
 // deprecatedCommands lists slash-command names that prior haft versions
-// installed but the current command set no longer ships. `cleanupOldCommands`
-// removes them on every install so re-running `haft init` leaves the
-// host's command directory clean. Keep entries cumulative — operators
-// who skip versions need the full list to migrate forward.
+// installed but the current command set no longer ships. Cleanup runs on every
+// install so re-running `haft init` leaves the host's command directory clean.
+// Keep entries cumulative — operators who skip versions need the full list to
+// migrate forward.
 //
 // TODO(future release): prune the oldest entries (q0-init through the
 // q-prefix block) once enough time has passed that no live install
@@ -359,13 +286,6 @@ var deprecatedCommands = []string{
 	"h-boundary-unpack", "h-semio-review",
 }
 
-func cleanupOldCommands(destDir string, ext string) {
-	for _, cmd := range deprecatedCommands {
-		path := filepath.Join(destDir, cmd+ext)
-		_ = os.Remove(path) // ignore error - file may not exist
-	}
-}
-
 func cleanupCodexPromptCommands() (string, int, error) {
 	homeDir, _ := os.UserHomeDir()
 	destDir := filepath.Join(homeDir, ".codex", "prompts")
@@ -387,70 +307,6 @@ func cleanupCodexPromptCommands() (string, int, error) {
 	}
 
 	return displayHomePath(destDir, homeDir), removed, nil
-}
-
-func transformClaude(filename, content string) (string, string) {
-	return filename, content
-}
-
-func transformCursor(filename, content string) (string, string) {
-	return filename, content
-}
-
-func transformCodex(filename, content string) (string, string) {
-	// Codex uses same format as Claude (markdown with frontmatter)
-	// but calls them "prompts" and invokes via /prompts:<name>
-	return filename, content
-}
-
-func transformOpencode(filename, content string) (string, string) {
-	// OpenCode (sst/opencode) parses the same markdown-with-frontmatter
-	// command format as Claude. Pass through unchanged.
-	return filename, content
-}
-
-func transformGemini(filename, content string) (string, string) {
-	name := strings.TrimSuffix(filename, ".md")
-	newFilename := name + ".toml"
-
-	description := extractFirstHeading(content)
-	if description == "" {
-		description = "FPF command: " + name
-	}
-	description = strings.ReplaceAll(description, `"`, `\"`)
-
-	transformed := content
-	transformed = strings.ReplaceAll(transformed, "$ARGUMENTS", "{{args}}")
-	transformed = strings.ReplaceAll(transformed, "$1", "{{1}}")
-	transformed = strings.ReplaceAll(transformed, "$2", "{{2}}")
-	transformed = strings.ReplaceAll(transformed, "$3", "{{3}}")
-	transformed = escapeTomlMultiline(transformed)
-
-	tomlContent := fmt.Sprintf(`description = "%s"
-
-prompt = """
-%s
-"""
-`, description, transformed)
-
-	return newFilename, tomlContent
-}
-
-func extractFirstHeading(content string) string {
-	scanner := bufio.NewScanner(strings.NewReader(content))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "#") {
-			return strings.TrimSpace(strings.TrimLeft(line, "# "))
-		}
-	}
-	return ""
-}
-
-func escapeTomlMultiline(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"""`, `\"""`)
-	return s
 }
 
 // skillsRoot returns the per-platform parent directory under which

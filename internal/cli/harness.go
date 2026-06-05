@@ -1245,6 +1245,7 @@ func harnessWorkspaceApplyAuthorization(
 	)
 }
 
+//nolint:unused // exercised by package tests
 func canApplyAuthorizedHarnessWorkspaceDiff(
 	commission map[string]any,
 	workspaceSummary harnessWorkspaceGitSummary,
@@ -1452,38 +1453,6 @@ func formatHarnessApplyDisabledReason(reason scopeauth.BlockingReason) string {
 		parts = append(parts, "paths="+strings.Join(reason.Paths, ","))
 	}
 	return strings.Join(parts, " ")
-}
-
-func harnessScopeAuthorizationPayload(summary scopeauth.Summary) map[string]any {
-	if summary.Verdict == "" {
-		return nil
-	}
-
-	return map[string]any{
-		"verdict":             string(summary.Verdict),
-		"can_apply":           summary.CanApply(),
-		"allowed_paths":       summary.Allowed,
-		"out_of_scope_paths":  summary.OutOfScope,
-		"forbidden_paths":     summary.Forbidden,
-		"unknown_scope_paths": summary.UnknownScope,
-		"operator_reason":     harnessBlockingReasonPayload(summary.BlockingReason(), summary),
-	}
-}
-
-func harnessBlockingReasonPayload(
-	reason scopeauth.BlockingReason,
-	summary scopeauth.Summary,
-) map[string]any {
-	if reason.Code == "" {
-		return nil
-	}
-
-	return map[string]any{
-		"code":    string(reason.Code),
-		"verdict": string(reason.Verdict),
-		"paths":   reason.Paths,
-		"message": harnessScopeAuthorizationMessage(summary),
-	}
 }
 
 func gitChangedTrackedFiles(workdir string) ([]string, error) {
