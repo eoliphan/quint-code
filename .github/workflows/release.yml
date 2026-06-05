@@ -74,6 +74,18 @@ jobs:
           otp-version: '27'
           elixir-version: '1.18.3'
 
+      - name: Install Rust toolchain (embedding sidecar)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo (embedding sidecar)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            embed-sidecar/target
+          key: ${{ runner.os }}-${{ matrix.goarch }}-embed-cargo-${{ hashFiles('embed-sidecar/Cargo.lock') }}
+
       - name: Prepare desktop embed
         run: |
           cd desktop/frontend
@@ -120,12 +132,31 @@ jobs:
           MIX_ENV=prod mix deps.get --only prod
           MIX_ENV=prod mix release --overwrite
 
+      # Optional embedding sidecar (haft-embed). ort statically links onnxruntime
+      # so the output is a single self-contained binary (no libonnxruntime to
+      # ship). continue-on-error: embeddings are OPTIONAL — a sidecar build
+      # failure must not block the release; search degrades to FTS5+PPR and
+      # install.sh can still source-build it where cargo is present.
+      - name: Build embedding sidecar
+        id: embed
+        continue-on-error: true
+        run: |
+          cd embed-sidecar
+          cargo build --release
+
       - name: Package
         run: |
           mkdir -p _dist
           cp tui/dist/tui.mjs .
           mkdir -p runtimes/open-sleigh
           cp -R open-sleigh/_build/prod/rel/open_sleigh/. runtimes/open-sleigh/
+          mkdir -p runtimes/haft-embed/bin
+          if [ -x embed-sidecar/target/release/haft-embed ]; then
+            cp embed-sidecar/target/release/haft-embed runtimes/haft-embed/bin/haft-embed
+            echo "bundled haft-embed sidecar ($(du -h embed-sidecar/target/release/haft-embed | cut -f1))"
+          else
+            echo "::warning::haft-embed sidecar not built for ${{ matrix.goos }}-${{ matrix.goarch }} — semantic recall will fall back to FTS5+PPR or install.sh source build"
+          fi
           tar czf _dist/haft-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
             haft tui.mjs runtimes README.md LICENSE CHANGELOG.md
 

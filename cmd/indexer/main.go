@@ -65,7 +65,11 @@ func buildIndex(specPath, dbPath, commitSHA, routePath string) error {
 		return fmt.Errorf("building index: %w", err)
 	}
 
-	metadata := buildSpecIndexMetadata(specPath, len(allChunks), commitSHA, time.Now().UTC())
+	// build_time is the FPF spec COMMIT's date, not wall-clock time, so the
+	// index is byte-reproducible: a given submodule SHA always yields the same
+	// fpf.db (committed == rebuild; every release-matrix platform ships identical
+	// bytes). Wall-clock time.Now() would drift every build.
+	metadata := buildSpecIndexMetadata(specPath, len(allChunks), commitSHA, resolveSpecBuildTime(commitSHA, specPath))
 	if err := fpf.SetSpecMetaEntries(dbPath, metadata); err != nil {
 		return fmt.Errorf("setting meta: %w", err)
 	}
@@ -92,6 +96,32 @@ func resolveSpecCommit(explicitCommit, specPath string) string {
 	}
 
 	return detectSpecCommit(specPath)
+}
+
+// resolveSpecBuildTime returns the committer date of the FPF spec commit, so the
+// index build is deterministic. Falls back to the Unix epoch when git/the commit
+// is unavailable — still deterministic (never wall-clock).
+func resolveSpecBuildTime(commitSHA, specPath string) time.Time {
+	epoch := time.Unix(0, 0).UTC()
+	gitDir, err := specGitLookupDir(specPath)
+	if err != nil {
+		return epoch
+	}
+	ref := strings.TrimSpace(commitSHA)
+	if ref == "" {
+		ref = "HEAD"
+	}
+	cmd := exec.Command("git", "show", "-s", "--format=%cI", ref)
+	cmd.Dir = gitDir
+	output, err := cmd.Output()
+	if err != nil {
+		return epoch
+	}
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(string(output)))
+	if err != nil {
+		return epoch
+	}
+	return parsed.UTC()
 }
 
 func detectSpecCommit(specPath string) string {
