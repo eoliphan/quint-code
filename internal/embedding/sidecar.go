@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+
+	"github.com/m0n0x41d/haft/logger"
 )
 
 // ErrSidecarUnavailable signals the haft-embed binary is not installed. Callers
@@ -26,14 +28,20 @@ const (
 
 // sidecarAdapter is the local Embedder adapter: it owns a long-lived haft-embed
 // child process (the model loads once) and serializes request/response lines
-// over its stdio pipe. Implements the Embedder port.
+// over its stdio pipe. It is self-healing — if the process faults mid-session it
+// respawns once and retries, so a sidecar crash costs a single failed query, not
+// FTS5+PPR for the rest of the session. Implements the Embedder port.
 type sidecarAdapter struct {
+	binary string
+	args   []string
+
+	mu     sync.Mutex
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	reader *bufio.Reader
-	mu     sync.Mutex
 	nextID uint64
 	desc   Descriptor
+	alive  bool
 	closed bool
 }
 
@@ -71,19 +79,32 @@ func newSidecarAdapter(cfg Config) (Embedder, error) {
 		args = append(args, "--dim", strconv.Itoa(cfg.Dim))
 	}
 
-	cmd := exec.Command(binary, args...)
+	adapter := &sidecarAdapter{binary: binary, args: args}
+	adapter.mu.Lock()
+	err := adapter.spawn()
+	adapter.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return adapter, nil
+}
+
+// spawn launches (or relaunches) the sidecar process and reads its handshake,
+// installing the live pipes. Caller must hold a.mu.
+func (a *sidecarAdapter) spawn() error {
+	cmd := exec.Command(a.binary, a.args...)
 	cmd.Stderr = os.Stderr // model-download progress / errors stay visible
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("sidecar stdin: %w", err)
+		return fmt.Errorf("sidecar stdin: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("sidecar stdout: %w", err)
+		return fmt.Errorf("sidecar stdout: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start sidecar: %w", err)
+		return fmt.Errorf("start sidecar: %w", err)
 	}
 
 	reader := bufio.NewReader(stdout)
@@ -92,15 +113,15 @@ func newSidecarAdapter(cfg Config) (Embedder, error) {
 		_ = stdin.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return nil, err
+		return err
 	}
 
-	return &sidecarAdapter{
-		cmd:    cmd,
-		stdin:  stdin,
-		reader: reader,
-		desc:   Descriptor{Provider: ProviderLocal, Model: handshake.Model, Dimensions: handshake.Dim},
-	}, nil
+	a.cmd = cmd
+	a.stdin = stdin
+	a.reader = reader
+	a.desc = Descriptor{Provider: ProviderLocal, Model: handshake.Model, Dimensions: handshake.Dim}
+	a.alive = true
+	return nil
 }
 
 // readHandshake blocks on the sidecar's first line. On a cold start this waits
@@ -138,6 +159,34 @@ func (a *sidecarAdapter) Embed(ctx context.Context, role Role, texts []string) (
 		return nil, errors.New("embedding sidecar closed")
 	}
 
+	vectors, err := a.embedOnce(role, texts)
+	if err == nil {
+		return vectors, nil
+	}
+	if a.alive {
+		// Process is fine — a request-level error (bad response / count
+		// mismatch). Respawning would not help, so surface it.
+		return nil, err
+	}
+
+	// The process faulted mid-session. Respawn once and retry so a crash costs
+	// a single failed query, not FTS5+PPR for the rest of the session.
+	logger.Warn().Err(err).Msg("embedding sidecar faulted — respawning")
+	a.killLocked()
+	if respawnErr := a.spawn(); respawnErr != nil {
+		return nil, fmt.Errorf("sidecar respawn failed: %w", respawnErr)
+	}
+	return a.embedOnce(role, texts)
+}
+
+// embedOnce performs one request/response round-trip. An IO/protocol fault marks
+// the process dead (alive=false) so Embed can respawn; a valid error response
+// leaves the process alive.
+func (a *sidecarAdapter) embedOnce(role Role, texts []string) ([][]float32, error) {
+	if !a.alive {
+		return nil, errors.New("embedding sidecar not running")
+	}
+
 	a.nextID++
 	request := sidecarRequest{ID: a.nextID, Task: taskFor(role), Texts: texts}
 	payload, err := json.Marshal(request)
@@ -145,15 +194,18 @@ func (a *sidecarAdapter) Embed(ctx context.Context, role Role, texts []string) (
 		return nil, fmt.Errorf("encode embed request: %w", err)
 	}
 	if _, err := a.stdin.Write(append(payload, '\n')); err != nil {
+		a.alive = false
 		return nil, fmt.Errorf("write embed request: %w", err)
 	}
 
 	line, err := a.reader.ReadBytes('\n')
 	if err != nil {
+		a.alive = false
 		return nil, fmt.Errorf("read embed response: %w", err)
 	}
 	var response sidecarResponse
 	if err := json.Unmarshal(line, &response); err != nil {
+		a.alive = false
 		return nil, fmt.Errorf("decode embed response: %w", err)
 	}
 	if response.Error != "" {
@@ -165,6 +217,18 @@ func (a *sidecarAdapter) Embed(ctx context.Context, role Role, texts []string) (
 	return response.Vectors, nil
 }
 
+// killLocked force-terminates the current process. Caller must hold a.mu.
+func (a *sidecarAdapter) killLocked() {
+	if a.stdin != nil {
+		_ = a.stdin.Close()
+	}
+	if a.cmd != nil && a.cmd.Process != nil {
+		_ = a.cmd.Process.Kill()
+		_ = a.cmd.Wait()
+	}
+	a.alive = false
+}
+
 func (a *sidecarAdapter) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -172,8 +236,13 @@ func (a *sidecarAdapter) Close() error {
 		return nil
 	}
 	a.closed = true
-	_ = a.stdin.Close() // EOF tells the sidecar to exit cleanly
-	return a.cmd.Wait()
+	if a.stdin != nil {
+		_ = a.stdin.Close() // EOF tells the sidecar to exit cleanly
+	}
+	if a.cmd != nil {
+		return a.cmd.Wait()
+	}
+	return nil
 }
 
 func taskFor(role Role) string {
