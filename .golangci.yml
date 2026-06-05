@@ -75,6 +75,10 @@ linters:
         linters:
           - gosec
         text: "G115:"
+      - path: cmd/indexer/main.go
+        linters:
+          - gosec
+        text: "G702:"
 
 formatters:
   enable:

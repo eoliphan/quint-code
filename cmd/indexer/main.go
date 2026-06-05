@@ -107,9 +107,9 @@ func resolveSpecBuildTime(commitSHA, specPath string) time.Time {
 	if err != nil {
 		return epoch
 	}
-	ref := strings.TrimSpace(commitSHA)
-	if ref == "" {
-		ref = "HEAD"
+	ref, ok := cleanSpecCommitRef(commitSHA)
+	if !ok {
+		return epoch
 	}
 	cmd := exec.Command("git", "show", "-s", "--format=%cI", ref)
 	cmd.Dir = gitDir
@@ -122,6 +122,26 @@ func resolveSpecBuildTime(commitSHA, specPath string) time.Time {
 		return epoch
 	}
 	return parsed.UTC()
+}
+
+func cleanSpecCommitRef(commitSHA string) (string, bool) {
+	ref := strings.TrimSpace(commitSHA)
+	if ref == "" {
+		return "HEAD", true
+	}
+	if len(ref) != 40 {
+		return "", false
+	}
+	for _, r := range ref {
+		if !isHexCommitRune(r) {
+			return "", false
+		}
+	}
+	return strings.ToLower(ref), true
+}
+
+func isHexCommitRune(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 }
 
 func detectSpecCommit(specPath string) string {
