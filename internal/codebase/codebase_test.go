@@ -644,6 +644,108 @@ func TestCoverageComputation_RootModule(t *testing.T) {
 	}
 }
 
+// TestImpactRankedCoverage — V1 of dec-20260527-e4b86938. Verifies that
+// ComputeCoverage populates ImpactScore from the module_dependencies
+// reverse-graph, counting how many governed (covered/partial) modules
+// depend on each module. FormatCoverageResponse then sorts within tiers
+// by impact descending so the highest-risk blind modules surface first.
+func TestImpactRankedCoverage(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	now := "2026-03-18T12:00:00Z"
+
+	// Modules: 3 governed (have decisions) + 3 blind. Some blind ones
+	// have governed callers; some are isolated.
+	db.Exec(`INSERT INTO codebase_modules VALUES ('mod-api', 'internal/api', 'api', 'go', 5, ?)`, now)
+	db.Exec(`INSERT INTO codebase_modules VALUES ('mod-handler', 'internal/handler', 'handler', 'go', 3, ?)`, now)
+	db.Exec(`INSERT INTO codebase_modules VALUES ('mod-cli', 'internal/cli', 'cli', 'go', 4, ?)`, now)
+	db.Exec(`INSERT INTO codebase_modules VALUES ('mod-shared', 'internal/shared', 'shared', 'go', 2, ?)`, now)
+	db.Exec(`INSERT INTO codebase_modules VALUES ('mod-util', 'internal/util', 'util', 'go', 1, ?)`, now)
+	db.Exec(`INSERT INTO codebase_modules VALUES ('mod-isolated', 'internal/isolated', 'isolated', 'go', 1, ?)`, now)
+
+	// Governance: mod-api, mod-handler, mod-cli have decisions.
+	db.Exec(`INSERT INTO artifacts VALUES ('dec-api', 'DecisionRecord', 1, 'active', '', '', 'API decision', 'body', '', ?, ?)`, now, now)
+	db.Exec(`INSERT INTO affected_files VALUES ('dec-api', 'internal/api/api.go', '')`)
+	db.Exec(`INSERT INTO artifacts VALUES ('dec-handler', 'DecisionRecord', 1, 'active', '', '', 'Handler decision', 'body', '', ?, ?)`, now, now)
+	db.Exec(`INSERT INTO affected_files VALUES ('dec-handler', 'internal/handler/handler.go', '')`)
+	db.Exec(`INSERT INTO artifacts VALUES ('dec-cli', 'DecisionRecord', 1, 'active', '', '', 'CLI decision', 'body', '', ?, ?)`, now, now)
+	db.Exec(`INSERT INTO affected_files VALUES ('dec-cli', 'internal/cli/cli.go', '')`)
+
+	// Dependency edges: mod-shared is used by mod-api, mod-handler, mod-cli (3 governed callers — HIGH impact).
+	// mod-util is used by mod-handler (1 governed caller — MEDIUM impact).
+	// mod-isolated has no callers (0 impact).
+	db.Exec(`INSERT INTO module_dependencies (source_module, target_module, dep_type, last_scanned) VALUES ('mod-api', 'mod-shared', 'import', ?)`, now)
+	db.Exec(`INSERT INTO module_dependencies (source_module, target_module, dep_type, last_scanned) VALUES ('mod-handler', 'mod-shared', 'import', ?)`, now)
+	db.Exec(`INSERT INTO module_dependencies (source_module, target_module, dep_type, last_scanned) VALUES ('mod-cli', 'mod-shared', 'import', ?)`, now)
+	db.Exec(`INSERT INTO module_dependencies (source_module, target_module, dep_type, last_scanned) VALUES ('mod-handler', 'mod-util', 'import', ?)`, now)
+
+	report, err := ComputeCoverage(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if report.TotalModules != 6 {
+		t.Fatalf("expected 6 modules, got %d", report.TotalModules)
+	}
+
+	impacts := make(map[string]int)
+	statuses := make(map[string]CoverageStatus)
+	for _, mc := range report.Modules {
+		impacts[mc.Module.ID] = mc.ImpactScore
+		statuses[mc.Module.ID] = mc.Status
+	}
+
+	// mod-shared is blind with 3 governed callers
+	if statuses["mod-shared"] != CoverageBlind {
+		t.Errorf("mod-shared status = %s, want blind", statuses["mod-shared"])
+	}
+	if impacts["mod-shared"] != 3 {
+		t.Errorf("mod-shared impact = %d, want 3 (api+handler+cli all governed)", impacts["mod-shared"])
+	}
+
+	// mod-util is blind with 1 governed caller
+	if impacts["mod-util"] != 1 {
+		t.Errorf("mod-util impact = %d, want 1", impacts["mod-util"])
+	}
+
+	// mod-isolated is blind with 0 callers
+	if impacts["mod-isolated"] != 0 {
+		t.Errorf("mod-isolated impact = %d, want 0", impacts["mod-isolated"])
+	}
+
+	// FormatCoverageResponse should sort blind tier by impact desc:
+	// mod-shared (3) before mod-util (1) before mod-isolated (0).
+	output := FormatCoverageResponse(report)
+	sharedPos := strings.Index(output, "internal/shared")
+	utilPos := strings.Index(output, "internal/util")
+	isolatedPos := strings.Index(output, "internal/isolated")
+	if sharedPos < 0 || utilPos < 0 || isolatedPos < 0 {
+		t.Fatalf("expected all blind modules in output, got:\n%s", output)
+	}
+	if !(sharedPos < utilPos && utilPos < isolatedPos) {
+		t.Errorf("blind modules not sorted by impact desc — shared@%d util@%d isolated@%d\n%s",
+			sharedPos, utilPos, isolatedPos, output)
+	}
+
+	// Output should contain '(impact: N)' tag for non-zero impact modules.
+	if !strings.Contains(output, "impact: 3") {
+		t.Errorf("expected 'impact: 3' tag for mod-shared in output:\n%s", output)
+	}
+	if !strings.Contains(output, "impact: 1") {
+		t.Errorf("expected 'impact: 1' tag for mod-util in output:\n%s", output)
+	}
+	// mod-isolated has impact 0 → should NOT carry an impact tag (clutter avoidance).
+	if strings.Contains(output, "isolated") {
+		isolatedLine := output[isolatedPos:]
+		if nl := strings.Index(isolatedLine, "\n"); nl >= 0 {
+			isolatedLine = isolatedLine[:nl]
+		}
+		if strings.Contains(isolatedLine, "impact:") {
+			t.Errorf("zero-impact module should not carry impact tag, got line: %s", isolatedLine)
+		}
+	}
+}
+
 func TestCoverageComputation(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()

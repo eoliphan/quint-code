@@ -4,7 +4,492 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [Unreleased] — governance substrate pivot
+
+Architectural pivot recorded in
+`.haft/decisions/dec-20260525-v8-architecture-pivot-from-standalone-agent-to-g-bbe45cb7.md`.
+Standalone interactive agent (`haft agent`), TUI (Bun/OpenTUI/SolidJS package
+from the prior 8.0.0 release), and desktop wrappers (Tauri / Wails) **dropped**.
+Haft becomes a governance substrate: kernel + CLI + MCP server + 15 skills,
+plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
++ slash-command surfaces. See [MIGRATION-v8.md](MIGRATION-v8.md).
+
+### Removed
+
+- `haft agent` standalone interactive agent — all of `internal/agentcore`,
+  `internal/agentdriver`, `internal/agentproto`, `internal/agentserver`,
+  `internal/agentstore`
+- v8 TUI package (`tui/` — Bun + OpenTUI + SolidJS bundle, ~46k LOC dropped)
+- Wails-era desktop frontend (`desktop/frontend/` — React app for the
+  prior Wails wrapper). `desktop-tauri/` and `tui-react/` trees are
+  dead-code but still git-tracked pending operator decision on full
+  removal (no Go code launches either of them in v8).
+- Orphan packages post v7-agent removal: `internal/agentloop`
+  (coordinator, overseer, spawn — ~5400 LOC), `internal/protocol`
+  (bus, commands, events), `internal/session` (sqlite store +
+  migrations + tests), `internal/setup`, plus CLI helpers:
+  `login.go`, `models.go`, `setup.go`, `session_mode.go`,
+  `message_projection.go`, `files.go`, `term_echo_*.go`,
+  `internal/tools/ask_user.go`
+- v7 helper commands: `haft login`, `haft models`, `haft setup`
+- `/h-reason` umbrella skill — replaced by the 15-skill catalog
+- Prior `[8.0.0]` architecture (TS+Bun+OpenTUI+SolidJS standalone TUI,
+  gradual deprecation in 8.0 + removal in 8.1 plan) superseded by the
+  May 25 pivot DRR per FPF reasoner critique (BLP violation confirmed)
+
+### Added
+
+- **Code-graph retrieval — codegraph-parity lexical heuristics.** `haft_query`
+  symbol seeds and the `search` action now tolerate typos (bounded edit
+  distance), split compound identifiers (`getUserName` → get/user/name), stem
+  query terms, and accept field qualifiers (`kind:`/`lang:`/`path:`/`name:`) —
+  closing the grep-to-find-a-seed fallback. Deterministic, no embeddings.
+- **Graph-proximity recall in `related`.** A "Related by graph proximity"
+  section ranks symbols / decisions / notes by distance in the fused
+  code+reasoning graph via deterministic Personalized PageRank (no embeddings,
+  no second runtime). Held-out link-prediction on the real graph measured
+  recall@10 ≈ 1.8× a name-lexical baseline.
+- **"Tested by" coverage lane in `related`.** For a file, surfaces which test
+  functions exercise each callable symbol (structural coverage via call
+  edges — "exercised by", not "verified") and flags exported symbols no test
+  reaches; the proximity section stays production-only.
+- **Multi-language structural code edges.** The code graph grew beyond Go
+  call/dispatch to structural relationship edges across three languages: Go
+  `implements` / `embeds`, Python `extends` (class inheritance), and
+  TypeScript/JavaScript `extends` / `implements` (from explicit heritage
+  clauses). Unresolved or external targets are dropped, never invented; each
+  edge surfaces in callers/callees/impact with its kind label. (Resolution is
+  directory-scoped for now — cross-module imports are a follow-up.)
+- **Fact memory in `haft_note`.** `haft_note` is now a fact carrier: record
+  atomic `observations` (rationale optional) and anchor a fact to
+  decisions/problems/notes via typed `anchors`, persisted as real graph edges
+  that surface in `related` / backlinks. A dead anchor (missing target) is
+  rejected, never silently kept. Anchors now also accept **code symbols**
+  (`Name` or `Name@file` to disambiguate): a fact attaches to the exact symbol
+  and surfaces at it in `code_context` / `node` — the same fusion payoff
+  artifact anchors give. Symbol resolution lives in the CLI shell (the artifact
+  core never imports `codebase`); a dead or ambiguous symbol anchor rejects the
+  whole note, the same no-dead-edge invariant in both directions
+  (`dec-20260604-26be1e4b`).
+- **`haft init` installs/updates project `CLAUDE.md` haft section** — new
+  step in the init flow. Writes a haft-managed section delimited by
+  `<!-- haft:start -->` / `<!-- haft:end -->` HTML-comment markers.
+  Idempotent: re-running `haft init` replaces content inside the markers
+  and preserves any operator-authored content outside. Opt-out via
+  `haft init --no-claude-md`. Template embedded into the binary from
+  `internal/cli/claude_md_template.md`; the same content is mirrored
+  between haft markers in repo-root `CLAUDE.md`, with drift caught by
+  `TestClaudeMDTemplateInSyncWithRepoRoot`.
+- **CLAUDE.md showcase template** carries the new "Description ≠ Work"
+  core rule, a self-check pattern before long responses, friction-tradeoff
+  explainer (why kernel-persistence is worth the in-the-moment cost),
+  canonical FPF flow diagram, skill catalog with mode classification,
+  Quick Decision Framework for small reversible choices, Communication
+  Style calibration table, Thinking Principles, Critical Reminders, and
+  FPF Glossary. End-users get this on `haft init`; haft maintainers see
+  the same content between markers in repo-root CLAUDE.md.
+- **15-skill v8 catalog** installed by `haft init`:
+  `h-reason` (umbrella), `h-frame`, `h-diagnose`, `h-explore`, `h-compare`,
+  `h-decide`, `h-verify`, `h-status`, `h-onboard`, `h-spec-cover`, `h-note`,
+  `h-commission`, `h-abduct`, `h-boundary-unpack`, `h-semio-review`.
+  Auto-triggering skills fire on operator context. `h-decide` and
+  `h-commission` are manual-only (`disable-model-invocation: true`)
+  per Transformer Mandate.
+- **`haft check routing`** — CI-friendly golden-prompt routing reliability
+  check. 40 cases pairing operator-style prompts with expected skills;
+  enforces 70% pass threshold from pivot DRR prediction.
+- **Kernel MCP hard gates** — `haft_decision(action="decide")` validates
+  required DRR fields server-side and returns structured errors with
+  FPF spec references (CMP-02, DEC-08, X-WLNK, CMP-04, DEC-05) plus
+  how-to-proceed sections. Tactical mode supports explicit `_skips` +
+  `_skip_reason` field bypass.
+- **`h-diagnose` parallel hypothesis testing** — spawns one Agent
+  subagent per hypothesis to prevent the LLM's natural anchoring bias.
+  Forces 3+ rivals per FPF CC-B.5.2-2.
+- **`h-compare` dim-wise parallel scoring** — spawns one Agent subagent
+  per comparison dimension scoring all variants. Parity plan and
+  selection policy declared BEFORE scoring (Anti-Goodhart).
+- **MIGRATION-v8.md** — v7→v8 migration guide with upgrade checklist,
+  behavioral-change reference, and rollback procedure.
+- **`Warnings []string` on `ToolResult`** — Slice B warning detectors
+  for h-explore (diversity check), h-compare (parity hints), h-decide
+  (DRR completeness hints) preserved from pre-pivot work.
+- **Inline FPF-discipline guards (kernel, advisory — never block)** — three
+  deterministic checks adopted from FPF `16cd313`, surfaced as soft warnings
+  so the agent self-corrects while the human stays final authority
+  (Transformer Mandate):
+  - **Umbrella-word frame guard** (FPF E.10 wording-use precision) —
+    `haft_problem(action="frame")` scans title/signal/acceptance against a
+    curated EN+RU trigger registry (`quality`, `robust`, `scalable`, `clean`,
+    `ready`, `secure`, …) and names, per word, the precise recovery and the
+    overread to block. `internal/artifact/umbrella.go`.
+  - **Content-vs-reputation decide guard** (FPF E.9.DA:4.4b) —
+    `haft_decision(action="decide")` flags rationale leaning on popularity /
+    adoption / "industry standard" / "best practice" and asks for the content
+    reason that makes the option right for *this* problem.
+    `internal/artifact/reputation.go`.
+  - **Non-discriminating dimension warning** (FPF A.19.ECS) — `compare`
+    flags a TARGET dimension on which every variant scores identically (dead
+    weight, or a hidden parity condition mislabeled as a target); role-aware,
+    so constraints (all-pass is correct) and observations are skipped.
+    `internal/artifact/solution.go`.
+- **`/h-spec-cover` impact-ranked coverage (V1)** — uncovered-file output
+  ranks modules by impact instead of a flat list (`dec-20260527-e4b86938`).
+- **Code drift surfaced in `/h-status` (H1)** — `haft_query(action="status")`
+  reports decisions whose affected files changed since baseline, so drift is
+  visible without a manual `/h-verify`.
+- **Context graph — code intelligence fused with the reasoning graph**
+  (`dec-20260603-5825abc6`, plan `note-20260603-7d6632f1`). A code-graph
+  (symbols + call/dispatch edges) built on the existing tree-sitter substrate,
+  where every tool interleaves code structure with the decisions, problems,
+  variants, notes, and invariants governing it — the fusion no pure code-graph
+  can do. Functional core / imperative shell throughout; an unresolved
+  call/dispatch is an **absent** edge, never a wrong one ("partial coverage
+  worse than none"). New `haft_query` actions (cross-host over MCP):
+  - **`code_context`** — the full reasoning context for a file or a symbol
+    within it. Line-aware fusion join (`SearchByAffectedSymbolAt` +
+    `Target.Line`) disambiguates overloaded same-name symbols by body line-range,
+    so a decision attaches to the right overload instead of the union of all of
+    them; granularity is reported honestly (`line-precise` vs
+    `file+name (overload not disambiguated)`). A module-governed symbol shows
+    `module governed by dec-Y`, never blank. `internal/contextgraph`.
+  - **`callees` / `callers` / `impact`** — bounded directed traversal over the
+    code-edge layer (depth ≤10, default 2, result ≤20), each reached symbol
+    annotated with BOTH symbol-level (line-aware) and module-level governing
+    decisions; ambiguous seed names list candidates rather than silently
+    picking one. `internal/codeintel` (pure BFS over an `EdgeSource` port).
+  - **`node`** — a symbol's detail page: byte-exact body **re-read + re-hashed**
+    from disk before slicing (never stale source on an actively-edited file),
+    its immediate caller/callee trail, and ALL same-name overloads each with
+    their own per-overload governance + member outline for container types.
+  - **`explore`** (PRIMARY) — the single-call answer: deepest connected call
+    chain (≤7 hops, ≤1 dispatch bridge), each on-chain symbol fused with its
+    governing decisions/invariants, plus blast radius (callers + covering
+    decisions) and verbatim freshness-checked seed source — enough to answer
+    "how does this flow and why is it shaped this way" at 0–1 Read. A chain
+    that hits a dynamic-dispatch boundary it cannot resolve says so rather than
+    implying completeness.
+  - **Language-pluggable seam (not Go-locked)** — `EdgeResolver` / `SymbolView`
+    ports + a per-language adapter registry; Go is the first adapter
+    (`internal/codebase` call-site, cross-file, and interface→impl dispatch
+    resolution). Other languages add an adapter; node extraction already spans
+    7 languages. Interface dispatch resolves through `:=`-inferred receivers,
+    not only declared ones (package-scoped type-fact inference), with
+    conservative drop on any ambiguity so a shadowed or cross-package binding
+    never produces a wrong edge. Concrete cross-package method calls resolve to
+    the receiver type's method via package-scoped type facts; a symbol with no
+    recorded callers says so honestly rather than returning a bare empty result.
+- **Context-graph self-refresh (staleness detection + auto-rebuild)** — the code
+  index detects when the source tree changed since its last build (fingerprint
+  compare) and rebuilds automatically: lazily on a `haft_query` that finds the
+  index stale, and on MCP server startup. Traversal / `explore` results are never
+  served from a stale index waiting on a manual rebuild.
+- **MCP server-instructions doctrine + mandatory session-start status** — the
+  MCP `initialize` `instructions` field now always carries, in order, (1) a
+  mandatory first-action rule — run `haft_query(action="status")` at session
+  start, because a governed project's working memory lives in the graph, not
+  only the code — and (2) a consult-before-editing doctrine for the fused code
+  graph (tool-by-intent guidance, honest-coverage markers, anti-patterns).
+  Delivered through the one always-on instruction channel; no CLAUDE.md
+  duplication. `composeServerInstructions` (`internal/cli`), fires
+  unconditionally.
+- **Fuzzy-tolerant seeds + multi-seed `explore` (no new tool, no embeddings)** —
+  folded into the EXISTING `haft_query` actions, determinism preserved. A seed
+  name with no exact match falls back to deterministic substring ranking
+  (exact > prefix > shorter): exactly one fuzzy match is used and **labeled**
+  fuzzy; more than one returns candidates rather than silently picking. `explore`
+  additionally accepts a bag of 2+ names in the same `symbol` argument and finds
+  the connecting static path between adjacent seeds (bounded BFS, both
+  directions); a disconnected pair is reported as "no static path", never
+  bridged. (`SearchSymbols`, `resolveSeed`, `ExploreBag`.)
+- **Curation gate for agent-drafted rationale** (`dec-20260603-732219b6`) —
+  `/h-explore` and `/h-decide` (skill bodies + the `haft_solution` /
+  `haft_decision` tool descriptions) bucket the agent's drafted
+  weakest-links / risks / strengths by the agent's own confidence and surface the
+  **doubtful ones first**, so the operator scrutinizes the load-bearing-but-
+  uncertain arguments instead of rubber-stamping a flat wall. Honesty invariant:
+  a low-confidence point is never down-ranked to look tidy. No kernel/schema
+  change — the gate lives in guidance, not validation.
+- **Ceremony auto-scaler — risk-floor + ask-when-blind**
+  (`dec-20260604-…0a6edafd`). New `haft_query(action="ceremony", files=[…])`: a
+  deterministic floor recommends a ceremony mode (tactical / standard / deep)
+  proportioned to a change's **risk**, detected from path/content patterns +
+  recorded governance facts — **never from call-graph fan-out** (a "leaf" is
+  never assumed safe; a one-line auth change is high-risk). Hard invariant: a
+  detected high-risk change (irreversible / security / privacy / public-API /
+  data / financial-authz / destructive content / low-reversibility governance)
+  is **never** routed tactical; when the floor cannot classify a touched file it
+  escalates and asks rather than defaulting low. Recommendation only — the
+  operator binds the mode (Transformer Mandate). Pure core in `internal/ceremony`
+  (functional core / imperative shell), wired into `/h-frame`, `/h-explore`,
+  `/h-compare`.
+- **Hybrid semantic recall over FTS5 + PPR (optional EmbeddingGemma
+  sidecar).** `haft_query(action="search")` can now fuse keyword (FTS5) and
+  semantic (embedding cosine) recall via Reciprocal Rank Fusion (k=60, 0.15
+  cosine floor) over the decisions+notes corpus — the graph stays primary and
+  the layer **augments, never replaces** FTS5+PPR, degrading silently to
+  keyword+graph recall when the embedder is absent. Embeddings come from an
+  optional out-of-process Rust sidecar (`embed-sidecar/` — `haft-embed`,
+  EmbeddingGemma 768-dim via fastembed-rs, newline-JSON stdio); haft's own Go
+  build gains no new cgo. Hexagonal port-adapter (`internal/embedding` —
+  `local` | `openai` | `none`), brute-force in-memory cosine index (no vector
+  DB), corpus vectors cached in `artifact_embeddings` (migration v29) keyed by
+  model contract + content hash. `install.sh` delivers the sidecar to
+  `~/.haft/runtimes/` (OPTIONAL — a missing Rust toolchain warns and
+  continues); `config.embedding` controls provider/model/dim,
+  `embedding.provider=none` disables. Implements `dec-20260605-fe77b358` (Rust
+  fastembed-rs sidecar) and closes the spike gate `dec-20260604-3aaad199`. A
+  live R@k eval over the real `.haft/decisions` corpus (16 paraphrased queries)
+  measured hybrid beating FTS5-alone by +25% R@10 (0.75 → 1.00), MRR +0.319 —
+  well above the decision's 10% threshold. The sidecar is **self-healing** — a
+  mid-session fault (crash / timeout) respawns the process once and retries, so a
+  fault costs one query, not FTS for the rest of the session. The corpus index
+  warms in the **background** (search returns FTS5+PPR immediately while cold and
+  during re-warms — never blocking on a first-run model download), and a
+  created/updated decision **invalidates** it so it becomes semantically
+  searchable the same session.
+- **Cross-project semantic recall at the index boundary.** The cross-project
+  decision recall surfaced on `/h-frame` (the `Cross-Project History` section)
+  was FTS5-only and paraphrase-blind — a frame whose problem reworded a prior
+  cross-project decision missed it. It now reuses the embedding layer at the
+  boundary. `IndexStore.Search` gains an **OR-fallback** (AND-first,
+  OR-on-shortfall) that recovers paraphrased recall even without embeddings; a
+  `CrossHybrid` (`internal/project`) fuses **AND-precise** FTS with embedding
+  cosine via RRF over the cross-project corpus, **degrades byte-identically** to
+  `IndexStore.Search` when the sidecar is absent, and guarantees hybrid recall
+  **≥** FTS (additive invariant, via a tail recall-floor top-up). Corpus vectors
+  are cached in `global_embeddings` on the index DB (additive; drop = recompute).
+  A live R@k eval on the real cross-project corpus measured R@10 0.00 (old
+  AND-only) → 0.75 (OR-fallback) → 1.00 (hybrid), MRR → 1.00. Implements
+  `dec-20260605-8096a563`; the shipped per-project recall is untouched and
+  `internal/project` gains no `recall` import (no cycle).
+- **Decomposed-Brier calibration on decision predictions.** A decision
+  prediction can now carry an optional `probability` in `[0,1]` (sampled as
+  2–3 noisy votes, never one authoritative number); verified outcomes feed a
+  Murphy (1973) Brier decomposition (reliability − resolution + uncertainty),
+  so `/h-verify` reports whether the project's forecasts are over- or
+  under-confident. Pure deterministic core (`internal/reff/calibration.go`),
+  additive storage (probability rides the existing `structured_data` JSON — no
+  migration), scored only at decide/verify time and honest about cold-start
+  below 15 forecasts. Implements `dec-20260603-c3c7fa88`.
+- **Cross-module `call` edges for Python and TypeScript.** Python and TS were
+  structural-only (`extends`/`implements` from in-file heritage); they now also
+  emit `call` edges resolved across modules — Python `from M import N`,
+  module-qualified `m.foo()`, relative imports, and class construction; TS named
+  + namespace imports with base-path + extension/index resolution. Closes the
+  "directory-scoped for now" follow-up flagged on the multi-language edges entry
+  above. Honest coverage held end to end: every unresolved, ambiguous, external,
+  or instance-method (`obj.method()`) call is a **dropped** edge, never a guessed
+  one (`dec-20260603-5825abc6`, extend-in-place).
+- **Dynamic-dispatch callback edges + TS module resolution.** A new heuristic
+  `callback` edge wires a named function passed to a callback **sink**
+  (`emitter.on("x", onX)`, `signal.connect(handler)`, `addEventListener`,
+  `subscribe`, …) from the enclosing function to the handler, closing the
+  "callback-only function shows zero callers" hole; a function passed as plain
+  data is never wired (exactly-one-or-drop). Intra-file EventEmitter dispatch is
+  paired by event name (`.on`/`.once`/`.addListener` ↔
+  `.emit`/`.fire`/`.dispatchEvent`) so "what runs when this emits" exists in the
+  graph. TS module resolution learned `tsconfig`/`jsconfig` `paths` + `baseUrl`
+  (JSONC-tolerant) and npm workspaces, with the per-project cache invalidated on
+  a config-file mtime change. Plus polish: each Py/TS file is tree-sitter-parsed
+  once per pass (was 4×), and generated files (`*.pb.go`, `*_pb2.py`, `*.gen.go`,
+  …) are down-ranked behind hand-written code on a name collision.
+- **Trust-decay signal on governing decisions in `code_context` (V2).** Each
+  decision in the "Decisions governing this code" block now surfaces how far it
+  can still be trusted — its non-active status (refresh-due / superseded) plus
+  how many of its predictions remain unverified (`· N/M predictions
+  unverified`) — so a decision whose claims were never checked no longer reads
+  as fully authoritative right where the agent reads the *why*. Pure over the
+  stored claims, no extra DB fetch; full evidence-based R_eff remains a
+  follow-up.
+- **Graph-grounded `h-diagnose` and `h-frame` (V3).** `h-diagnose` gained a
+  Step 2.5 that pulls `code_context` once for the failing symbol and injects its
+  invariants + trust-decay into each (read-only) hypothesis subagent, making a
+  **stale governing decision** a first-class root-cause suspect that
+  reasoning-on-code-alone systematically misses. `h-frame` gained an optional
+  `seed_file` that runs the shipped PPR over the fused graph and appends the
+  nearest governing artifacts to its keyword recall. Both live in the shell
+  (best-effort, non-regressing). A 12-agent design workflow refuted adding the
+  same hook to `h-explore` (it would anchor the diversity that is explore's job).
+
+### Changed
+
+- **`/h-fpf` renamed to `/h-reason` and expanded into a full FPF
+  reasoning umbrella.** The v8 pivot had split the old `/h-reason` into
+  15 specialized skills + a narrow `/h-fpf` fallback, betting that
+  description-based auto-trigger would route reliably. Session-data
+  analysis showed that bet was partly wrong: in practice operators
+  invoke skills via explicit slash commands (`/h-status`, `/h-verify`,
+  `/h-explore`) more than auto-trigger ever fires from natural language,
+  and the umbrella entry point was missed by users with v6/v7 muscle
+  memory. The new `/h-reason` carries the full reasoning palette in one
+  place — framing, exploration, comparison, verification, notes, plus
+  the slideument patterns that don't have dedicated skills (Goldilocks
+  problem selection, NQD discipline, Bitter-Lesson Preference,
+  Scaling-Law Lens, stepping stones, Anti-Goodhart indicator roles).
+  Description is broad enough to also fire as fallback on ambiguous
+  "let's think this through" / "structured approach" / "apply FPF here"
+  signals. Specialized skills remain — they auto-trigger on sharper
+  signals and carry deeper procedures; `/h-reason` covers their
+  compressed inline versions and delegates to them for thoroughness.
+  Old `/h-fpf` skill directory is now in `deprecatedSkillDirs` and gets
+  cleaned up on `haft init`.
+- **Skill descriptions rewritten per Anthropic SOTA best practices** —
+  third-person, pushy ("Make sure to use this skill whenever..."), verbatim
+  user trigger phrases instead of FPF pattern IDs. Counters Claude's
+  documented tendency to undertrigger skills (per Anthropic's
+  skill-creator playbook). Particular focus on `h-frame`, which now
+  catches the high-value moment when an operator proposes a refactor /
+  rewrite / migration without first naming the problem or acceptance
+  criteria. Subroutines (`h-abduct`, `h-boundary-unpack`,
+  `h-semio-review`) marked `INTERNAL SUBROUTINE` in description so the
+  model knows not to surface them directly to operators.
+- **`h-onboard` procedure refactored — agent drafts, operator reviews.**
+  Previous procedure pushed operators to author the three spec carriers
+  (`target-system.md`, `enabling-system.md`, `term-map.md`) themselves,
+  with the rationale "they need to feel it." This misinterpreted
+  Transformer Mandate (which only governs binding choices, not
+  descriptive observation) and defeated the purpose of having an AI
+  agent. The new procedure: agent reads README, project-config files
+  (`package.json` / `pyproject.toml` / `Cargo.toml` / `go.mod`), source
+  entry points, CI files, and drafts initial spec carriers directly to
+  disk via the `Write` tool. Each file starts with a `DRAFT` HTML
+  comment so the operator sees it as a starting point, not authoritative.
+  Operator reviews and edits where the agent inferred wrong. The
+  "autonomy default" question was also removed — that belongs at
+  `/h-commission`, not onboarding.
+- **Repo-root `CLAUDE.md` restructured as single source of truth** —
+  maintainer-only prelude (haft v8 architecture notes, preserved across
+  `haft init`) followed by haft markers wrapping the same showcase
+  template that ships to end users. The bracketed section is the
+  canonical good-engineering config; the prelude is haft-specific
+  context for AI agents working on haft itself.
+- CLAUDE.md gained a top-level "v8 Architecture (governance substrate)"
+  section describing three surfaces (skills, CLI, MCP) sharing one
+  artifact graph, FPF placement (skills = MethodDescription, kernel =
+  enforcement), and Transformer Mandate placement on h-decide /
+  h-commission.
+- README header reframed to "FPF governance substrate". Skill catalog
+  table added with mode classification (auto / manual / subroutine).
+  Cookbook section added with common workflow walkthroughs.
+- Artifact-graph hygiene: superseded 4 prior decisions conflicting with
+  the pivot (dec-20260513-v8-architecture-retroactive, v8-sunset-retroactive,
+  v8-attribution-retroactive, dec-20260424-desktop-smart-add-rpc).
+- `task install` simplified — drops legacy React+Ink TUI build,
+  drops v8 OpenTUI bun-install step, drops desktop install hint. Now
+  installs only the Go binary + Open-Sleigh runtime. `task install`
+  was broken after the pivot (referenced deleted `tui/package.json`);
+  this fixes it. Vars `TUI_DIR`, `TUI_BUNDLE`, `TUI_INSTALL_DIR`,
+  `TUI_V8_DIR`, `TUI_V8_BUNDLE` removed. Tasks `tui`, `tui-v8-install`,
+  `tui-v8-build`, `tui-v8-test`, `tui-v8-typecheck` removed.
+  `repomix` include/ignore globs purged of `tui/`, `tui-react/`,
+  `desktop/`, `desktop-tauri/`. Desktop vars kept and `desktop:*`
+  tasks reachable pending operator decision on full tree removal.
+- `task lint` no longer typechecks the deleted legacy TUI TypeScript;
+  runs `go vet` only.
+- **Maintenance forcing function in entry-point skill bodies (V4)** —
+  h-status / h-reason / etc. now act on a surfaced refresh reminder (run
+  `haft_refresh(action="scan")` before answering, re-baseline drift on
+  in-session files) instead of only printing it.
+- **V5 audit — the `description ≠ work` self-check pattern dropped from
+  h-frame, h-compare, h-explore** skill bodies, where it nudged the model to
+  narrate intent instead of acting.
+- **Re-grounding rule added; `h-reason` description trimmed for Codex
+  compatibility** — operator-facing text must pair every artifact ID
+  (`V1`, `dec-…`, `prob-…`) with its human-readable title (FPF A.7 Strict
+  Distinction).
+- **Mandatory plain-words final step in `h-explore` / `h-compare`** — both
+  skills now end with a short plain-language section (zero artifact IDs, zero
+  undefined FPF jargon) the operator can act on from that section alone, so a
+  comparison or option set is never delivered as an ID-and-jargon wall the
+  operator cannot read.
+- FPF spec refreshed to `16cd313 wording-use ontological precision
+  restoration` (was `04dd733`, via `562813f`). Picked up upstream: the
+  quality-improvement campaign (A.19.ECS Evaluation CharacteristicSpace
+  construction, E.8.ECSPF publication form, E.21 pattern-quality, E.9.DA DRR
+  decision-adequacy, E.2.DA pillar-adequacy, E.22 improvement-oriented
+  quality-read framing, E.23 quality-improvement loop) and the wording-use
+  ontological precision restoration (E.10.ARCH architecture, C.16.P, C.16.Q
+  [moved from A.6.Q; `evaluativeAscription` → `qualityTermAscription`],
+  C.30.P). Embedded SQLite index (`internal/cli/fpf.db`) rebuilt — 5607
+  chunks (5541 spec + 66 patterns).
+- **`CheckDrift` per-scope tree walk memoized** — `/h-status` (the
+  session-mandatory first action) was re-running `filepath.WalkDir` once per
+  decision per drift scope; many decisions share the whole-repo `"."` scope, so
+  the same ~24k-file tree walk ran ~8× per status (~3.6s dominated by the
+  redundant walks, not git subprocesses). The walk is now memoized by
+  normalized scope within a single `CheckDrift` pass — identical files per
+  scope, computed once instead of N times. Behavior unchanged; no cache-coherence
+  surface (the memo lives only for the one pass). (`internal/artifact/decision.go`.)
+- Embedded FPF spec index regenerated (`data/FPF` + `internal/cli/fpf.db`).
+
+### Fixed
+
+- **Terminal-status artifacts no longer resurface as expiry debt** — the
+  `haft_refresh` stale-collection path now excludes `deprecated` / `superseded`
+  artifacts, matching the active-decision scan's status filter. An archived-but-
+  expired decision stops showing per-item expiry debt that it no longer counts
+  toward the active budget. (`internal/artifact/refresh.go`.)
+- **`haft_refresh(action="scan")` summary-by-default** — drift output is
+  summarized (counts + top-5 modified paths per decision) instead of dumping
+  full per-file diffs that could exceed the context budget on large repos;
+  `verbose=true` restores the full dump.
+- **Nav-hint feedback loop** — dropped dead `/h-char` and `/h-refresh` nav
+  hints that pointed at removed/renamed commands.
+- **Import-aware heritage resolution — no shadowed-base wrong edge** (Py + TS).
+  `pythonHeritageEdges` / `tsHeritageEdges` resolved a base class/interface
+  directory-locally and ignored the import surface, so an unimported same-named
+  class in a sibling module could shadow an imported base and emit a **wrong**
+  `extends`/`implements` edge to the decoy — violating the no-wrong-edge
+  invariant. Heritage now resolves with import awareness (an explicit import
+  wins, resolved cross-module; else a same-file type; a name that is both — a
+  shadowed redefinition — or neither is dropped), the same exactly-one-or-drop
+  discipline the call resolver already used. Also removed a dead `MethodSig.Arity`
+  field whose doc-comment claimed a precision mechanism that never ran.
+- **Module-level invariants no longer mislabeled "must hold here" on a
+  symbol.** A symbol-targeted `code_context` / `explore` was asserting
+  module-level invariants (e.g. a roadmap decision's phase gates) as invariants
+  binding a symbol they do not govern. The file's invariants are now
+  partitioned: only those whose source decision governs the symbol directly (via
+  `affected_symbols`) stay under "must hold here"; the rest move to a "Module
+  context (may not bind this symbol)" section. File-level views (no symbol) are
+  unchanged — every file invariant binds the file. (`internal/contextgraph`.)
+
+## [8.0.0] — 2026-05-14
+
+Flagship release. New v8 agent TUI on Bun + @opentui/core + SolidJS, talking to the haft `agentserver` over HTTP+SSE on `127.0.0.1`. The v7-era React+Ink TUI is renamed to `tui-react/`, kept reachable behind `haft agent --legacy-tui` for the v8.0 cycle, and conditionally retired in v8.1 once interactive usage drops below 5%.
+
+### Added
+
+- **v8 backend backfill** — `agentcore` gains defensive-copy accessors (`Turns()`, `Parts(turnID)`, `PermissionsList()`, `SubAgentsList()`, `ModelChoice()`) so the TUI cannot mutate underlying maps/slices. `agentdriver` learns the `spawn_subagent` tool route + `SubAgentRunner` interface with the single-level invariant (nested spawns return a synthetic `isError` tool_use_completed instead of collapsing the turn). `agentserver` exposes `GET /auth/status` with a snake_case `AuthStatusPayload` + an injectable `AuthStatusProvider`. All M1+M2 invariants from v7.1.0 preserved.
+- **v8 TUI package (`tui/`)** — Bun 1.3.13 + `@opentui/core` 0.1.105 + `@opentui/solid` 0.1.105 + `solid-js` 1.9.10. Layered structure:
+  - `sdk/core/` — surface-agnostic transport (SSE reader with reconnect + exponential backoff 250ms → 8s cap, RPC poster with 5xx retry + 4xx no-retry, injected decoder + error mapper).
+  - `sdk/agent/` — typed wire mirror of `agentproto`: 20 `AgentEvent` variants, branded `SessionID` / `TurnID` / `PartID` / `PermissionID` / `SubAgentID`, `agentErrorMapper` translating HTTP status + body markers (turn_already_running, turn_mismatch, turn_not_running, permission_unknown, unsupported_command, session_not_found) into typed `RPCError`s.
+  - `sdk/harness/` — RESERVED namespace for v8.1+ harness panels. Not implemented; the empty slot is the load-bearing extensibility seam.
+  - `components/` — `border` / `spinner` / `key-hint` / `logo` primitives.
+  - `routes/agent/session/` — `part-text`, `part-reasoning` (collapsible), `part-tool-use`, `permission-prompt`, `subagent`, `turn` view (For-loop dispatch by part kind), top-level `SessionView` with title + model header + turn stream + subagent footer + active permission prompt + key-hint footer.
+  - `routes/harness/` — RESERVED for v8.1+.
+  - `themes/` — `dark` (default), `light`, `high-contrast`, all implementing a closed 17-token shape. `setTheme` / `cycleTheme` / `currentTheme` reactive store.
+  - `router.ts` — route registry with reactive `activeRoute()` accessor; ships with one route registered.
+  - `store.ts` — Solid `createStore` + `apply(AgentEvent)` reducer materializing every wire variant (session lifecycle, turn lifecycle, text / reasoning / tool_use part completion, subagent spawn/complete, permission requested/resolved, model switched) into the SessionView shape.
+  - `app.tsx` + `main.tsx` — SolidJS root, OpenTUI `render(App)`, reads `HAFT_AGENT_PORT` from env, AbortController-driven teardown on SIGINT / SIGTERM.
+  - `build.ts` — Bun build with `createSolidTransformPlugin()` producing single-file ESM at `dist/haft-tui.js` (~1.4MB).
+- **`haft agent --v8` opt-in cobra route** — spawns `agentserver` on `127.0.0.1:0`, captures the chosen port, spawns Bun against the TUI bundle with `HAFT_AGENT_PORT` in env, races SIGINT/SIGTERM/Bun-exit/server-fatal with a 2s grace window before SIGKILL fallback and a 5s graceful `agentserver` Shutdown.
+- **`haft v8 serve` smoke command** — runs the v8 backend standalone (StoreDispatcher only, no LLM) so the wire protocol can be exercised via `curl` before the v8 TUI is wired. Prints one JSON startup line `{port, addr, store_root, driver}`, handles SIGINT, end-to-end smoke test green.
+- **Bundle install pipeline** — `task install` copies `tui/dist/haft-tui.js` to `~/.haft/tui-v8/current/haft-tui.js`. `.goreleaser` archives ship both TUI bundles. `findV8TUIEntry` resolves installed → `tui/dist` → `tui/src/main.tsx` dev mode.
+
+### Changed
+
+- **`tui/` renamed to `tui-react/`** — the v7-era React + Ink + JSON-RPC TUI moves aside to free the `tui/` path for v8. Pure rename; git history preserved via rename detection. `internal/cli/tui_spawn.go`, `Taskfile.yaml`, `.goreleaser.yaml` updated to point at the new path.
+- **`haft agent` default route remains legacy** in the v8.0 cycle. The v8 stack is opt-in via `--v8`; the default will flip to v8 in a follow-up release once the provider-integration slice adapts `internal/provider` to `agentdriver.Provider`. `--legacy-tui` is reserved as the post-flip escape hatch.
+
+### Deprecated
+
+- **`tui-react/` (legacy React+Ink TUI)** — deprecation banner prints once per process lifetime to stderr on every `haft agent` invocation. Conditionally removed in v8.1 when telemetry / release-thread feedback confirms <5% interactive usage. Non-interactive `haft board` text dump survives indefinitely.
+
+### Fixed
+
+- (No fixes in this release — the v8 work is purely additive on top of the v7.1.0 foundation.)
 
 ## [7.1.0] — 2026-05-13
 

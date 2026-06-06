@@ -637,6 +637,7 @@ func ValidateCompareInput(input CompareInput, ctx CompareValidationContext) (Com
 	}
 
 	warnings = append(warnings, subjectiveComparisonDimensionWarnings(input.Results.Dimensions, charByName)...)
+	warnings = append(warnings, nonDiscriminatingDimensionWarnings(comparedVariants, input.Results.Scores, input.Results.Dimensions, charByName)...)
 
 	missingDataPolicy := comparisonMissingDataPolicy(result.EffectiveParity)
 	for _, dimension := range input.Results.Dimensions {
@@ -1416,6 +1417,44 @@ func subjectiveComparisonDimensionWarnings(compareDimensions []string, character
 
 		warnings = append(warnings,
 			fmt.Sprintf("dimension '%s' is subjective — decompose into measurables or tag as observation-only", dimension))
+	}
+	return warnings
+}
+
+// nonDiscriminatingDimensionWarnings flags TARGET dimensions on which every
+// scored variant has the same value — a target that does not separate the
+// variants is dead weight (or a hidden parity condition mislabeled as a
+// target). Per FPF A.19.ECS discriminating-case discipline. Constraints are
+// skipped (all variants satisfying a hard limit identically is correct, not a
+// defect) and observations are watch-only. Needs >=2 scored variants;
+// single-scored dimensions are a missing-data concern handled elsewhere.
+func nonDiscriminatingDimensionWarnings(comparedVariants []string, scores map[string]map[string]string, compareDimensions []string, characterized map[string]charDim) []string {
+	var warnings []string
+	for _, dimension := range compareDimensions {
+		if comparisonDimensionRole(dimension, characterized) != "target" {
+			continue
+		}
+		var values []string
+		for _, variant := range comparedVariants {
+			if v := strings.TrimSpace(scores[variant][dimension]); v != "" {
+				values = append(values, v)
+			}
+		}
+		if len(values) < 2 {
+			continue
+		}
+		allEqual := true
+		for _, v := range values[1:] {
+			if v != values[0] {
+				allEqual = false
+				break
+			}
+		}
+		if allEqual {
+			warnings = append(warnings, fmt.Sprintf(
+				"target dimension '%s' scores identically across all variants (%q) — it does not discriminate; drop it or it is a hidden parity condition, not a target (FPF A.19.ECS discriminating-case)",
+				dimension, values[0]))
+		}
 	}
 	return warnings
 }

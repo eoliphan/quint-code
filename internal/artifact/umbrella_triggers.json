@@ -1,0 +1,170 @@
+{
+  "_comment": "Wording-Use Trigger Check Registry (FPF E.10:0.2b + CHR-12 families). Vague, load-bearing words that pull weight without precision. Detection is exact token-match (case-insensitive, hyphen kept), so words from any language coexist in one family. recover_to / must_not are English guidance the agent reads. Curated for precision, but extend freely — add words or whole language blocks per family. Languages seeded: EN, RU, UK, DE, FR, ES, PT, IT.",
+  "families": [
+    {
+      "family": "quality",
+      "recover_to": "a named Characteristic + who evaluates + scale + evidence",
+      "must_not": "vague praise or proof-of-success",
+      "words": [
+        "quality", "high-quality", "top-quality",
+        "качество", "качественный", "качественно",
+        "якість", "якісний",
+        "qualität", "qualité", "calidad", "qualidade", "qualità"
+      ]
+    },
+    {
+      "family": "reliability",
+      "recover_to": "a failure mode + a measurable threshold (survives X, p99 under Y)",
+      "must_not": "generally sturdy",
+      "words": [
+        "robust", "robustness", "reliable", "resilient", "fault-tolerant", "bulletproof", "rock-solid", "battle-tested",
+        "надёжный", "надежный", "надёжно", "надежно", "устойчивый", "отказоустойчивый",
+        "надійний", "стійкий", "відмовостійкий",
+        "zuverlässig", "robuste", "fiable", "confiable", "confiável", "affidabile", "robusto", "resiliente"
+      ]
+    },
+    {
+      "family": "scalability",
+      "recover_to": "a scale variable + window + target (req/s, data size, concurrency)",
+      "must_not": "handles more, somehow",
+      "words": [
+        "scalable", "scalability", "elastic", "web-scale", "high-scale",
+        "масштабируемый", "масштабируемость", "масштабируемо",
+        "масштабований", "масштабованість",
+        "skalierbar", "évolutif", "escalable", "escalável", "scalabile"
+      ]
+    },
+    {
+      "family": "performance",
+      "recover_to": "a metric + a number (latency p95 ms, throughput/s)",
+      "must_not": "feels fast",
+      "words": [
+        "fast", "faster", "quick", "snappy", "performant", "performance", "low-latency", "real-time", "blazing", "responsive", "high-performance",
+        "быстро", "быстрый", "быстрее", "производительность", "производительный", "шустрый", "отзывчивый",
+        "швидкий", "швидко", "продуктивний", "продуктивність",
+        "schnell", "rapide", "rápido", "veloce", "performante"
+      ]
+    },
+    {
+      "family": "simplicity",
+      "recover_to": "a concrete property (fewer deps, lower cyclomatic, fewer steps)",
+      "must_not": "aesthetically nicer",
+      "words": [
+        "clean", "cleaner", "simple", "simpler", "elegant", "minimal", "straightforward", "trivial", "lean", "tidy",
+        "простой", "просто", "проще", "чистый", "чисто", "элегантный", "лаконичный", "понятный", "аккуратный",
+        "простий", "чистий", "охайний", "зрозумілий",
+        "einfach", "sauber", "propre", "sencillo", "limpio", "simples", "semplice", "pulito"
+      ]
+    },
+    {
+      "family": "maintainability",
+      "recover_to": "which change must become cheap + how that is measured",
+      "must_not": "future-proof in general",
+      "words": [
+        "maintainable", "flexible", "extensible", "modular", "decoupled", "composable", "reusable", "future-proof",
+        "поддерживаемый", "сопровождаемый", "гибкий", "расширяемый", "модульный", "переиспользуемый",
+        "підтримуваний", "гнучкий", "розширюваний", "модульний",
+        "wartbar", "flexibel", "maintenable", "mantenible", "manutenível", "manutenibile"
+      ]
+    },
+    {
+      "family": "readiness",
+      "recover_to": "an observable acceptance condition checkable now",
+      "must_not": "feels finished",
+      "words": [
+        "ready", "done", "finished", "polished", "mature", "production-ready", "prod-ready",
+        "готовый", "готово", "готов", "завершённый", "завершенный", "зрелый",
+        "готовий", "завершений", "зрілий",
+        "fertig", "bereit", "prêt", "listo", "pronto", "maturo"
+      ]
+    },
+    {
+      "family": "improvement",
+      "recover_to": "better on WHICH dimension, versus what baseline",
+      "must_not": "generally better",
+      "words": [
+        "better", "improve", "improved", "optimize", "enhance", "refine", "streamline",
+        "лучше", "улучшить", "улучшенный", "оптимизировать", "доработать",
+        "краще", "покращити", "оптимізувати", "вдосконалити",
+        "besser", "améliorer", "mejorar", "melhorar", "migliorare"
+      ]
+    },
+    {
+      "family": "security",
+      "recover_to": "a threat model + a specific property (authN, injection, at-rest encryption)",
+      "must_not": "hardened in general",
+      "words": [
+        "secure", "safe", "hardened", "locked-down",
+        "безопасный", "безопасно", "защищённый", "защищенный",
+        "безпечний", "захищений",
+        "sicher", "sécurisé", "seguro", "sicuro"
+      ]
+    },
+    {
+      "family": "modernity",
+      "recover_to": "the concrete change (which library version, which pattern)",
+      "must_not": "newer is better",
+      "words": [
+        "modern", "modernize", "cutting-edge", "state-of-the-art", "next-gen", "best-in-class", "world-class",
+        "современный", "передовой", "новомодный",
+        "сучасний", "передовий",
+        "moderne", "moderno"
+      ]
+    },
+    {
+      "family": "usability",
+      "recover_to": "the concrete interaction made cheaper + measured how (steps, time-to-task)",
+      "must_not": "just nicer to use",
+      "words": [
+        "user-friendly", "intuitive", "seamless", "smooth", "ergonomic", "frictionless",
+        "удобный", "удобно", "интуитивный", "бесшовный", "юзабельный",
+        "зручний", "інтуїтивний", "безшовний",
+        "benutzerfreundlich", "intuitif", "intuitivo", "ergonomico"
+      ]
+    },
+    {
+      "family": "efficiency",
+      "recover_to": "the resource + the budget (memory MB, CPU %, cost $/req)",
+      "must_not": "uses less, somehow",
+      "words": [
+        "efficient", "efficiency", "lightweight", "optimal", "low-overhead", "low-footprint",
+        "эффективный", "эффективность", "эффективно", "легковесный", "оптимальный",
+        "ефективний", "ефективність", "легковаговий", "оптимальний",
+        "effizient", "efficace", "eficiente", "efficiente", "leggero", "leichtgewichtig"
+      ]
+    },
+    {
+      "family": "power",
+      "recover_to": "the specific capability + the workload it must handle",
+      "must_not": "impressive in general",
+      "words": [
+        "powerful", "capable", "full-featured", "comprehensive", "feature-rich",
+        "мощный", "функциональный", "богатый",
+        "потужний", "функціональний",
+        "leistungsstark", "mächtig", "puissant", "potente", "poderoso"
+      ]
+    },
+    {
+      "family": "stability",
+      "recover_to": "what must not change + over which window, and the measured variance",
+      "must_not": "feels stable",
+      "words": [
+        "stable", "stability", "steady", "rock-steady",
+        "стабильный", "стабильность", "устойчиво",
+        "стабільний", "стабільність",
+        "stabil", "estable", "estável", "stabile"
+      ]
+    },
+    {
+      "family": "subjective-verdict",
+      "recover_to": "the criterion behind the verdict + the scale and threshold",
+      "must_not": "a bare value judgement",
+      "words": [
+        "good", "bad", "nice", "great", "awesome", "decent", "proper", "correct",
+        "хороший", "плохой", "нормальный", "красивый", "правильный", "адекватный",
+        "добрий", "гарний", "поганий", "правильний",
+        "gut", "bon", "bueno", "bom", "buono", "schön"
+      ]
+    }
+  ]
+}

@@ -188,22 +188,39 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 		tools = append(tools,
 			Tool{
 				Name:        "haft_note",
-				Description: "Record a micro-decision with rationale. Validates before recording: checks for missing rationale, conflicts with active decisions, and whether the scope is too large for a note. Use for quick engineering choices during coding.",
+				Description: "Record a project FACT into the reasoning graph. A note is a fact/observation carrier — NOT a decision (a choice among alternatives goes to /h-decide). Give a title plus at least one atomic observation or a source; rationale is optional. Anchor the fact to decisions/problems/notes via typed edges so it surfaces at them in related/code_context.",
 				InputSchema: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"title": map[string]string{
 							"type":        "string",
-							"description": "What was decided (e.g., 'RWMutex over channels for session cache')",
+							"description": "What the fact is (e.g., 'MCP server is per-session, not a daemon')",
+						},
+						"observations": map[string]interface{}{
+							"type":        "array",
+							"items":       map[string]string{"type": "string"},
+							"description": "Atomic facts — one fact per entry. The core of a fact note.",
+						},
+						"anchors": map[string]interface{}{
+							"type": "array",
+							"items": map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"type": map[string]string{"type": "string", "description": "Edge label: governs | about | relates_to | implements | supersedes"},
+									"ref":  map[string]string{"type": "string", "description": "Target — an artifact ID (dec-/prob-/note-/sol-) OR a code symbol (Name, or Name@file to disambiguate). MUST exist — a dead anchor is rejected."},
+								},
+								"required": []string{"ref"},
+							},
+							"description": "Typed edges from this fact to decisions/problems/notes OR code symbols — surface in related/backlinks and code_context.",
 						},
 						"rationale": map[string]string{
 							"type":        "string",
-							"description": "Why this choice — what alternatives existed, what evidence supports it",
+							"description": "OPTIONAL — why, if the fact carries a reasoned judgment. A bare fact needs none.",
 						},
 						"affected_files": map[string]interface{}{
 							"type":        "array",
 							"items":       map[string]string{"type": "string"},
-							"description": "File paths affected by this decision",
+							"description": "File paths this fact is about",
 						},
 						"evidence": map[string]string{
 							"type":        "string",
@@ -218,7 +235,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 							"description": "Optional context name for grouping (e.g., 'auth', 'payments')",
 						},
 					},
-					"required": []string{"title", "rationale"},
+					"required": []string{"title"},
 				},
 			},
 			Tool{
@@ -266,6 +283,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 						"blast_radius": map[string]string{
 							"type":        "string",
 							"description": "(frame) What systems/teams are affected",
+						},
+						"seed_file": map[string]string{
+							"type":        "string",
+							"description": "(frame) Optional file the framing is about. When set, the response appends the artifacts the fused code+reasoning graph ranks nearest that file — catching a decision governing it that keyword recall would miss.",
 						},
 						"reversibility": map[string]string{
 							"type":        "string",
@@ -525,6 +546,7 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 								"threshold":     map[string]string{"type": "string"},
 								"verify_after":  map[string]string{"type": "string", "description": "When to check (RFC3339 or YYYY-MM-DD) — for async claims"},
 								"realizability": map[string]string{"type": "string", "description": "C.28 verdict: realizable|nonrealizable|unknown; nonrealizable caps R_eff at 0.5 per CC-B3.9"},
+								"probability":   map[string]string{"type": "number", "description": "Optional elicited p(this claim holds) in [0,1] — a noisy forecast sampled at decide time. Verified outcomes feed decomposed-Brier calibration. Sample 2-3 independent estimates and pass their consensus; never a single authoritative number."},
 							},
 							"required": []string{"claim", "observable", "threshold"},
 						},
@@ -612,6 +634,20 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 						"type":        "string",
 						"description": "(evidence) C.28 basis for causal-use claim support. Accepts: observational | interventional | realized_counterfactual | identified_estimate | simulation_only (long FPF forms also accepted). simulation-only caps R_eff at 0.5 per CC-B3.9.",
 					},
+					"_skips": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]string{"type": "string"},
+						"description": "(decide) Tactical-mode required-field bypass list. Requires _skip_reason.",
+					},
+					"_skip": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]string{"type": "string"},
+						"description": "(decide) Legacy alias for _skips; prefer _skips. Requires _skip_reason.",
+					},
+					"_skip_reason": map[string]string{
+						"type":        "string",
+						"description": "(decide) Operator rationale required when _skips/_skip is non-empty.",
+					},
 					"context": map[string]string{"type": "string", "description": "Optional context name"},
 					"mode":    map[string]string{"type": "string", "description": "(decide) tactical, standard (default), deep"},
 				},
@@ -661,6 +697,10 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 						"type":        "string",
 						"description": "Optional context filter for scan",
 					},
+					"verbose": map[string]string{
+						"type":        "boolean",
+						"description": "(scan) Include full per-file drift dump. Default false — drift is summarized as counts + top-5 modified paths per decision. Full mode can exceed context budget on repos with vendor subtrees or large added-files sets.",
+					},
 				},
 				"required": []string{"action"},
 			},
@@ -674,8 +714,8 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"enum":        []interface{}{"search", "status", "board", "related", "projection", "list", "coverage", "fpf", "check", "resolve_term"},
-						"description": "search=FTS5 keyword search, status=compact dashboard (at-a-glance overview), board=rich health dashboard, related=by file path, projection=audience-specific artifact view, list=all artifacts by kind, coverage=module-level decision coverage, fpf=search FPF methodology spec, check=CI-actionable enforcement findings, resolve_term=ground an umbrella term in this project's bounded context (term-map entries + spec sections referencing it + past artifact mentions) before deciding to ask the operator. Use status for overview; use check when the operator or CI must act on debt; use resolve_term BEFORE asking 'what do you mean?' on a vague signal.",
+						"enum":        []interface{}{"search", "status", "board", "related", "code_context", "callees", "callers", "impact", "node", "explore", "ceremony", "projection", "list", "coverage", "fpf", "check", "resolve_term"},
+						"description": "search=FTS5 keyword search, status=compact dashboard (at-a-glance overview), board=rich health dashboard, related=decisions affecting a file, code_context=the FULL reasoning context for a file (or a symbol within it): decisions governing it, problems framed around it, solution variants explored, notes, invariants that must hold, and module coverage — call this BEFORE changing unfamiliar code to see what was already decided and why, callees=what a symbol calls (forward dependency set), callers=what calls a symbol, impact=what breaks if you change a symbol (inbound traversal) — callees/callers/impact each fuse the reasoning graph onto every reached symbol: per node you see BOTH the call/dispatch edge AND the decisions governing it (symbol-level, or module-level so a governed node never reads as safe-to-change), node=the detail page for a symbol: its byte-exact body (re-read + re-hash from disk, never stale), the decisions fused onto exactly it, its immediate caller/callee trail, and ALL same-name overloads each with their own per-overload governance — call this instead of Read when you want one symbol with its reasoning attached, ceremony=recommend a ceremony mode (tactical/standard/deep) for a change BEFORE you start: pass the files it will touch and get a risk-proportioned mode from path/content + governance signals — a deterministic floor never routes a high-risk change (migration/sql, auth/secrets, public-API, infra, destructive content) to tactical, and asks one question when it cannot tell; advisory only, you bind the mode, explore=the PRIMARY single-call answer for a symbol: the deepest connected call chain (each on-chain symbol interleaved with the decisions/invariants governing it), the blast radius (direct callers + covering decisions), and the seed's verbatim freshness-checked source — start here to understand an unfamiliar flow AND why it is shaped that way in one call; a chain that hits a dynamic-dispatch boundary it cannot resolve says so rather than implying completeness, projection=audience-specific artifact view, list=all artifacts by kind, coverage=module-level decision coverage, fpf=search FPF methodology spec, check=CI-actionable enforcement findings, resolve_term=ground an umbrella term in this project's bounded context (term-map entries + spec sections referencing it + past artifact mentions) before deciding to ask the operator. Use status for overview; use check when the operator or CI must act on debt; use impact BEFORE editing a symbol to see who depends on it and what was decided; use node to read a symbol's source WITH its governance; use resolve_term BEFORE asking 'what do you mean?' on a vague signal.",
 					},
 					"query": map[string]string{
 						"type":        "string",
@@ -691,7 +731,24 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 					},
 					"file": map[string]string{
 						"type":        "string",
-						"description": "(related) File path to find linked decisions",
+						"description": "(related, code_context, callees/callers/impact, node) File path — for code-graph actions it scopes/disambiguates an overloaded symbol name to one definition",
+					},
+					"symbol": map[string]string{
+						"type":        "string",
+						"description": "(code_context) symbol to narrow context to; (callees/callers/impact) REQUIRED — the symbol to traverse from, returns candidates if ambiguous; (node) REQUIRED — the symbol to show, node shows ALL overloads; (explore) REQUIRED — the seed symbol to explore the flow from",
+					},
+					"line": map[string]interface{}{
+						"type":        "integer",
+						"description": "(code_context, callees/callers/impact, node) Optional 1-based line of the symbol — disambiguates overloaded same-name symbols so the right one is selected",
+					},
+					"depth": map[string]interface{}{
+						"type":        "integer",
+						"description": "(callees/callers/impact) Traversal depth, default 2, capped at 10 — how many call hops to follow from the seed",
+					},
+					"files": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "(ceremony) The files the change will touch — the floor classifies their risk. May also pass a space/comma-separated list via `file`.",
 					},
 					"context": map[string]string{
 						"type":        "string",

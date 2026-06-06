@@ -39,9 +39,10 @@ func TestComputeNavState_FramedTactical(t *testing.T) {
 	if state.DerivedStatus != DerivedFramed {
 		t.Errorf("status = %q, want FRAMED", state.DerivedStatus)
 	}
-	// All modes should offer explore (all phases mandatory)
-	if !strings.Contains(state.NextAction, "/h-explore") && !strings.Contains(state.NextAction, "/h-char") {
-		t.Errorf("NextAction should contain /h-explore or /h-char, got %q", state.NextAction)
+	// After framing, the next action is always /h-explore (characterization
+	// is now folded into /h-compare via kernel action, not a separate skill).
+	if !strings.Contains(state.NextAction, "/h-explore") {
+		t.Errorf("NextAction should contain /h-explore, got %q", state.NextAction)
 	}
 }
 
@@ -65,11 +66,10 @@ func TestComputeNavState_FramedStandard_NoChar(t *testing.T) {
 	if state.Mode != ModeStandard {
 		t.Errorf("mode = %q, want standard", state.Mode)
 	}
-	if !strings.Contains(state.NextAction, "/h-char") {
-		t.Errorf("NextAction should contain /h-char for standard without characterization, got %q", state.NextAction)
-	}
+	// Standard mode without characterization still routes to /h-explore;
+	// characterization gets declared inside /h-compare on demand.
 	if !strings.Contains(state.NextAction, "/h-explore") {
-		t.Errorf("NextAction should contain /h-explore as alternative, got %q", state.NextAction)
+		t.Errorf("NextAction should contain /h-explore, got %q", state.NextAction)
 	}
 }
 
@@ -103,9 +103,6 @@ func TestComputeNavState_FramedStandard_WithChar(t *testing.T) {
 	}
 	if !strings.Contains(state.NextAction, "/h-explore") {
 		t.Errorf("NextAction should contain /h-explore, got %q", state.NextAction)
-	}
-	if strings.Contains(state.NextAction, "/h-char") {
-		t.Errorf("NextAction should NOT contain /h-char after characterization, got %q", state.NextAction)
 	}
 }
 

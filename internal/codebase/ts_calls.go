@@ -1,0 +1,391 @@
+package codebase
+
+import (
+	"path/filepath"
+	"strings"
+
+	sitter "github.com/smacker/go-tree-sitter"
+)
+
+// tsNameImport binds a name introduced by `import { Orig as Local } from './m'`
+// to the resolved target-module base path and the original exported name.
+type tsNameImport struct {
+	base string // project-relative module path without extension (e.g. "pkg/bar")
+	orig string // the name as exported by the target module
+}
+
+// tsImports is the resolved relative-import surface of one JS/TS file:
+//   - names:      local name -> {target base, original name} for `import { N }`
+//   - namespaces: alias       -> target base                  for `import * as ns`
+//
+// Bare (non-relative) imports are external dependencies and are not recorded —
+// they never resolve to a project node.
+type tsImports struct {
+	names      map[string]tsNameImport
+	namespaces map[string]string
+}
+
+// extractTSImports reads the `import ... from '<spec>'` statements of a JS/TS file
+// and resolves each specifier to a project-relative base path (extension
+// stripped): relative paths against the importing dir, plus tsconfig path aliases
+// and monorepo workspace packages via projRes. A genuinely external specifier is
+// skipped. Pure relative to (root, content, fileDir, projRes); caller owns the tree.
+func extractTSImports(root *sitter.Node, content []byte, fileDir string, projRes tsProjectResolution) tsImports {
+	res := tsImports{names: map[string]tsNameImport{}, namespaces: map[string]string{}}
+	for i := 0; i < int(root.NamedChildCount()); i++ {
+		n := root.NamedChild(i)
+		if n.Type() != "import_statement" {
+			continue
+		}
+		source := n.ChildByFieldName("source")
+		if source == nil {
+			continue
+		}
+		raw := strings.Trim(source.Content(content), "'\"`")
+		base, ok := resolveTSModuleSpecifier(raw, fileDir, projRes)
+		if !ok {
+			continue // external dependency — never a project node
+		}
+		clause := firstChildOfType(n, "import_clause")
+		if clause == nil {
+			continue
+		}
+		collectTSImportClause(clause, content, base, &res)
+	}
+	return res
+}
+
+// collectTSImportClause records the bindings of one import clause: named imports
+// `{ A, B as C }`, a namespace `* as ns`, or a bare default (skipped — the export
+// name is not knowable from the import site).
+func collectTSImportClause(clause *sitter.Node, content []byte, base string, res *tsImports) {
+	for i := 0; i < int(clause.NamedChildCount()); i++ {
+		c := clause.NamedChild(i)
+		switch c.Type() {
+		case "named_imports":
+			for j := 0; j < int(c.NamedChildCount()); j++ {
+				spec := c.NamedChild(j)
+				if spec.Type() != "import_specifier" {
+					continue
+				}
+				name := spec.ChildByFieldName("name")
+				if name == nil {
+					continue
+				}
+				local := name.Content(content)
+				if alias := spec.ChildByFieldName("alias"); alias != nil {
+					local = alias.Content(content)
+				}
+				res.names[local] = tsNameImport{base: base, orig: name.Content(content)}
+			}
+		case "namespace_import":
+			if id := firstChildOfType(c, "identifier"); id != nil {
+				res.namespaces[id.Content(content)] = base
+			}
+		}
+	}
+}
+
+// extractTSCallsAndCallbacks walks a parsed JS/TS file's call expressions in ONE
+// pass, returning the call sites (callee + qualifier) and the bare-identifier
+// arguments of each call (candidate callbacks tagged with the call's callee for
+// the precision gate). Pure relative to (root, content).
+func extractTSCallsAndCallbacks(root *sitter.Node, content []byte, lang *sitter.Language) ([]CallSite, []callbackRef) {
+	q, err := sitter.NewQuery([]byte(`(call_expression) @c`), lang)
+	if err != nil {
+		return nil, nil
+	}
+	defer q.Close()
+	qc := sitter.NewQueryCursor()
+	qc.Exec(q, root)
+
+	var sites []CallSite
+	var refs []callbackRef
+	for {
+		m, ok := qc.NextMatch()
+		if !ok {
+			break
+		}
+		for _, capture := range m.Captures {
+			call := capture.Node
+			fn := call.ChildByFieldName("function")
+			if fn == nil {
+				continue
+			}
+			var callee, qualifier string
+			switch fn.Type() {
+			case "identifier":
+				callee = fn.Content(content)
+			case "member_expression":
+				prop := fn.ChildByFieldName("property")
+				obj := fn.ChildByFieldName("object")
+				if prop == nil || obj == nil {
+					continue
+				}
+				callee = prop.Content(content)
+				qualifier = obj.Content(content)
+			default:
+				continue
+			}
+			if callee == "" {
+				continue
+			}
+			line := int(call.StartPoint().Row) + 1
+			sites = append(sites, CallSite{Callee: callee, Qualifier: qualifier, Line: line})
+			if args := call.ChildByFieldName("arguments"); args != nil {
+				for i := 0; i < int(args.NamedChildCount()); i++ {
+					if a := args.NamedChild(i); a.Type() == "identifier" {
+						refs = append(refs, callbackRef{callee: callee, name: a.Content(content), line: line})
+					}
+				}
+			}
+		}
+	}
+	return sites, refs
+}
+
+// tsFileMatchesBase reports whether a stored file path is the module named by a
+// project-relative base — either `<base>.<ext>` or `<base>/index.<ext>`.
+func tsFileMatchesBase(file, base string) bool {
+	p := filepath.ToSlash(file)
+	p = strings.TrimSuffix(p, filepath.Ext(p))
+	return p == base || p == base+"/index"
+}
+
+// resolveTSImportedName finds the single func/class symbol named `name` defined in
+// the target module base, or nil if zero/ambiguous. The cross-module primitive.
+func resolveTSImportedName(name, base string, lookup func(string) []CodeSymbol) *CodeSymbol {
+	var cands []CodeSymbol
+	for _, s := range lookup(name) {
+		if (s.Kind == "func" || s.Kind == "class") && tsFileMatchesBase(s.FilePath, base) {
+			cands = append(cands, s)
+		}
+	}
+	if len(cands) != 1 {
+		return nil
+	}
+	return &cands[0]
+}
+
+// resolveTSCallEdges resolves call sites to definition nodes with the
+// exactly-1-or-drop guard. Unqualified resolution order: a file-local def, then a
+// named import, then a directory-local def. A member call resolves only when the
+// qualifier is a namespace import. Pure — lookup injected so it stays storeless.
+func resolveTSCallEdges(relPath string, fileSyms, pkgSyms []CodeSymbol, calls []CallSite, callbacks []callbackRef, imports tsImports, lookup func(name string) []CodeSymbol) []CodeEdge {
+	fileDefs := map[string][]CodeSymbol{}
+	for _, s := range fileSyms {
+		if s.Kind == "func" || s.Kind == "class" {
+			fileDefs[s.Name] = append(fileDefs[s.Name], s)
+		}
+	}
+	pkgDefs := map[string][]CodeSymbol{}
+	for _, s := range pkgSyms {
+		if s.Kind == "func" || s.Kind == "class" {
+			pkgDefs[s.Name] = append(pkgDefs[s.Name], s)
+		}
+	}
+
+	callPairs := map[string]bool{}
+	var edges []CodeEdge
+	for _, cs := range calls {
+		caller := enclosingSymbol(fileSyms, cs.Line)
+		if caller == nil {
+			continue
+		}
+		var dst *CodeSymbol
+		if cs.Qualifier == "" {
+			dst = resolveTSUnqualified(cs.Callee, fileDefs, pkgDefs, imports, lookup)
+		} else {
+			dst = resolveTSNamespaceCall(cs.Qualifier, cs.Callee, imports, lookup)
+		}
+		if dst == nil || dst.ID == caller.ID {
+			continue
+		}
+		key := caller.ID + "->" + dst.ID
+		if callPairs[key] {
+			continue
+		}
+		callPairs[key] = true
+		edges = append(edges, CodeEdge{
+			SrcID:      caller.ID,
+			DstID:      dst.ID,
+			Kind:       EdgeCall,
+			FilePath:   relPath,
+			Line:       cs.Line,
+			Provenance: ProvenanceStatic,
+		})
+	}
+
+	resolve := func(name string) *CodeSymbol {
+		return resolveTSUnqualified(name, fileDefs, pkgDefs, imports, lookup)
+	}
+	edges = append(edges, synthesizeCallbackEdges(relPath, fileSyms, callbacks, callPairs, resolve)...)
+	return edges
+}
+
+// emitterReg is a `x.on("event", handler)` registration; emitterDispatch is a
+// `x.emit("event")` site. Paired by event name, they synthesize a dispatcher ->
+// handler edge for the dynamic dispatch the AST cannot follow directly.
+type emitterReg struct {
+	event   string
+	handler string
+	line    int
+}
+
+type emitterDispatch struct {
+	event string
+	line  int
+}
+
+var emitterRegisterNames = map[string]bool{"on": true, "once": true, "addlistener": true, "addeventlistener": true}
+var emitterDispatchNames = map[string]bool{"emit": true, "fire": true, "dispatchevent": true, "trigger": true}
+
+const emitterFanoutCap = 6 // skip an event with more handlers/dispatchers than this — too generic to pair confidently
+
+// extractTSEmitterSites collects EventEmitter `.on("e", h)` registrations and
+// `.emit("e")` dispatches from a parsed JS/TS file. A second query over the shared
+// tree (no re-parse). Pure relative to (root, content, lang).
+func extractTSEmitterSites(root *sitter.Node, content []byte, lang *sitter.Language) ([]emitterReg, []emitterDispatch) {
+	q, err := sitter.NewQuery([]byte(`(call_expression) @c`), lang)
+	if err != nil {
+		return nil, nil
+	}
+	defer q.Close()
+	qc := sitter.NewQueryCursor()
+	qc.Exec(q, root)
+
+	var regs []emitterReg
+	var dispatches []emitterDispatch
+	for {
+		m, ok := qc.NextMatch()
+		if !ok {
+			break
+		}
+		for _, capture := range m.Captures {
+			call := capture.Node
+			fn := call.ChildByFieldName("function")
+			if fn == nil || fn.Type() != "member_expression" {
+				continue
+			}
+			prop := fn.ChildByFieldName("property")
+			args := call.ChildByFieldName("arguments")
+			if prop == nil || args == nil || args.NamedChildCount() == 0 {
+				continue
+			}
+			arg0 := args.NamedChild(0)
+			if arg0.Type() != "string" {
+				continue
+			}
+			event := strings.Trim(arg0.Content(content), "'\"`")
+			if event == "" {
+				continue
+			}
+			name := strings.ToLower(prop.Content(content))
+			line := int(call.StartPoint().Row) + 1
+			switch {
+			case emitterRegisterNames[name] && args.NamedChildCount() >= 2:
+				if h := tsHandlerName(args.NamedChild(1), content); h != "" {
+					regs = append(regs, emitterReg{event: event, handler: h, line: line})
+				}
+			case emitterDispatchNames[name]:
+				dispatches = append(dispatches, emitterDispatch{event: event, line: line})
+			}
+		}
+	}
+	return regs, dispatches
+}
+
+// tsHandlerName names a handler argument: a bare identifier, or the property of a
+// `this.method` / `obj.method` member reference. An inline arrow/function literal
+// is anonymous and yields "".
+func tsHandlerName(n *sitter.Node, content []byte) string {
+	switch n.Type() {
+	case "identifier":
+		return n.Content(content)
+	case "member_expression":
+		if prop := n.ChildByFieldName("property"); prop != nil {
+			return prop.Content(content)
+		}
+	}
+	return ""
+}
+
+// synthesizeEmitterEdges pairs same-event registrations and dispatches WITHIN a
+// file: for each event (fan-out capped), each dispatch site's enclosing function
+// gets a heuristic EdgeCallback to each handler that resolves to exactly one
+// file-local function/method. Generic high-fan-out events (error/data/...) are
+// skipped — they need cross-instance type info to pair soundly.
+func synthesizeEmitterEdges(relPath string, fileSyms []CodeSymbol, regs []emitterReg, dispatches []emitterDispatch, callPairs map[string]bool) []CodeEdge {
+	handlersByEvent := map[string][]string{}
+	for _, r := range regs {
+		handlersByEvent[r.event] = append(handlersByEvent[r.event], r.handler)
+	}
+	dispatchesByEvent := map[string][]emitterDispatch{}
+	for _, d := range dispatches {
+		dispatchesByEvent[d.event] = append(dispatchesByEvent[d.event], d)
+	}
+	fileFns := map[string][]CodeSymbol{}
+	for _, s := range fileSyms {
+		if s.Kind == "func" || s.Kind == "method" {
+			fileFns[s.Name] = append(fileFns[s.Name], s)
+		}
+	}
+
+	seen := map[string]bool{}
+	var edges []CodeEdge
+	for event, handlers := range handlersByEvent {
+		disps := dispatchesByEvent[event]
+		if len(disps) == 0 || len(handlers) > emitterFanoutCap || len(disps) > emitterFanoutCap {
+			continue
+		}
+		for _, h := range handlers {
+			hs := fileFns[h]
+			if len(hs) != 1 {
+				continue // unresolved or ambiguous handler — drop, don't guess
+			}
+			for _, d := range disps {
+				caller := enclosingSymbol(fileSyms, d.line)
+				if caller == nil || caller.ID == hs[0].ID {
+					continue
+				}
+				key := caller.ID + "->" + hs[0].ID
+				if seen[key] || callPairs[key] {
+					continue
+				}
+				seen[key] = true
+				edges = append(edges, CodeEdge{
+					SrcID:      caller.ID,
+					DstID:      hs[0].ID,
+					Kind:       EdgeCallback,
+					FilePath:   relPath,
+					Line:       d.line,
+					Provenance: ProvenanceHeuristic,
+				})
+			}
+		}
+	}
+	return edges
+}
+
+func resolveTSUnqualified(callee string, fileDefs, pkgDefs map[string][]CodeSymbol, imports tsImports, lookup func(string) []CodeSymbol) *CodeSymbol {
+	local := fileDefs[callee]
+	b, imported := imports.names[callee]
+	if len(local) == 1 && !imported {
+		return &local[0]
+	}
+	if imported {
+		return resolveTSImportedName(b.orig, b.base, lookup)
+	}
+	if pkg := pkgDefs[callee]; len(pkg) == 1 {
+		return &pkg[0]
+	}
+	return nil
+}
+
+func resolveTSNamespaceCall(qualifier, callee string, imports tsImports, lookup func(string) []CodeSymbol) *CodeSymbol {
+	base, ok := imports.namespaces[qualifier]
+	if !ok {
+		return nil // qualifier is a receiver / instance / unknown — drop
+	}
+	return resolveTSImportedName(callee, base, lookup)
+}

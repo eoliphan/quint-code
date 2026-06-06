@@ -81,6 +81,22 @@ func OpenIndex() (*IndexStore, error) {
 		`CREATE TRIGGER IF NOT EXISTS global_fts_delete BEFORE DELETE ON global_decisions BEGIN
 			DELETE FROM global_fts WHERE rowid = old.rowid;
 		END`,
+		// Optional vector cache for the cross-project hybrid recall layer.
+		// Mirrors the per-project artifact_embeddings (dec-20260605-fe77b358):
+		// keyed by the decision identity (project_id, decision_id) plus the model
+		// contract (provider/model/dim); content_hash gates re-embedding unchanged
+		// rows. Additive — dropping it just forces a recompute, never a migration.
+		`CREATE TABLE IF NOT EXISTS global_embeddings (
+			project_id TEXT NOT NULL,
+			decision_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			model TEXT NOT NULL,
+			dim INTEGER NOT NULL,
+			content_hash TEXT NOT NULL,
+			vector BLOB NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (project_id, decision_id, provider, model, dim)
+		)`,
 	}
 
 	for _, s := range stmts {
@@ -116,6 +132,30 @@ func (s *IndexStore) WriteDecision(ctx context.Context, entry IndexEntry) error 
 	return err
 }
 
+// loadCorpus reads every indexed decision for the cross-project hybrid warm.
+func (s *IndexStore) loadCorpus(ctx context.Context) ([]IndexEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT project_id, project_name, decision_id, title,
+		       COALESCE(selected_title,''), COALESCE(why_selected,''),
+		       COALESCE(weakest_link,''), COALESCE(primary_lang,''), created_at
+		FROM global_decisions`)
+	if err != nil {
+		return nil, fmt.Errorf("load index corpus: %w", err)
+	}
+	defer rows.Close()
+
+	var out []IndexEntry
+	for rows.Next() {
+		var e IndexEntry
+		if err := rows.Scan(&e.ProjectID, &e.ProjectName, &e.DecisionID, &e.Title,
+			&e.SelectedTitle, &e.WhySelected, &e.WeakestLink, &e.PrimaryLang, &e.CreatedAt); err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // Search finds decisions across all OTHER projects matching the query.
 // Returns results sorted by FTS5 relevance, with CL assigned based on language match.
 func (s *IndexStore) Search(ctx context.Context, query string, currentProjectID string, currentLang string, limit int) ([]IndexRecall, error) {
@@ -123,12 +163,33 @@ func (s *IndexStore) Search(ctx context.Context, query string, currentProjectID 
 		limit = 5
 	}
 
-	// Sanitize query for FTS5
-	query = sanitizeFTS(query)
-	if query == "" {
+	sanitized := sanitizeFTS(query)
+	if sanitized == "" {
 		return nil, nil
 	}
 
+	// Strict AND first (all terms must match) — preserves precision when it hits.
+	results, err := s.runFTS(ctx, sanitized, currentProjectID, currentLang, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// OR-fallback: when AND under-fills, a paraphrased frame (reworded, partial
+	// term overlap) misses entirely. Match ANY term and append the new rows after
+	// the AND-ranked ones, recovering recall without disturbing AND-first order.
+	tokens := strings.Fields(sanitized)
+	if len(results) < limit && len(tokens) >= 2 {
+		orResults, orErr := s.runFTS(ctx, strings.Join(tokens, " OR "), currentProjectID, currentLang, limit)
+		if orErr == nil {
+			results = appendUniqueRecall(results, orResults, limit)
+		}
+	}
+
+	return results, nil
+}
+
+// runFTS executes one FTS5 MATCH and assigns CL by language match.
+func (s *IndexStore) runFTS(ctx context.Context, matchExpr, currentProjectID, currentLang string, limit int) ([]IndexRecall, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT gd.project_name, gd.decision_id, gd.title, gd.why_selected, gd.weakest_link, gd.primary_lang,
 		       rank
@@ -138,7 +199,7 @@ func (s *IndexStore) Search(ctx context.Context, query string, currentProjectID 
 		  AND gd.project_id != ?
 		ORDER BY rank
 		LIMIT ?`,
-		query, currentProjectID, limit)
+		matchExpr, currentProjectID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("index search: %w", err)
 	}
@@ -164,6 +225,27 @@ func (s *IndexStore) Search(ctx context.Context, query string, currentProjectID 
 	}
 
 	return results, rows.Err()
+}
+
+// appendUniqueRecall appends rows from extra not already present (by
+// project|decision identity), preserving order, up to limit.
+func appendUniqueRecall(base, extra []IndexRecall, limit int) []IndexRecall {
+	seen := make(map[string]struct{}, len(base))
+	for _, r := range base {
+		seen[r.ProjectName+"|"+r.DecisionID] = struct{}{}
+	}
+	for _, r := range extra {
+		if len(base) >= limit {
+			break
+		}
+		key := r.ProjectName + "|" + r.DecisionID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		base = append(base, r)
+	}
+	return base
 }
 
 // DetectPrimaryLanguage reads the codebase_modules table to find the dominant language.

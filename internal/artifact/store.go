@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/m0n0x41d/haft/internal/reff"
+	"github.com/m0n0x41d/haft/internal/textsearch"
 )
 
 // Store handles artifact persistence in SQLite.
@@ -261,64 +263,171 @@ func (s *Store) ListActive(ctx context.Context, limit int) ([]*Artifact, error) 
 }
 
 // Search performs FTS5 full-text search across artifacts.
+// artifactIDPattern matches the leading prefix-date shape shared by every haft
+// artifact ID (prob-/dec-/sol-/note-/evid-/wc-/rr- followed by a date).
+var artifactIDPattern = regexp.MustCompile(`(?i)^[a-z]+-\d{6,}`)
+
+// isArtifactIDQuery reports whether the whole query is a single artifact-ID
+// token — searched as one precise token, never split into fragments.
+func isArtifactIDQuery(query string) bool {
+	return !strings.ContainsAny(query, " \t\n") && artifactIDPattern.MatchString(query)
+}
+
+// compactAlnum lower-cases s and drops every non-alphanumeric rune.
+func compactAlnum(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func (s *Store) Search(ctx context.Context, query string, limit int) ([]*Artifact, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 
-	terms := strings.Fields(query)
-
+	// Phase-1 term prep (dec-20260604-3aaad199): split compound identifiers
+	// (getUserName -> get/user/name + getusername) and drop stop-words before
+	// FTS. Stems are OFF here — artifacts_fts is porter-tokenized, so the index
+	// already stems both sides; double-stemming would only add noise. Terms
+	// yields alnum-only lower-case tokens, so they are inherently FTS5-operator
+	// safe (no manual special-char stripping needed). A `kind:` qualifier narrows
+	// the reasoning lane to one or more artifact kinds.
+	//
+	// EXCEPTION: a bare artifact-ID query (prob-YYYYMMDD-<hash>) is kept as one
+	// compacted token. Splitting an ID into prefix/date/hash fragments would
+	// cross-match every sibling artifact sharing that date or prefix — precisely
+	// the noise an ID lookup must avoid (IDs resolve via links / GetByID, not FTS).
 	var ftsTerms []string
-	for _, t := range terms {
-		// Strip all FTS5 special/operator characters that break queries
-		t = strings.NewReplacer(
-			`"`, ``, `*`, ``, `(`, ``, `)`, ``,
-			`{`, ``, `}`, ``, `^`, ``, `+`, ``,
-			`-`, ``, `:`, ``, `~`, ``, `'`, ``,
-		).Replace(t)
-		t = strings.TrimSpace(t)
-		if t == "" {
-			continue
+	var kindFilter []Kind
+	if id := strings.TrimSpace(query); isArtifactIDQuery(id) {
+		ftsTerms = []string{fmt.Sprintf(`"%s"*`, compactAlnum(id))}
+	} else {
+		pq := textsearch.ParseQuery(query)
+		kindFilter = matchArtifactKinds(pq.Kinds)
+		for _, t := range textsearch.Terms(pq.Text, textsearch.Options{Stems: false}) {
+			ftsTerms = append(ftsTerms, fmt.Sprintf(`"%s"*`, t))
 		}
-		// Quoting treats everything as literal (no FTS5 operator interpretation)
-		ftsTerms = append(ftsTerms, fmt.Sprintf(`"%s"*`, t))
 	}
+
+	// A kind-only query ("kind:DecisionRecord", no free text) has no FTS terms —
+	// list that kind rather than match nothing.
 	if len(ftsTerms) == 0 {
+		if len(kindFilter) > 0 {
+			return s.listByKinds(ctx, kindFilter, limit)
+		}
 		return nil, nil
 	}
 
-	searchQuery := `
-		SELECT a.id, a.kind, a.version, a.status, a.context, a.mode, a.title, a.content, a.valid_until, a.created_at, a.updated_at
-		FROM artifacts a
-		JOIN artifacts_fts f ON a.id = f.id
-		WHERE artifacts_fts MATCH ?
-		ORDER BY bm25(artifacts_fts, 0.0, 10.0, 1.0, 5.0, 3.0)
-		LIMIT ?`
-
-	// AND-default: require all terms present (implicit AND = space-join in FTS5)
-	ftsQuery := strings.Join(ftsTerms, " ")
-	rows, err := s.db.QueryContext(ctx, searchQuery, ftsQuery, limit)
-	if err != nil {
-		return nil, fmt.Errorf("search: %w", err)
-	}
-	results, err := scanArtifacts(rows)
-	_ = rows.Close()
+	// AND-default: require all terms present (implicit AND = space-join in FTS5).
+	results, err := s.searchFTS(ctx, strings.Join(ftsTerms, " "), kindFilter, limit)
 	if err != nil {
 		return nil, err
 	}
-
-	// Fallback to OR if AND returned nothing
+	// Fallback to OR if AND returned nothing.
 	if len(results) == 0 && len(ftsTerms) > 1 {
-		ftsQuery = strings.Join(ftsTerms, " OR ")
-		rows, err = s.db.QueryContext(ctx, searchQuery, ftsQuery, limit)
-		if err != nil {
-			return nil, fmt.Errorf("search fallback: %w", err)
+		return s.searchFTS(ctx, strings.Join(ftsTerms, " OR "), kindFilter, limit)
+	}
+	return results, nil
+}
+
+func (s *Store) listByKinds(ctx context.Context, kinds []Kind, limit int) ([]*Artifact, error) {
+	uniqueKinds := make([]Kind, 0, len(kinds))
+	seen := make(map[Kind]struct{}, len(kinds))
+	for _, kind := range kinds {
+		if _, ok := seen[kind]; ok {
+			continue
 		}
-		defer rows.Close()
-		return scanArtifacts(rows)
+		seen[kind] = struct{}{}
+		uniqueKinds = append(uniqueKinds, kind)
+	}
+	if len(uniqueKinds) == 0 {
+		return nil, nil
+	}
+	if len(uniqueKinds) == 1 {
+		return s.ListByKind(ctx, uniqueKinds[0], limit)
 	}
 
-	return results, nil
+	var sb strings.Builder
+	sb.WriteString(`SELECT id, kind, version, status, context, mode, title, content, valid_until, created_at, updated_at
+		FROM artifacts WHERE kind IN (`)
+	args := make([]any, 0, len(uniqueKinds)+1)
+	for i, kind := range uniqueKinds {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteByte('?')
+		args = append(args, string(kind))
+	}
+	sb.WriteString(") ORDER BY created_at DESC")
+	if limit > 0 {
+		sb.WriteString(" LIMIT ?")
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, sb.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArtifacts(rows)
+}
+
+// searchFTS runs one MATCH query, optionally constrained to a set of artifact
+// kinds (the kind: filter), ranked by the column-weighted bm25 score.
+func (s *Store) searchFTS(ctx context.Context, ftsQuery string, kinds []Kind, limit int) ([]*Artifact, error) {
+	var sb strings.Builder
+	sb.WriteString(`SELECT a.id, a.kind, a.version, a.status, a.context, a.mode, a.title, a.content, a.valid_until, a.created_at, a.updated_at
+		FROM artifacts a
+		JOIN artifacts_fts f ON a.id = f.id
+		WHERE artifacts_fts MATCH ?`)
+	args := []any{ftsQuery}
+	if len(kinds) > 0 {
+		sb.WriteString(" AND a.kind IN (")
+		for i, k := range kinds {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteByte('?')
+			args = append(args, string(k))
+		}
+		sb.WriteByte(')')
+	}
+	sb.WriteString(" ORDER BY bm25(artifacts_fts, 0.0, 10.0, 1.0, 5.0, 3.0) LIMIT ?")
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, sb.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
+	}
+	defer rows.Close()
+	return scanArtifacts(rows)
+}
+
+// matchArtifactKinds maps free-text kind: values to canonical artifact Kinds
+// (case-insensitive). Unrecognized values are dropped — a typo'd kind filters
+// nothing rather than erroring.
+func matchArtifactKinds(raw []string) []Kind {
+	if len(raw) == 0 {
+		return nil
+	}
+	known := []Kind{
+		KindNote, KindProblemCard, KindSolutionPortfolio, KindDecisionRecord,
+		KindWorkCommission, KindEvidencePack, KindRefreshReport,
+	}
+	var out []Kind
+	for _, r := range raw {
+		for _, k := range known {
+			if strings.EqualFold(r, string(k)) {
+				out = append(out, k)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // SearchByAffectedFile finds artifacts linked to a specific file path.
@@ -330,6 +439,62 @@ func (s *Store) SearchByAffectedFile(ctx context.Context, filePath string) ([]*A
 		WHERE af.file_path = ?
 		ORDER BY a.updated_at DESC`,
 		filePath,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArtifacts(rows)
+}
+
+// SearchByAffectedSymbol returns artifacts linked to a specific symbol via
+// affected_symbols — the symbol-granular companion to SearchByAffectedFile.
+// This is the join that lets an agent exploring a symbol see the decisions /
+// problems / variants touching that exact symbol, not just its file. When
+// filePath is non-empty, results are scoped to that file so same-named symbols
+// in different files don't collide.
+func (s *Store) SearchByAffectedSymbol(ctx context.Context, symbolName, filePath string) ([]*Artifact, error) {
+	query := `
+		SELECT DISTINCT a.id, a.kind, a.version, a.status, a.context, a.mode, a.title, a.content, a.valid_until, a.created_at, a.updated_at
+		FROM artifacts a
+		JOIN affected_symbols asym ON a.id = asym.artifact_id
+		WHERE asym.symbol_name = ?`
+	queryArgs := []any{symbolName}
+	if filePath != "" {
+		query += ` AND asym.file_path = ?`
+		queryArgs = append(queryArgs, filePath)
+	}
+	query += ` ORDER BY a.updated_at DESC`
+
+	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArtifacts(rows)
+}
+
+// SearchByAffectedSymbolAt is the LINE-AWARE companion to SearchByAffectedSymbol:
+// it returns only artifacts whose affected_symbols row for this (name, file)
+// COVERS the given 1-based line (line within [symbol_line, symbol_end_line]).
+// This is the keystone of honest fusion — two same-name methods on different
+// receivers occupy disjoint line ranges, so a decision recorded against one
+// overload never bleeds onto the other. Rows with no usable end line (legacy or
+// 0-valued) cannot be range-matched and are intentionally excluded; the caller
+// falls back to the line-blind SearchByAffectedSymbol and LABELS the result as
+// file+name granularity rather than presenting false per-symbol precision.
+func (s *Store) SearchByAffectedSymbolAt(ctx context.Context, symbolName, filePath string, line int) ([]*Artifact, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT a.id, a.kind, a.version, a.status, a.context, a.mode, a.title, a.content, a.valid_until, a.created_at, a.updated_at
+		FROM artifacts a
+		JOIN affected_symbols asym ON a.id = asym.artifact_id
+		WHERE asym.symbol_name = ?
+		  AND asym.file_path = ?
+		  AND asym.symbol_end_line >= asym.symbol_line
+		  AND ? >= asym.symbol_line
+		  AND ? <= asym.symbol_end_line
+		ORDER BY a.updated_at DESC`,
+		symbolName, filePath, line, line,
 	)
 	if err != nil {
 		return nil, err
@@ -464,6 +629,61 @@ func (s *Store) GetBacklinks(ctx context.Context, artifactID string) ([]Link, er
 		links = append(links, l)
 	}
 	return links, rows.Err()
+}
+
+// LinkEdge is one artifact_links row — a directed reasoning-graph edge.
+type LinkEdge struct {
+	Source string
+	Target string
+	Type   string
+}
+
+// AllLinks enumerates every artifact link in one pass — the whole-graph
+// enumeration the fused-graph ranker (graphrank, dec-20260604-3aaad199 phase 2)
+// uses to build the reasoning-graph adjacency. Stable order = deterministic build.
+func (s *Store) AllLinks(ctx context.Context) ([]LinkEdge, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT source_id, target_id, link_type FROM artifact_links ORDER BY source_id, target_id, link_type`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LinkEdge
+	for rows.Next() {
+		var e LinkEdge
+		if err := rows.Scan(&e.Source, &e.Target, &e.Type); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// AffectedFileRef is one affected_files row — an artifact's link to a file path,
+// the bridge between the reasoning graph and the code graph.
+type AffectedFileRef struct {
+	ArtifactID string
+	FilePath   string
+}
+
+// AllAffectedFiles enumerates every (artifact, file) pair in one pass, stably
+// ordered — the artifact<->file half of the fused-graph bridge.
+func (s *Store) AllAffectedFiles(ctx context.Context) ([]AffectedFileRef, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT artifact_id, file_path FROM affected_files ORDER BY artifact_id, file_path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AffectedFileRef
+	for rows.Next() {
+		var r AffectedFileRef
+		if err := rows.Scan(&r.ArtifactID, &r.FilePath); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // --- Affected Files ---

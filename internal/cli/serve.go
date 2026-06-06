@@ -13,10 +13,17 @@ import (
 
 	"github.com/m0n0x41d/haft/db"
 	"github.com/m0n0x41d/haft/internal/artifact"
+	"github.com/m0n0x41d/haft/internal/ceremony"
 	"github.com/m0n0x41d/haft/internal/codebase"
+	"github.com/m0n0x41d/haft/internal/codeintel"
+	"github.com/m0n0x41d/haft/internal/config"
+	"github.com/m0n0x41d/haft/internal/contextgraph"
+	"github.com/m0n0x41d/haft/internal/embedding"
 	"github.com/m0n0x41d/haft/internal/fpf"
+	"github.com/m0n0x41d/haft/internal/graph"
 	"github.com/m0n0x41d/haft/internal/present"
 	"github.com/m0n0x41d/haft/internal/project"
+	"github.com/m0n0x41d/haft/internal/recall"
 	"github.com/m0n0x41d/haft/internal/ui"
 	"github.com/m0n0x41d/haft/logger"
 
@@ -77,9 +84,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	workflow, workflowErr := project.LoadWorkflow(cwd)
 	if workflowErr != nil {
 		logger.Warn().Err(workflowErr).Msg("failed to load workflow policy")
-	} else if workflow != nil {
-		server.SetInstructions(workflow.PromptPrefix())
 	}
+	// Always emit server instructions: the workflow policy (when present) plus
+	// the always-on code-graph doctrine, so every session's system prompt tells
+	// the agent the fused code graph exists and to consult it before editing.
+	server.SetInstructions(composeServerInstructions(workflow))
 
 	// Load project identity
 	projCfg, err := project.Load(haftDir)
@@ -108,7 +117,24 @@ func runServe(cmd *cobra.Command, args []string) error {
 				// Populate context_facts on startup
 				_ = project.PopulateContextFacts(context.Background(), database.GetRawDB(), projCfg.Name)
 
-				server.SetV5Handler(makeV5Handler(artStore, haftDir, projCfg, indexStore))
+				// Refresh the code graph in the background if the source tree
+				// changed since the last build — so the first code-graph query
+				// after a code change hits a fresh index without a manual
+				// rebuild. Non-blocking: the server starts immediately; the
+				// build lock serializes this with any query-time EnsureIndex.
+				codeIntelRoot := filepath.Dir(haftDir)
+				go func() {
+					if built, err := codeintel.NewService(artStore).EnsureIndex(context.Background(), codeIntelRoot); err != nil {
+						logger.Warn().Err(err).Msg("code-graph startup refresh failed")
+					} else if built {
+						logger.Info().Msg("code-graph index rebuilt on startup (source changed)")
+					}
+				}()
+
+				searcher := buildHybridSearcher(artStore, database.GetRawDB())
+				crossHybrid := buildCrossProjectHybrid(indexStore)
+
+				server.SetV5Handler(makeV5Handler(artStore, searcher, crossHybrid, haftDir, projCfg, indexStore))
 			}
 		}
 	} else {
@@ -126,7 +152,115 @@ func runServe(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func makeV5Handler(store *artifact.Store, haftDir string, projCfg *project.Config, indexStore *project.IndexStore) fpf.V5ToolHandler {
+// buildHybridSearcher wires the optional embedding layer over the artifact
+// store. The embedder is resolved lazily on first search, so startup never
+// blocks on a first-run model download. A nil result (provider disabled or any
+// setup fault) means search runs FTS5+PPR only — recall never hard-fails on the
+// optional layer (dec-20260605-fe77b358).
+func buildHybridSearcher(store *artifact.Store, rawDB *sql.DB) recall.Searcher {
+	embCfg := embeddingConfigFromFile()
+	if strings.EqualFold(strings.TrimSpace(embCfg.Provider), embedding.ProviderNone) {
+		logger.Info().Msg("hybrid recall disabled by config — using FTS5+PPR")
+		return nil
+	}
+
+	newEmbedder := func() (embedding.Embedder, error) {
+		embedder, err := embedding.New(embCfg)
+		if err != nil {
+			if embedding.Degraded(err) {
+				logger.Info().Err(err).Msg("embedding layer unavailable — using FTS5+PPR")
+			} else {
+				logger.Warn().Err(err).Msg("embedding layer setup failed — using FTS5+PPR")
+			}
+			return nil, err
+		}
+		descriptor := embedder.Descriptor()
+		logger.Info().
+			Str("provider", descriptor.Provider).
+			Str("model", descriptor.Model).
+			Int("dim", descriptor.Dimensions).
+			Msg("hybrid recall enabled")
+		return embedder, nil
+	}
+
+	hybrid := recall.NewHybrid(store, newEmbedder, rawDB)
+	hybrid.Prewarm() // warm the corpus index in the background so the first search is fast
+	return hybrid
+}
+
+// embeddingConfigFromFile resolves the embedding provider/model/dim from
+// ~/.haft/config.yaml, defaulting to the local sidecar.
+func embeddingConfigFromFile() embedding.Config {
+	embCfg := embedding.Config{Provider: embedding.ProviderLocal}
+	if cfg, err := config.Load(); err == nil && cfg != nil {
+		if cfg.Embedding.Provider != "" {
+			embCfg.Provider = cfg.Embedding.Provider
+		}
+		embCfg.Model = cfg.Embedding.Model
+		embCfg.Dim = cfg.Embedding.Dim
+	}
+	return embCfg
+}
+
+// buildCrossProjectHybrid wires the optional embedding layer over the
+// cross-project index, mirroring buildHybridSearcher. nil (provider disabled /
+// no index) means cross-project recall runs the FTS path (now AND+OR) only.
+func buildCrossProjectHybrid(indexStore *project.IndexStore) *project.CrossHybrid {
+	if indexStore == nil {
+		return nil
+	}
+	embCfg := embeddingConfigFromFile()
+	if strings.EqualFold(strings.TrimSpace(embCfg.Provider), embedding.ProviderNone) {
+		return nil
+	}
+	newEmbedder := func() (embedding.Embedder, error) {
+		embedder, err := embedding.New(embCfg)
+		if err != nil {
+			if embedding.Degraded(err) {
+				logger.Info().Err(err).Msg("embedding layer unavailable — cross-project recall uses FTS5")
+			} else {
+				logger.Warn().Err(err).Msg("embedding layer setup failed — cross-project recall uses FTS5")
+			}
+			return nil, err
+		}
+		return embedder, nil
+	}
+	hybrid := project.NewCrossHybrid(indexStore, newEmbedder)
+	hybrid.Prewarm() // background-warm the cross-project index so the first frame recall is fast
+	return hybrid
+}
+
+// invalidateRecall tells the hybrid searcher to rebuild its semantic index when
+// a decision/note is created or updated, so it becomes searchable the same
+// session. No-op for the plain FTS searcher or non-corpus artifacts.
+func invalidateRecall(searcher recall.Searcher, createdRef string) {
+	if createdRef == "" {
+		return
+	}
+	if !strings.HasPrefix(createdRef, "dec-") && !strings.HasPrefix(createdRef, "note-") {
+		return
+	}
+	if invalidator, ok := searcher.(interface{ Invalidate() }); ok {
+		invalidator.Invalidate()
+	}
+}
+
+// searchArtifacts routes a query through the hybrid searcher when one is wired,
+// and falls back to the store's FTS ranking otherwise. Same contract either way.
+func searchArtifacts(ctx context.Context, store *artifact.Store, searcher recall.Searcher, query string, limit int) ([]*artifact.Artifact, error) {
+	if searcher == nil {
+		return artifact.FetchSearchResults(ctx, store, query, limit)
+	}
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	return searcher.Search(ctx, query, limit)
+}
+
+func makeV5Handler(store *artifact.Store, searcher recall.Searcher, crossHybrid *project.CrossHybrid, haftDir string, projCfg *project.Config, indexStore *project.IndexStore) fpf.V5ToolHandler {
 	return func(ctx context.Context, toolName string, rawParams json.RawMessage) (string, error) {
 		var params struct {
 			Name      string         `json:"name"`
@@ -141,14 +275,16 @@ func makeV5Handler(store *artifact.Store, haftDir string, projCfg *project.Confi
 		start := time.Now()
 
 		// Dispatch
-		result, createdRef, toolErr := dispatchTool(ctx, store, haftDir, params.Name, params.Arguments)
+		result, createdRef, toolErr := dispatchTool(ctx, store, searcher, haftDir, params.Name, params.Arguments)
 
 		// Post-dispatch hooks
 		logger.ToolResult(params.Name, action, time.Since(start).Milliseconds(), toolErr)
 
 		if toolErr == nil {
-			result = applyCrossProjectRecall(ctx, result, params.Name, action, params.Arguments, store, projCfg, indexStore)
-			applyCrossProjectIndex(ctx, params.Name, action, params.Arguments, createdRef, store, projCfg, indexStore)
+			result = applyCrossProjectRecall(ctx, result, params.Name, action, params.Arguments, store, projCfg, indexStore, crossHybrid)
+			result = applyGraphSeededRecall(ctx, result, params.Name, action, params.Arguments, store, haftDir)
+			applyCrossProjectIndex(ctx, params.Name, action, params.Arguments, createdRef, store, projCfg, indexStore, crossHybrid)
+			invalidateRecall(searcher, createdRef)
 		}
 
 		logAudit(ctx, store.DB(), params.Name, action, params.Arguments, toolErr)
@@ -167,11 +303,10 @@ func makeV5Handler(store *artifact.Store, haftDir string, projCfg *project.Confi
 // ID of the artifact created by this call (e.g. "dec-20260418-a3f7c1d2"); empty
 // string when the action does not create a primary artifact (e.g. read-only
 // queries, mutations of existing artifacts).
-func dispatchTool(ctx context.Context, store *artifact.Store, haftDir string, name string, args map[string]any) (string, string, error) {
+func dispatchTool(ctx context.Context, store *artifact.Store, searcher recall.Searcher, haftDir string, name string, args map[string]any) (string, string, error) {
 	switch name {
 	case "haft_note":
-		result, err := handleQuintNote(ctx, store, haftDir, args)
-		return result, "", err
+		return handleQuintNote(ctx, store, haftDir, args)
 	case "haft_problem":
 		result, err := handleQuintProblem(ctx, store, haftDir, args)
 		return result, "", err
@@ -184,7 +319,7 @@ func dispatchTool(ctx context.Context, store *artifact.Store, haftDir string, na
 		result, err := handleQuintRefresh(ctx, store, haftDir, args)
 		return result, "", err
 	case "haft_query":
-		result, err := handleQuintQuery(ctx, store, haftDir, args)
+		result, err := handleQuintQuery(ctx, store, searcher, haftDir, args)
 		return result, "", err
 	case "haft_commission":
 		args = commissionArgsWithProjectRoot(args, filepath.Dir(haftDir))
@@ -225,8 +360,10 @@ func logToolEntry(name, action string, args map[string]any) {
 	logger.ToolCall(name, action, logParams)
 }
 
-// applyCrossProjectRecall appends cross-project history to frame results.
-func applyCrossProjectRecall(ctx context.Context, result, name, action string, args map[string]any, store *artifact.Store, projCfg *project.Config, indexStore *project.IndexStore) string {
+// applyCrossProjectRecall appends cross-project history to frame results. When
+// the cross-project hybrid is wired it fuses semantic recall over FTS; otherwise
+// it falls back to the FTS path (now AND+OR) directly.
+func applyCrossProjectRecall(ctx context.Context, result, name, action string, args map[string]any, store *artifact.Store, projCfg *project.Config, indexStore *project.IndexStore, crossHybrid *project.CrossHybrid) string {
 	if name != "haft_problem" || action != "frame" || indexStore == nil || projCfg == nil {
 		return result
 	}
@@ -234,7 +371,14 @@ func applyCrossProjectRecall(ctx context.Context, result, name, action string, a
 	title, _ := args["title"].(string)
 	query := title + " " + signal
 	primaryLang := project.DetectPrimaryLanguage(store.DB())
-	recalls, err := indexStore.Search(ctx, query, projCfg.ID, primaryLang, 3)
+
+	var recalls []project.IndexRecall
+	var err error
+	if crossHybrid != nil {
+		recalls, err = crossHybrid.Search(ctx, query, projCfg.ID, primaryLang, 3)
+	} else {
+		recalls, err = indexStore.Search(ctx, query, projCfg.ID, primaryLang, 3)
+	}
 	if err != nil || len(recalls) == 0 {
 		return result
 	}
@@ -252,12 +396,48 @@ func applyCrossProjectRecall(ctx context.Context, result, name, action string, a
 	return result + "\n"
 }
 
+// applyGraphSeededRecall appends, on a frame that names a seed_file, the artifacts
+// the FUSED code+reasoning graph ranks NEAREST that file — closing the gap where
+// the keyword-based recall (recallRelated FTS5) misses a decision governing the
+// exact file but phrased differently. Best-effort: any error or empty result
+// leaves the frame response unchanged. Lives in the shell because the artifact
+// core cannot import the code-graph (codeintel).
+func applyGraphSeededRecall(ctx context.Context, result, name, action string, args map[string]any, store *artifact.Store, haftDir string) string {
+	if name != "haft_problem" || action != "frame" {
+		return result
+	}
+	seedFileRaw, _ := args["seed_file"].(string)
+	seedFile := strings.TrimSpace(seedFileRaw)
+	if seedFile == "" {
+		return result
+	}
+	projectRoot := filepath.Dir(haftDir)
+	ranked, err := codeintel.NewService(store).RelatedToFile(ctx, projectRoot, seedFile, 6)
+	if err != nil || len(ranked) == 0 {
+		return result
+	}
+	lines := make([]string, 0, len(ranked))
+	for _, r := range ranked {
+		if r.Kind != codeintel.RelatedArtifact {
+			continue // symbols are not recall — only governing/related artifacts
+		}
+		lines = append(lines, fmt.Sprintf("- **%s** `%s`", r.Title, r.ID))
+	}
+	if len(lines) == 0 {
+		return result
+	}
+	result += fmt.Sprintf("\n## Governed nearby (graph recall for %s)\n\n", seedFile)
+	result += strings.Join(lines, "\n") + "\n"
+	result += "\n_Nearest artifacts in the fused graph — surfaced because keyword recall can miss a decision phrased differently. Check before re-deciding._\n"
+	return result
+}
+
 // applyCrossProjectIndex writes decision summaries to the global index on
 // decide. The cross-project index is keyed by (project_id, decision_id) where
 // decision_id MUST be the canonical artifact ID (e.g. "dec-20260418-a3f7c1d2"),
 // not the user-supplied selected_title — two decisions in one project can
 // legitimately share the same selected option label without colliding.
-func applyCrossProjectIndex(ctx context.Context, name, action string, args map[string]any, createdRef string, store *artifact.Store, projCfg *project.Config, indexStore *project.IndexStore) {
+func applyCrossProjectIndex(ctx context.Context, name, action string, args map[string]any, createdRef string, store *artifact.Store, projCfg *project.Config, indexStore *project.IndexStore, crossHybrid *project.CrossHybrid) {
 	if name != "haft_decision" || action != "decide" || indexStore == nil || projCfg == nil {
 		return
 	}
@@ -283,6 +463,13 @@ func applyCrossProjectIndex(ctx context.Context, name, action string, args map[s
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 	})
 	logger.Debug().Str("project", projCfg.ID).Str("decision", createdRef).Str("title", selectedTitle).Msg("index.write")
+
+	// A freshly-decided cross-project decision becomes semantically searchable
+	// same-session: rebuild the cross-project index in the background (cached
+	// vectors reused, only the new decision embeds).
+	if crossHybrid != nil {
+		crossHybrid.Invalidate()
+	}
 }
 
 // applyRefreshReminder appends a reminder if >5 days since last stale scan.
@@ -378,7 +565,87 @@ func truncateMeasure(s string, max int) string {
 
 // --- Tool handlers ---
 
-func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string, args map[string]any) (string, error) {
+// parseNoteAnchors decodes the haft_note `anchors` arg ([{type, ref}, ...]) into
+// typed NoteAnchors, skipping malformed entries and ones with an empty ref.
+func parseNoteAnchors(raw any) []artifact.NoteAnchor {
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	var out []artifact.NoteAnchor
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		ref, _ := m["ref"].(string)
+		if strings.TrimSpace(ref) == "" {
+			continue
+		}
+		typ, _ := m["type"].(string)
+		out = append(out, artifact.NoteAnchor{Type: typ, Ref: ref})
+	}
+	return out
+}
+
+// isArtifactRef reports whether an anchor ref is an artifact ID (a lower-case
+// prefix + '-' + a date digit, e.g. dec-20260604-…) as opposed to a code-symbol
+// name. Symbol names have no such shape.
+func isArtifactRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	dash := strings.IndexByte(ref, '-')
+	if dash <= 0 || dash+1 >= len(ref) {
+		return false
+	}
+	for i := 0; i < dash; i++ {
+		if c := ref[i]; c < 'a' || c > 'z' {
+			return false
+		}
+	}
+	return ref[dash+1] >= '0' && ref[dash+1] <= '9'
+}
+
+// resolveSymbolAnchor resolves a symbol-anchor ref ("Name" or "Name@file") to a
+// single indexed symbol, returning the AffectedSymbol to persist. A ref that
+// resolves to no symbol — or to several without a @file qualifier — is an error
+// (a dead/ambiguous anchor is never silently kept).
+func resolveSymbolAnchor(ctx context.Context, syms *codebase.SymbolStore, ref string) (artifact.AffectedSymbol, error) {
+	name, file := ref, ""
+	if i := strings.LastIndexByte(ref, '@'); i > 0 {
+		name, file = ref[:i], ref[i+1:]
+	}
+	cands, err := syms.GetByName(ctx, name)
+	if err != nil {
+		return artifact.AffectedSymbol{}, err
+	}
+	if file != "" {
+		var filtered []codebase.CodeSymbol
+		for _, c := range cands {
+			if c.FilePath == file {
+				filtered = append(filtered, c)
+			}
+		}
+		cands = filtered
+	}
+	switch len(cands) {
+	case 0:
+		return artifact.AffectedSymbol{}, fmt.Errorf("symbol anchor %q resolves to no indexed symbol — check the name or qualify with @<file>", ref)
+	case 1:
+		c := cands[0]
+		return artifact.AffectedSymbol{
+			FilePath:   c.FilePath,
+			SymbolName: c.Name,
+			SymbolKind: c.Kind,
+			Line:       c.StartLine,
+			EndLine:    c.EndLine,
+			Hash:       c.Hash,
+		}, nil
+	default:
+		return artifact.AffectedSymbol{}, fmt.Errorf("symbol anchor %q is ambiguous (%d matches) — qualify with @<file>", ref, len(cands))
+	}
+}
+
+func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string, args map[string]any) (string, string, error) {
 	input := artifact.NoteInput{}
 	if v, ok := args["title"].(string); ok {
 		input.Title = v
@@ -396,6 +663,22 @@ func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string,
 		input.Context = v
 	}
 	input.AffectedFiles = parseStringArrayFromArgs(args, "affected_files")
+	input.Observations = parseStringArrayFromArgs(args, "observations")
+	// Classify each anchor: an artifact ID (dec-/prob-/...) becomes a typed link;
+	// anything else is a code-symbol anchor, resolved against the symbol store
+	// (a dead/ambiguous symbol anchor rejects the note — no dead edges).
+	symStore := codebase.NewSymbolStore(store.DB())
+	for _, an := range parseNoteAnchors(args["anchors"]) {
+		if isArtifactRef(an.Ref) {
+			input.Anchors = append(input.Anchors, an)
+			continue
+		}
+		as, err := resolveSymbolAnchor(ctx, symStore, an.Ref)
+		if err != nil {
+			return "", "", err
+		}
+		input.AffectedSymbols = append(input.AffectedSymbols, as)
+	}
 	if v, ok := args["search_keywords"].(string); ok {
 		input.SearchKeywords = v
 	}
@@ -404,7 +687,7 @@ func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string,
 	navStrip := present.NavStrip(artifact.ComputeNavState(ctx, store, input.Context))
 
 	if !validation.OK {
-		return present.NoteRejection(validation, navStrip), nil
+		return present.NoteRejection(validation, navStrip), "", nil
 	}
 
 	a, filePath, err := artifact.CreateNote(ctx, store, haftDir, input)
@@ -414,10 +697,10 @@ func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string,
 		if errors.As(err, &ww) {
 			validation.Warnings = append(validation.Warnings, ww.Warnings...)
 		} else {
-			return "", err
+			return "", "", err
 		}
 	}
-	return present.NoteResponse(a, filePath, validation, navStrip), nil
+	return present.NoteResponse(a, filePath, validation, navStrip), a.Meta.ID, nil
 }
 
 func handleQuintProblem(ctx context.Context, store *artifact.Store, haftDir string, args map[string]any) (string, error) {
@@ -460,7 +743,11 @@ func handleQuintProblem(ctx context.Context, store *artifact.Store, haftDir stri
 			return "", err
 		}
 		navStrip := present.NavStrip(artifact.ComputeNavState(ctx, store, contextName))
-		return present.ProblemResponse("frame", a, filePath, navStrip) + present.FPFPhaseHint("frame"), nil
+		resp := present.ProblemResponse("frame", a, filePath, navStrip) + present.FPFPhaseHint("frame")
+		if warn := artifact.UmbrellaWarning(input.Title, input.Signal, input.Acceptance); warn != "" {
+			resp += "\n" + warn
+		}
+		return resp, nil
 
 	case "characterize":
 		input := artifact.CharacterizeInput{}
@@ -768,7 +1055,11 @@ func handleQuintDecision(ctx context.Context, store *artifact.Store, haftDir str
 		}
 
 		navStrip := present.NavStrip(artifact.ComputeNavState(ctx, store, contextName))
-		return present.DecisionResponse("decide", a, filePath, "", navStrip) + baselineNote + present.FPFPhaseHint("decide"), a.Meta.ID, nil
+		resp := present.DecisionResponse("decide", a, filePath, "", navStrip) + baselineNote + present.FPFPhaseHint("decide")
+		if warn := artifact.ReputationWarning(input.WhySelected, input.SelectionPolicy, input.CounterArgument, input.WeakestLink); warn != "" {
+			resp += "\n" + warn
+		}
+		return resp, a.Meta.ID, nil
 
 	case "apply":
 		decisionRef, _ := args["decision_ref"].(string)
@@ -1014,7 +1305,12 @@ func handleQuintRefresh(ctx context.Context, store *artifact.Store, haftDir stri
 			}
 		}
 		if hasImpact {
-			result += "\n" + present.DriftResponse(driftReports, "")
+			verbose, _ := args["verbose"].(bool)
+			if verbose {
+				result += "\n" + present.DriftResponse(driftReports, "")
+			} else {
+				result += "\n" + present.DriftResponseSummary(driftReports, "")
+			}
 		}
 
 		return result + navStrip, nil
@@ -1081,7 +1377,7 @@ func handleQuintRefresh(ctx context.Context, store *artifact.Store, haftDir stri
 	}
 }
 
-func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string, args map[string]any) (string, error) {
+func handleQuintQuery(ctx context.Context, store *artifact.Store, searcher recall.Searcher, haftDir string, args map[string]any) (string, error) {
 	action, _ := args["action"].(string)
 	contextName, _ := args["context"].(string)
 	navStrip := present.NavStrip(artifact.ComputeNavState(ctx, store, contextName))
@@ -1093,14 +1389,17 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		if l, ok := args["limit"].(float64); ok {
 			limit = int(l)
 		}
-		results, err := artifact.FetchSearchResults(ctx, store, query, limit)
+		results, err := searchArtifacts(ctx, store, searcher, query, limit)
 		if err != nil {
 			return "", err
 		}
 		return present.SearchResponse(results, query) + navStrip, nil
 
 	case "status":
-		data, err := artifact.FetchStatusData(ctx, store, contextName)
+		// H1 (dec-20260526-9fdd33ed): pass projectRoot so /h-status
+		// surfaces drift via FetchStatusData → CheckDrift → StatusData.Drift.
+		projectRoot := filepath.Dir(haftDir)
+		data, err := artifact.FetchStatusData(ctx, store, contextName, projectRoot)
 		if err != nil {
 			return "", err
 		}
@@ -1146,7 +1445,155 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		if err != nil {
 			return "", err
 		}
-		return present.RelatedResponse(results, file) + navStrip, nil
+		resp := present.RelatedResponse(results, file)
+		if file != "" {
+			svc := codeintel.NewService(store)
+			projectRoot := filepath.Dir(haftDir)
+			// Phase-2 graph-proximity recall (dec-20260604-3aaad199): FTS5-seeded
+			// PPR over the fused graph, additive to the exact affected-file list.
+			// Best-effort — a failure never breaks the related response.
+			if ranked, perr := svc.RelatedToFile(ctx, projectRoot, file, 12); perr == nil && len(ranked) > 0 {
+				// Dedup: drop anything already shown in the exact affected-file
+				// section, so a decision is not listed twice.
+				shown := make(map[string]bool, len(results))
+				for _, a := range results {
+					shown[a.Meta.ID] = true
+				}
+				items := make([]present.RelatedProximityItem, 0, len(ranked))
+				for _, r := range ranked {
+					if shown[r.ID] {
+						continue
+					}
+					label := "reasoning"
+					if r.Kind == codeintel.RelatedSymbol {
+						label = "symbol"
+					}
+					items = append(items, present.RelatedProximityItem{Title: r.Title, Label: label, Ref: r.ID})
+				}
+				resp += present.RelatedProximityResponse(items)
+			}
+			// Structural test-coverage lane (dec-20260604-ef966a11): which tests
+			// exercise this file's symbols — 'exercised by', never 'verified'.
+			if cov, cerr := svc.TestedBy(ctx, projectRoot, file); cerr == nil && len(cov) > 0 {
+				items := make([]present.TestedByItem, 0, len(cov))
+				for _, c := range cov {
+					items = append(items, present.TestedByItem{Symbol: c.Symbol, Exported: c.Exported, TestedBy: c.TestedBy})
+				}
+				resp += present.TestedByResponse(items)
+			}
+		}
+		return resp + navStrip, nil
+
+	case "code_context":
+		file, _ := args["file"].(string)
+		if file == "" {
+			return "", fmt.Errorf("file is required for code_context action")
+		}
+		symbol, _ := args["symbol"].(string)
+		line := 0
+		if l, ok := args["line"].(float64); ok {
+			line = int(l)
+		}
+		cc, err := contextgraph.FetchCodeContext(ctx, store, graph.NewStore(store.DB()), contextgraph.Target{File: file, Symbol: symbol, Line: line})
+		if err != nil {
+			return "", err
+		}
+		return present.CodeContextResponse(cc) + navStrip, nil
+
+	case "callees", "callers", "impact":
+		name := firstNonEmptyQueryArg(args, "symbol", "name")
+		if name == "" {
+			return "", fmt.Errorf("symbol is required for %s action", action)
+		}
+		file, _ := args["file"].(string)
+		line := 0
+		if l, ok := args["line"].(float64); ok {
+			line = int(l)
+		}
+		depth := 0
+		if d, ok := args["depth"].(float64); ok {
+			depth = int(d)
+		}
+		dir := codeintel.Callees
+		if action != "callees" {
+			dir = codeintel.Callers // callers + impact both walk inbound edges
+		}
+		projectRoot := filepath.Dir(haftDir)
+		res, err := codeintel.NewService(store).Flow(ctx, projectRoot, name, file, line, depth, dir)
+		if err != nil {
+			return "", err
+		}
+		return present.FlowResponse(res, action, name) + navStrip, nil
+
+	case "node":
+		name := firstNonEmptyQueryArg(args, "symbol", "name")
+		if name == "" {
+			return "", fmt.Errorf("symbol is required for node action")
+		}
+		file, _ := args["file"].(string)
+		line := 0
+		if l, ok := args["line"].(float64); ok {
+			line = int(l)
+		}
+		projectRoot := filepath.Dir(haftDir)
+		view, err := codeintel.NewService(store).Node(ctx, projectRoot, name, file, line)
+		if err != nil {
+			return "", err
+		}
+		return present.NodeResponse(view, nodeLang(file, view)) + navStrip, nil
+
+	case "explore":
+		name := firstNonEmptyQueryArg(args, "symbol", "name")
+		if name == "" {
+			return "", fmt.Errorf("symbol is required for explore action")
+		}
+		file, _ := args["file"].(string)
+		line := 0
+		if l, ok := args["line"].(float64); ok {
+			line = int(l)
+		}
+		projectRoot := filepath.Dir(haftDir)
+		svc := codeintel.NewService(store)
+		// A bag of >=2 names (space/comma-separated) → multi-seed: connect them.
+		// A single name → the single-seed flow. Same arg, no new tool.
+		if seeds := splitSeedBag(name); len(seeds) >= 2 {
+			res, err := svc.ExploreBag(ctx, projectRoot, seeds)
+			if err != nil {
+				return "", err
+			}
+			return present.ExploreBagResponse(res) + navStrip, nil
+		}
+		res, err := svc.Explore(ctx, projectRoot, name, file, line)
+		if err != nil {
+			return "", err
+		}
+		return present.ExploreResponse(res, name, exploreLang(file, res)) + navStrip, nil
+
+	case "ceremony":
+		files := ceremonyFiles(args)
+		if len(files) == 0 {
+			return "", fmt.Errorf("files (array) or a space/comma-separated file is required for ceremony action")
+		}
+		projectRoot := filepath.Dir(haftDir)
+		gov := func(f string) ceremony.GovFacts {
+			arts, err := store.SearchByAffectedFile(ctx, f)
+			if err != nil {
+				return ceremony.GovFacts{}
+			}
+			for _, a := range arts {
+				// A file governed by an active decision is higher-stakes → at
+				// least standard. (Conservative + precise: governed-presence
+				// only; recorded low-reversibility → High is a follow-up that
+				// needs the decision→problem body parse, deferred to avoid a
+				// coarse body-scan false-High.)
+				if a.Meta.Kind == artifact.KindDecisionRecord && a.Meta.Status == artifact.StatusActive {
+					return ceremony.GovFacts{Reversibility: "medium"}
+				}
+			}
+			return ceremony.GovFacts{}
+		}
+		rec := ceremony.Recommend(projectRoot, files, gov)
+		return present.CeremonyResponse(rec, files) + navStrip, nil
 
 	case "projection":
 		viewName, _ := args["view"].(string)
@@ -1234,8 +1681,64 @@ func handleQuintQuery(ctx context.Context, store *artifact.Store, haftDir string
 		return handleQuintQueryResolveTerm(ctx, store, haftDir, args)
 
 	default:
-		return "", fmt.Errorf("unknown action %q — use 'search', 'status', 'related', 'projection', 'list', 'coverage', 'fpf', 'check', or 'resolve_term'", action)
+		return "", fmt.Errorf("unknown action %q — use 'search', 'status', 'related', 'code_context', 'callees', 'callers', 'impact', 'node', 'explore', 'ceremony', 'projection', 'list', 'coverage', 'fpf', 'check', or 'resolve_term'", action)
 	}
+}
+
+// nodeLang derives the markdown code-fence language for a node view from the
+// file argument, falling back to the first overload's file extension.
+func nodeLang(file string, view codeintel.NodeView) string {
+	ext := filepath.Ext(file)
+	if ext == "" && len(view.Overloads) > 0 {
+		ext = filepath.Ext(view.Overloads[0].Symbol.FilePath)
+	}
+	return strings.TrimPrefix(ext, ".")
+}
+
+// ceremonyFiles extracts the touched-file set for the ceremony action: a
+// `files` array if given, else a space/comma-separated `file` string.
+func ceremonyFiles(args map[string]any) []string {
+	if raw, ok := args["files"].([]any); ok {
+		out := make([]string, 0, len(raw))
+		for _, v := range raw {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	if f, _ := args["file"].(string); strings.TrimSpace(f) != "" {
+		return splitSeedBag(f)
+	}
+	return nil
+}
+
+// splitSeedBag splits an explore symbol argument into a bag of seed names on
+// whitespace or commas (so "FrameProblem Create" or "FrameProblem, Create"
+// both work), dropping empties. A single token yields a one-element slice.
+func splitSeedBag(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == ','
+	})
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// exploreLang derives the code-fence language for an explore view from the file
+// argument, falling back to the seed's file extension.
+func exploreLang(file string, res codeintel.ExploreResult) string {
+	ext := filepath.Ext(file)
+	if ext == "" {
+		ext = filepath.Ext(res.Seed.FilePath)
+	}
+	return strings.TrimPrefix(ext, ".")
 }
 
 func firstNonEmptyQueryArg(args map[string]any, keys ...string) string {
@@ -1520,6 +2023,12 @@ func parseDimensions(raw any) []artifact.ComparisonDimension {
 		}
 		if v, ok := dm["how_to_measure"].(string); ok {
 			dim.HowToMeasure = v
+		}
+		if v, ok := dm["role"].(string); ok {
+			dim.Role = v
+		}
+		if v, ok := dm["valid_until"].(string); ok {
+			dim.ValidUntil = v
 		}
 		if dim.Name != "" {
 			dims = append(dims, dim)

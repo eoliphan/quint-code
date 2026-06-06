@@ -115,6 +115,9 @@ func (t *HaftProblemTool) Execute(ctx context.Context, argsJSON string) (agent.T
 			return agent.ToolResult{}, err
 		}
 		display := fmt.Sprintf("Problem framed: %s\nID: %s\nFile: %s", a.Meta.Title, a.Meta.ID, filePath)
+		if warn := artifact.UmbrellaWarning(input.Title, input.Signal, input.Acceptance); warn != "" {
+			display += "\n\n" + warn
+		}
 		return agent.ToolResult{
 			DisplayText: display,
 			Meta: &agent.ArtifactMeta{
@@ -260,7 +263,9 @@ Actions:
 - explore: Generate 2+ genuinely distinct approaches with strengths, weakest link, and risks.
   Each variant must differ in KIND, not degree. This is creative abduction.
 - compare: Fair comparison of variants on explicit dimensions. Identify the Pareto front.
-- similar: Search past solution portfolios for patterns matching a query. Reuse proven approaches.`,
+- similar: Search past solution portfolios for patterns matching a query. Reuse proven approaches.
+
+When you present the variants' rationale to the operator, curate by exception: flag arguments you are NOT confident are correct/load-bearing under an "uncertain — scrutinize" bucket and lead with them; never down-rank or hide a low-confidence point to look tidy (false tidiness makes the operator curate less carefully than a flat list).`,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -433,7 +438,70 @@ func (t *HaftSolutionTool) explore(ctx context.Context, args map[string]any) (ag
 			ArtifactRef: a.Meta.ID,
 			Operation:   "explore",
 		},
+		Warnings: detectExploreWarnings(input, jsonStr(args, "parity_rules")),
 	}, nil
+}
+
+// detectExploreWarnings runs FPF-discipline heuristics over an
+// ExploreInput and returns advisory strings. These are SOFT
+// violations: the artifact is still written, but the agent sees the
+// warnings on the next turn and can self-correct.
+//
+// Detected patterns:
+//   - Disguised duplicate variants (titles look like rewordings)
+//   - WLNK that repeats the variant title verbatim (no failure mode named)
+//   - Empty parity_rules with >=3 variants (parity at risk)
+//   - No stepping-stone variant flagged AND no rationale provided
+func detectExploreWarnings(input artifact.ExploreInput, parityRules string) []string {
+	var warnings []string
+
+	// Disguised duplicates: pairwise title similarity.
+	for i := range input.Variants {
+		for j := i + 1; j < len(input.Variants); j++ {
+			a := strings.ToLower(strings.TrimSpace(input.Variants[i].Title))
+			b := strings.ToLower(strings.TrimSpace(input.Variants[j].Title))
+			if a == "" || b == "" {
+				continue
+			}
+			if a == b || strings.HasPrefix(b, a) || strings.HasPrefix(a, b) {
+				warnings = append(warnings, fmt.Sprintf(
+					"variants %q and %q look like rewordings of the same approach — FPF requires variants that differ in kind, not degree",
+					input.Variants[i].Title, input.Variants[j].Title,
+				))
+			}
+		}
+	}
+
+	// WLNK repeats title (no failure mode named).
+	for _, v := range input.Variants {
+		title := strings.ToLower(strings.TrimSpace(v.Title))
+		wlnk := strings.ToLower(strings.TrimSpace(v.WeakestLink))
+		if title != "" && wlnk == title {
+			warnings = append(warnings, fmt.Sprintf(
+				"variant %q: WLNK repeats the title — name the specific failure mode, not the feature",
+				v.Title,
+			))
+		}
+	}
+
+	// Parity declaration missing on multi-variant portfolios.
+	if len(input.Variants) >= 3 && strings.TrimSpace(parityRules) == "" {
+		warnings = append(warnings, "parity_rules empty for 3+ variants — fair comparison requires explicit parity plan")
+	}
+
+	// No stepping stone flagged + no rationale.
+	hasStepping := false
+	for _, v := range input.Variants {
+		if v.SteppingStone {
+			hasStepping = true
+			break
+		}
+	}
+	if !hasStepping && strings.TrimSpace(input.NoSteppingStoneRationale) == "" {
+		warnings = append(warnings, "no stepping_stone variant declared and no rationale given — confirm none of the variants opens future search space")
+	}
+
+	return warnings
 }
 
 func (t *HaftSolutionTool) compare(ctx context.Context, args map[string]any) (agent.ToolResult, error) {
@@ -474,7 +542,49 @@ func (t *HaftSolutionTool) compare(ctx context.Context, args map[string]any) (ag
 			Operation:            "compare",
 			ComparedPortfolioRef: a.Meta.ID,
 		},
+		Warnings: detectCompareWarnings(input),
 	}, nil
+}
+
+// detectCompareWarnings runs FPF heuristics over a CompareInput.
+//
+// Detected patterns:
+//   - Single dimension (collapse to ranking — Anti-Goodhart)
+//   - Empty parity_plan with scores recorded
+//   - Selected variant absent from non_dominated_set (selecting a dominated option)
+//   - PolicyApplied empty (no declared selection policy)
+func detectCompareWarnings(input artifact.CompareInput) []string {
+	var warnings []string
+
+	if len(input.Results.Dimensions) == 1 {
+		warnings = append(warnings, "comparison uses 1 dimension — collapse to ranking risks Anti-Goodhart; add observation dims to widen the lens")
+	}
+
+	if input.Results.ParityPlan == nil && len(input.Results.Scores) > 0 {
+		warnings = append(warnings, "scores recorded without parity_plan — declare what was held equal across variants")
+	}
+
+	if strings.TrimSpace(input.Results.PolicyApplied) == "" {
+		warnings = append(warnings, "policy_applied empty — selection policy must be declared BEFORE scoring (Anti-Goodhart)")
+	}
+
+	if input.Results.SelectedRef != "" && len(input.Results.NonDominatedSet) > 0 {
+		inSet := false
+		for _, ref := range input.Results.NonDominatedSet {
+			if ref == input.Results.SelectedRef {
+				inSet = true
+				break
+			}
+		}
+		if !inSet {
+			warnings = append(warnings, fmt.Sprintf(
+				"selected %q is NOT in non_dominated_set — selecting a dominated variant requires explicit override rationale",
+				input.Results.SelectedRef,
+			))
+		}
+	}
+
+	return warnings
 }
 
 //nolint:unused // exercised by package tests as a compatibility seam
@@ -898,7 +1008,9 @@ Actions:
 - evidence: Attach an explicit evidence item to any artifact.
 - baseline: Snapshot affected files after implementation and before measurement.
 - measure: Record measurement results against acceptance criteria.
-  Closes the lemniscate cycle with inductive evidence.`,
+  Closes the lemniscate cycle with inductive evidence.
+
+When you present the rationale (rejected alternatives, counterargument, weakest link) for the operator's review, curate by exception: flag the arguments you are NOT confident in under an "uncertain — scrutinize before binding" bucket and lead with them; the operator still binds (this never auto-accepts). Never hide or down-rank a low-confidence argument to look tidy.`,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -967,6 +1079,7 @@ Actions:
 							"threshold":     map[string]any{"type": "string", "description": "What counts as passing"},
 							"verify_after":  map[string]any{"type": "string", "description": "When to check (RFC3339 or YYYY-MM-DD) — for async claims that need time before evidence is available"},
 							"realizability": map[string]any{"type": "string", "enum": []string{"realizable", "nonrealizable", "unknown"}, "description": "C.28 CounterfactualSamplingRealizabilityProfile verdict; nonrealizable caps R_eff at 0.5 per CC-B3.9"},
+							"probability":   map[string]any{"type": "number", "description": "Optional elicited p(this claim holds) in [0,1] — a noisy forecast sampled at decide time, fed into decomposed-Brier calibration once verified. Sample 2-3 independent estimates and pass their consensus; never one authoritative number."},
 						},
 						"required": []string{"claim", "observable", "threshold"},
 					},
@@ -995,7 +1108,18 @@ Actions:
 					"type":        "string",
 					"description": "C.28 CausalEvidenceSupportBasis — basis on which this evidence supports a causal-use claim. Accepts: observational | interventional | realized_counterfactual | identified_estimate | simulation_only (long forms also accepted). simulation-only caps R_eff at 0.5 per CC-B3.9 (evidence).",
 				},
-				"mode": map[string]any{"type": "string", "description": "tactical | standard | deep"},
+				"_skips": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "(decide) Tactical-mode required-field bypass list. Requires _skip_reason.",
+				},
+				"_skip": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "(decide) Legacy alias for _skips; prefer _skips. Requires _skip_reason.",
+				},
+				"_skip_reason": map[string]any{"type": "string", "description": "(decide) Operator rationale required when _skips/_skip is non-empty."},
+				"mode":         map[string]any{"type": "string", "description": "tactical | standard | deep"},
 			},
 			"required": []any{"action"},
 		},
@@ -1174,6 +1298,12 @@ func (t *HaftDecisionTool) decide(ctx context.Context, args map[string]any) (age
 		return agent.ToolResult{}, err
 	}
 
+	skips := jsonStrArray(args, "_skips")
+	if len(skips) == 0 {
+		// Backward-compat alias: accept legacy "_skip" key too.
+		skips = jsonStrArray(args, "_skip")
+	}
+
 	input := artifact.DecideInput{
 		ProblemRef:      jsonStr(args, "problem_ref"),
 		ProblemRefs:     problemRefs,
@@ -1200,6 +1330,8 @@ func (t *HaftDecisionTool) decide(ctx context.Context, args map[string]any) (age
 		WhyNotOthers:    whyNotOthers,
 		Rollback:        rollback,
 		Predictions:     predictions,
+		Skips:           skips,
+		SkipReason:      jsonStr(args, "_skip_reason"),
 	}
 
 	gaps := t.coverageGaps(ctx, input.AffectedFiles)
@@ -1215,6 +1347,9 @@ func (t *HaftDecisionTool) decide(ctx context.Context, args map[string]any) (age
 	if len(coverageWarnings) > 0 {
 		display += "\n\n" + strings.Join(coverageWarnings, "\n")
 	}
+	if warn := artifact.ReputationWarning(input.WhySelected, input.SelectionPolicy, input.CounterArgument, input.WeakestLink); warn != "" {
+		display += "\n" + warn
+	}
 
 	return agent.ToolResult{
 		DisplayText: display,
@@ -1223,7 +1358,57 @@ func (t *HaftDecisionTool) decide(ctx context.Context, args map[string]any) (age
 			ArtifactRef: a.Meta.ID,
 			Operation:   "decide",
 		},
+		Warnings: detectDecideWarnings(input),
 	}, nil
+}
+
+// detectDecideWarnings runs FPF heuristics on a DecideInput.
+//
+// Detected patterns:
+//   - WeakestLink empty on the decision itself (selected variant's WLNK
+//     is hidden — agent must name what most plausibly breaks the choice)
+//   - SelectionPolicy empty (no recorded policy means post-hoc justification risk)
+//   - CounterArgument empty (no strongest-attack recorded)
+//   - Predictions empty (no falsifiable claims — measure loop will be hollow)
+//   - All predictions lack verify_after (no automatic refresh hook)
+//   - Rollback steps empty (decision marked irreversible without explicit
+//     irreversibility justification)
+func detectDecideWarnings(input artifact.DecideInput) []string {
+	var warnings []string
+
+	if strings.TrimSpace(input.WeakestLink) == "" {
+		warnings = append(warnings, "weakest_link empty — name what most plausibly breaks this choice (Anti-self-deception)")
+	}
+
+	if strings.TrimSpace(input.SelectionPolicy) == "" {
+		warnings = append(warnings, "selection_policy empty — record the rule used to choose, BEFORE seeing future results (Anti-Goodhart)")
+	}
+
+	if strings.TrimSpace(input.CounterArgument) == "" {
+		warnings = append(warnings, "counterargument empty — record the strongest genuine attack on this option (self-deception check)")
+	}
+
+	if len(input.Predictions) == 0 {
+		warnings = append(warnings, "no predictions declared — measure loop will have nothing to verify; add falsifiable claims")
+	} else {
+		// Check verify_after coverage.
+		anyVerifyAfter := false
+		for _, p := range input.Predictions {
+			if strings.TrimSpace(p.VerifyAfter) != "" {
+				anyVerifyAfter = true
+				break
+			}
+		}
+		if !anyVerifyAfter {
+			warnings = append(warnings, "no prediction has verify_after — verification loop won't fire automatically; set dates on at least one prediction")
+		}
+	}
+
+	if input.Rollback == nil || len(input.Rollback.Steps) == 0 {
+		warnings = append(warnings, "rollback steps empty — decision recorded as irreversible by omission; either describe rollback or accept the irreversibility explicitly")
+	}
+
+	return warnings
 }
 
 func (t *HaftDecisionTool) evidence(ctx context.Context, args map[string]any) (agent.ToolResult, error) {
@@ -1416,6 +1601,9 @@ func (t *HaftDecisionTool) measure(ctx context.Context, args map[string]any) (ag
 	}
 
 	display := fmt.Sprintf("Measurement recorded: verdict=%s\nArtifact: %s", input.Verdict, result.Meta.ID)
+	if calibration := t.calibrationSummary(ctx); calibration != "" {
+		display += "\n\n" + calibration
+	}
 	return agent.ToolResult{
 		DisplayText: display,
 		Meta: &agent.ArtifactMeta{
@@ -1425,6 +1613,30 @@ func (t *HaftDecisionTool) measure(ctx context.Context, args map[string]any) (ag
 			MeasureVerdict: input.Verdict,
 		},
 	}, nil
+}
+
+// calibrationSummary reads the decomposed-Brier calibration profile over every
+// verified forecast in the graph and renders a one-paragraph operator-facing
+// read. It is invoked at measure (verify) time, off the hot path. Empty when no
+// probabilistic forecasts exist yet; honest about cold-start — below the minimum
+// forecast count the directional bias is reported as not-yet-actionable rather
+// than asserted (dec-20260603-c3c7fa88 weakest link).
+func (t *HaftDecisionTool) calibrationSummary(ctx context.Context) string {
+	v, err := artifact.CalibrationProfile(ctx, t.store)
+	if err != nil || v.Components.N == 0 {
+		return ""
+	}
+	c := v.Components
+	if c.N < artifact.CalibrationMinForecasts {
+		return fmt.Sprintf("── Calibration ──\nCold start: %d/%d verified forecasts accumulated — decomposed-Brier profile not yet actionable.",
+			c.N, artifact.CalibrationMinForecasts)
+	}
+	return fmt.Sprintf(
+		"── Calibration (decomposed Brier over %d verified forecasts) ──\n"+
+			"Brier %.3f = reliability %.3f − resolution %.3f + uncertainty %.3f\n"+
+			"Directional bias: %s (mean forecast %.2f vs realized %.2f).",
+		c.N, c.MeanBrier, c.Reliability, c.Resolution, c.Uncertainty, v.Direction, c.MeanForecast, c.BaseRate,
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -1521,7 +1733,9 @@ func (t *HaftQueryTool) Execute(ctx context.Context, argsJSON string) (agent.Too
 		return agent.PlainResult(b.String()), nil
 
 	case "status":
-		data, err := artifact.FetchStatusData(ctx, t.store, contextName)
+		// HaftQueryTool doesn't carry projectRoot — drift surfacing skipped.
+		// Production /h-status path is cli/serve.go which passes projectRoot.
+		data, err := artifact.FetchStatusData(ctx, t.store, contextName, "")
 		if err != nil {
 			return agent.ToolResult{}, err
 		}
@@ -1655,7 +1869,11 @@ func (t *HaftRefreshTool) Execute(ctx context.Context, argsJSON string) (agent.T
 		if len(reports) == 0 {
 			return agent.PlainResult("No drift detected."), nil
 		}
-		return agent.PlainResult(present.DriftResponse(reports, "")), nil
+		verbose, _ := args["verbose"].(bool)
+		if verbose {
+			return agent.PlainResult(present.DriftResponse(reports, "")), nil
+		}
+		return agent.PlainResult(present.DriftResponseSummary(reports, "")), nil
 
 	case "waive":
 		ref, _ := args["artifact_ref"].(string)

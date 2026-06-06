@@ -30,6 +30,68 @@ func TestNormalizeInitHostOptionsAllMeansSupportedHostsOnly(t *testing.T) {
 	}
 }
 
+func TestRunInit_GeminiKeepsLegacyCommands(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	oldInitClaude := initClaude
+	oldInitCursor := initCursor
+	oldInitGemini := initGemini
+	oldInitCodex := initCodex
+	oldInitAir := initAir
+	oldInitOpencode := initOpencode
+	oldInitAll := initAll
+	oldInitLocal := initLocal
+	oldInitNoClaudeMD := initNoClaudeMD
+	defer func() {
+		initClaude = oldInitClaude
+		initCursor = oldInitCursor
+		initGemini = oldInitGemini
+		initCodex = oldInitCodex
+		initAir = oldInitAir
+		initOpencode = oldInitOpencode
+		initAll = oldInitAll
+		initLocal = oldInitLocal
+		initNoClaudeMD = oldInitNoClaudeMD
+	}()
+
+	tmpDir := t.TempDir()
+	homeDir := t.TempDir()
+	commandsDir := filepath.Join(homeDir, ".gemini", "commands")
+	legacyCommand := filepath.Join(commandsDir, "h-frame.toml")
+
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyCommand, []byte("description = \"legacy haft command\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", homeDir)
+
+	initClaude = false
+	initCursor = false
+	initGemini = true
+	initCodex = false
+	initAir = false
+	initOpencode = false
+	initAll = false
+	initLocal = false
+	initNoClaudeMD = true
+
+	if err := runInit(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(legacyCommand); err != nil {
+		t.Fatalf("Gemini init removed legacy command without replacement: %v", err)
+	}
+}
+
 func TestCreateDirectoryStructure_CreatesWorkflowExample(t *testing.T) {
 	haftDir := filepath.Join(t.TempDir(), ".haft")
 
@@ -273,35 +335,32 @@ func TestRunInit_OpencodeWritesMcpConfigAndCommands(t *testing.T) {
 		t.Errorf("HAFT_PROJECT_ROOT = %v, want %s", env["HAFT_PROJECT_ROOT"], tmpDir)
 	}
 
-	// Local commands install lands in .opencode/commands
-	displayPath, count, err := installCommands(tmpDir, "opencode", true)
-	if err != nil {
-		t.Fatalf("installCommands opencode: %v", err)
-	}
-	if count == 0 {
-		t.Errorf("expected commands installed, got 0")
-	}
-	wantPath := filepath.Join(tmpDir, ".opencode", "commands")
-	if displayPath != wantPath {
-		t.Errorf("displayPath = %q, want %q", displayPath, wantPath)
-	}
-
-	// At least one well-known command landed
-	if _, err := os.Stat(filepath.Join(wantPath, "h-frame.md")); err != nil {
-		t.Errorf("h-frame.md not installed: %v", err)
-	}
-
-	// Skill install for opencode lands in .opencode/skills/h-reason
-	skillPath, err := installSkill("opencode", true, tmpDir)
+	// Skill install for opencode lands in .opencode/skills (root); each
+	// v8 governance-substrate skill lands as <root>/<name>/SKILL.md.
+	skillPath, count, err := installSkill("opencode", true, tmpDir)
 	if err != nil {
 		t.Fatalf("installSkill opencode: %v", err)
 	}
-	wantSkillDir := filepath.Join(tmpDir, ".opencode", "skills", "h-reason")
-	if skillPath != wantSkillDir {
-		t.Errorf("skillPath = %q, want %q", skillPath, wantSkillDir)
+	if count != len(allSkills) {
+		t.Errorf("installSkill installed %d skills, expected %d", count, len(allSkills))
 	}
-	if _, err := os.Stat(filepath.Join(wantSkillDir, "SKILL.md")); err != nil {
-		t.Errorf("SKILL.md not installed: %v", err)
+	wantSkillRoot := filepath.Join(tmpDir, ".opencode", "skills")
+	if skillPath != wantSkillRoot {
+		t.Errorf("skillPath = %q, want %q", skillPath, wantSkillRoot)
+	}
+	// h-reason (umbrella entry point, carries full FPF reasoning palette)
+	// must land.
+	if _, err := os.Stat(filepath.Join(wantSkillRoot, "h-reason", "SKILL.md")); err != nil {
+		t.Errorf("h-reason SKILL.md not installed: %v", err)
+	}
+	// h-decide (manual-only, Transformer Mandate) must land.
+	if _, err := os.Stat(filepath.Join(wantSkillRoot, "h-decide", "SKILL.md")); err != nil {
+		t.Errorf("h-decide SKILL.md not installed: %v", err)
+	}
+	// Deprecated h-fpf must be removed by deprecation cleanup (renamed
+	// to h-reason and expanded into the full umbrella).
+	if _, err := os.Stat(filepath.Join(wantSkillRoot, "h-fpf")); !os.IsNotExist(err) {
+		t.Errorf("h-fpf should be removed; got err=%v", err)
 	}
 }
 

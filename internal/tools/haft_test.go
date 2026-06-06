@@ -1790,6 +1790,45 @@ func TestHaftDecisionTool_SchemaIncludesExtendedDecideInputFields(t *testing.T) 
 	}
 }
 
+func TestHaftDecisionTool_SchemaIncludesTacticalSkipFields(t *testing.T) {
+	tool := NewHaftDecisionTool(setupHaftToolStore(t), t.TempDir(), t.TempDir(), nil)
+	schema := tool.Schema()
+
+	properties, ok := schema.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema properties = %T, want map[string]any", schema.Parameters["properties"])
+	}
+
+	for _, key := range []string{"_skips", "_skip"} {
+		field, ok := properties[key].(map[string]any)
+		if !ok {
+			t.Fatalf("schema missing %q skip field", key)
+		}
+		if field["type"] != "array" {
+			t.Fatalf("%s type = %v, want array", key, field["type"])
+		}
+		items, ok := field["items"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s items = %T, want map[string]any", key, field["items"])
+		}
+		if items["type"] != "string" {
+			t.Fatalf("%s items.type = %v, want string", key, items["type"])
+		}
+		description, _ := field["description"].(string)
+		if !strings.Contains(description, "_skip_reason") {
+			t.Fatalf("%s description should mention _skip_reason: %q", key, description)
+		}
+	}
+
+	reason, ok := properties["_skip_reason"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema missing _skip_reason field")
+	}
+	if reason["type"] != "string" {
+		t.Fatalf("_skip_reason type = %v, want string", reason["type"])
+	}
+}
+
 func TestHaftDecisionTool_DecideUsesTaskContextInArtifactID(t *testing.T) {
 	fixture := setupDecisionToolFixture(t)
 	tool := NewHaftDecisionTool(fixture.store, fixture.haftDir, t.TempDir(), nil)
@@ -2205,12 +2244,14 @@ func TestHaftDecisionTool_DecideRejectsIncompleteAntiSelfDeceptionRecord(t *test
 		t.Fatal("expected validation error for incomplete decision record")
 	}
 
+	// Validator now emits structured per-field rows; match by field
+	// name + " — " separator.
 	required := []string{
-		"selection_policy is required",
-		"counterargument is required",
-		"weakest_link is required",
-		"why_not_others is required",
-		"rollback.triggers is required",
+		"- selection_policy — ",
+		"- counterargument — ",
+		"- weakest_link — ",
+		"- why_not_others — ",
+		"- rollback — ",
 	}
 
 	for _, want := range required {

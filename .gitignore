@@ -36,3 +36,6 @@ desktop/desktop
 DESIGN.md
 .playwright-mcp/
 /desktop-tauri/target/
+
+# Local-only cross-project recall eval — contains paraphrases of OTHER projects' decisions; never commit.
+internal/project/crossrecall_eval_test.go

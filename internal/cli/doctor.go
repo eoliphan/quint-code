@@ -177,14 +177,6 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 			return dbPath, nil
 		})
 
-		check("TUI entry", func() (string, error) {
-			entry, err := findTUIEntry(projectRoot)
-			if err != nil {
-				return "", err
-			}
-			return entry, nil
-		})
-
 		warn("Hooks", func() (string, bool) {
 			exec := hooks.NewExecutor(projectRoot)
 			if exec.HasHooks() {

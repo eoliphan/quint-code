@@ -79,6 +79,29 @@ func TestBuildSpecIndexMetadata_LeavesCommitEmptyOutsideGit(t *testing.T) {
 	}
 }
 
+func TestCleanSpecCommitRef(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+		ok   bool
+	}{
+		{name: "empty defaults to HEAD", in: "", want: "HEAD", ok: true},
+		{name: "lowercase sha", in: "0123456789abcdef0123456789abcdef01234567", want: "0123456789abcdef0123456789abcdef01234567", ok: true},
+		{name: "uppercase sha normalizes", in: "ABCDEF0123456789ABCDEF0123456789ABCDEF01", want: "abcdef0123456789abcdef0123456789abcdef01", ok: true},
+		{name: "option injection rejected", in: "--format=%H", ok: false},
+		{name: "short ref rejected", in: "abc123", ok: false},
+		{name: "pathspec rejected", in: "HEAD:cmd/indexer/main.go", ok: false},
+	}
+
+	for _, tt := range tests {
+		got, ok := cleanSpecCommitRef(tt.in)
+		if got != tt.want || ok != tt.ok {
+			t.Fatalf("%s: cleanSpecCommitRef(%q) = %q, %v; want %q, %v", tt.name, tt.in, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 

@@ -3,7 +3,6 @@ package artifact
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/m0n0x41d/haft/internal/reff"
@@ -94,13 +93,10 @@ func ComputeNavState(ctx context.Context, store ArtifactStore, contextName strin
 		}
 		state.Mode = problems[0].Meta.Mode
 
-		hasChar := strings.Contains(problems[0].Body, "## Characterization")
-		switch {
-		case hasChar:
-			state.NextAction = `/h-explore (generate variants)`
-		default:
-			state.NextAction = `/h-char (define dimensions) | /h-explore (generate variants)`
-		}
+		// Characterization is no longer a separate skill — it's a kernel
+		// action invoked inside /h-compare. After framing, the next step
+		// is always /h-explore. Dimensions get declared at compare time.
+		state.NextAction = `/h-explore (generate variants)`
 	default:
 		state.DerivedStatus = DerivedUnderframed
 		state.NextAction = `/h-frame (frame the problem)`
@@ -122,7 +118,7 @@ func ComputeNavState(ctx context.Context, store ArtifactStore, contextName strin
 		}
 		if state.DerivedStatus == DerivedDecided {
 			state.DerivedStatus = DerivedRefreshDue
-			state.NextAction = `/h-refresh (manage lifecycle)`
+			state.NextAction = `/h-verify (review stale claims)`
 		}
 	}
 

@@ -226,7 +226,109 @@ func BaselineResponse(decisionRef string, files []artifact.AffectedFile, navStri
 	return sb.String()
 }
 
-// DriftResponse formats drift check results for the agent.
+// DriftResponseSummary formats drift results compactly: per-report counts +
+// up to 5 modified file paths (the actionable ones). Suitable as the default
+// reply from haft_refresh scan; the full per-file dump (DriftResponse) can
+// span thousands of lines on repos with vendor subtrees or large added-files
+// sets and overflows the agent's context. Verbose mode opt-in only.
+func DriftResponseSummary(reports []artifact.DriftReport, navStrip string) string {
+	var sb strings.Builder
+
+	if len(reports) == 0 {
+		sb.WriteString("No drift detected. All baselined decisions match current file state.\n")
+		sb.WriteString(navStrip)
+		return sb.String()
+	}
+
+	driftCount := 0
+	noBaselineCount := 0
+	for _, r := range reports {
+		if r.HasBaseline {
+			driftCount++
+		} else {
+			noBaselineCount++
+		}
+	}
+
+	const topModifiedPerReport = 5
+
+	if driftCount > 0 {
+		sb.WriteString(fmt.Sprintf("## Drift Detected (%d decision(s)) — summary\n\n", driftCount))
+		sb.WriteString("Counts per baselined decision. For full per-file dump pass `verbose: true` to haft_refresh.\n\n")
+		for _, r := range reports {
+			if !r.HasBaseline {
+				continue
+			}
+			var modified, added, missing int
+			var modifiedPaths []string
+			for _, f := range r.Files {
+				switch f.Status {
+				case artifact.DriftModified:
+					modified++
+					if len(modifiedPaths) < topModifiedPerReport {
+						modifiedPaths = append(modifiedPaths, f.Path)
+					}
+				case artifact.DriftAdded:
+					added++
+				case artifact.DriftMissing:
+					missing++
+				}
+			}
+			sb.WriteString(fmt.Sprintf("### %s [%s]\n", r.DecisionTitle, r.DecisionID))
+			sb.WriteString(fmt.Sprintf("  %d modified, %d added, %d missing\n", modified, added, missing))
+			if len(modifiedPaths) > 0 {
+				sb.WriteString("  Top modified:\n")
+				for _, p := range modifiedPaths {
+					sb.WriteString(fmt.Sprintf("    - %s\n", p))
+				}
+				if modified > topModifiedPerReport {
+					sb.WriteString(fmt.Sprintf("    ... and %d more modified\n", modified-topModifiedPerReport))
+				}
+			}
+			sb.WriteString("\n")
+		}
+		for _, r := range reports {
+			if !r.HasBaseline || len(r.ImpactedModules) == 0 {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("**Impact propagation for %s:**\n", r.DecisionID))
+			for _, impact := range r.ImpactedModules {
+				if impact.IsBlind {
+					sb.WriteString(fmt.Sprintf("  ⚠ %s (blind) — no decisions, potential unmonitored impact\n", impact.ModulePath))
+				} else {
+					sb.WriteString(fmt.Sprintf("  → %s — governed by %s\n", impact.ModulePath, strings.Join(impact.DecisionIDs, ", ")))
+				}
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("**Classify each:** cosmetic (re-baseline) | material (flag to user or reopen) | incidental (shared file changed by unrelated work — re-baseline)\n\n")
+		sb.WriteString("For one specific decision use `haft_query(action=\"related\", file=...)`; for full dump pass `verbose: true` to haft_refresh.\n\n")
+	}
+
+	if noBaselineCount > 0 {
+		sb.WriteString(fmt.Sprintf("## No Baseline (%d decision(s))\n\n", noBaselineCount))
+		for _, r := range reports {
+			if r.HasBaseline {
+				continue
+			}
+			gitHint := "no git activity detected after decision date"
+			if r.LikelyImplemented {
+				gitHint = "git activity detected after decision date"
+			}
+			sb.WriteString(fmt.Sprintf("- **%s** [%s] — %d file(s) unmonitored, %s\n",
+				r.DecisionTitle, r.DecisionID, len(r.Files), gitHint))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(navStrip)
+	return sb.String()
+}
+
+// DriftResponse formats drift check results for the agent (verbose: full
+// per-file dump). Opt-in via verbose=true on haft_refresh; default callers
+// should prefer DriftResponseSummary to keep output within an agent's
+// context budget.
 func DriftResponse(reports []artifact.DriftReport, navStrip string) string {
 	var sb strings.Builder
 
@@ -677,6 +779,48 @@ func StatusResponse(data artifact.StatusData) string {
 		sb.WriteString("\n")
 	}
 
+	// Drift section (H1 of V2 — dec-20260526-9fdd33ed). Summary-mode
+	// against noise overload per the DRR weakest_link mitigation:
+	// top-3 drifted decisions with counts; full detail via /h-refresh
+	// scan or /h-verify.
+	if len(data.Drift) > 0 {
+		sb.WriteString(fmt.Sprintf("### Drift Detected (%d decision(s))\n\n", len(data.Drift)))
+		cap := 3
+		for i, r := range data.Drift {
+			if i >= cap {
+				sb.WriteString(fmt.Sprintf("- ... and %d more (use /h-refresh scan or /h-verify for details)\n", len(data.Drift)-cap))
+				break
+			}
+			mod, added, missing := 0, 0, 0
+			for _, f := range r.Files {
+				switch f.Status {
+				case artifact.DriftModified:
+					mod++
+				case artifact.DriftAdded:
+					added++
+				case artifact.DriftMissing:
+					missing++
+				}
+			}
+			parts := []string{}
+			if mod > 0 {
+				parts = append(parts, fmt.Sprintf("%d modified", mod))
+			}
+			if added > 0 {
+				parts = append(parts, fmt.Sprintf("%d added", added))
+			}
+			if missing > 0 {
+				parts = append(parts, fmt.Sprintf("%d missing", missing))
+			}
+			summary := strings.Join(parts, ", ")
+			if summary == "" {
+				summary = "no file changes"
+			}
+			sb.WriteString(fmt.Sprintf("- **%s** `%s` — %s\n", r.DecisionTitle, r.DecisionID, summary))
+		}
+		sb.WriteString("\n→ Run /h-verify on a drifted decision to gather evidence; /h-refresh scan for full file-level diff.\n\n")
+	}
+
 	if len(data.CommissionAttention) > 0 {
 		sb.WriteString(fmt.Sprintf("### WorkCommissions Need Attention (%d)\n\n", len(data.CommissionAttention)))
 		cap := 5
@@ -752,6 +896,7 @@ func StatusResponse(data artifact.StatusData) string {
 		len(data.PendingDecisions) > 0 ||
 		len(data.UnassessedDecisions) > 0 ||
 		len(data.StaleItems) > 0 ||
+		len(data.Drift) > 0 ||
 		len(data.OpenCommissions) > 0 ||
 		len(data.CommissionAttention) > 0 ||
 		len(data.InProgressProblems) > 0 ||
@@ -835,6 +980,66 @@ func RelatedResponse(results []*artifact.Artifact, filePath string) string {
 		sb.WriteString("\n")
 	}
 
+	return sb.String()
+}
+
+// RelatedProximityItem is one graph-proximity-ranked related node, resolved to a
+// display title — the phase-2 PPR section of the related action (dec-20260604-3aaad199).
+type RelatedProximityItem struct {
+	Title string
+	Label string // user-facing kind: "symbol" or "reasoning"
+	Ref   string
+}
+
+// TestedByItem is one callable symbol of a file and the tests exercising it via
+// call edges — the structural-coverage lane of related (dec-20260604-ef966a11).
+type TestedByItem struct {
+	Symbol   string
+	Exported bool
+	TestedBy []string // test function names; empty = not exercised
+}
+
+// TestedByResponse formats the structural test-coverage lane: callable symbols
+// exercised by tests, then untested EXPORTED symbols as a gap signal. Honest by
+// construction — "exercised by", never "verified" (a call edge is not an
+// assertion). Returns "" when there is nothing worth showing. Pure.
+func TestedByResponse(items []TestedByItem) string {
+	var tested, gaps []TestedByItem
+	for _, it := range items {
+		if len(it.TestedBy) > 0 {
+			tested = append(tested, it)
+		} else if it.Exported {
+			gaps = append(gaps, it)
+		}
+	}
+	if len(tested) == 0 && len(gaps) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n## Tested by (exercised, not asserted)\n\n")
+	sb.WriteString("_Test functions whose call edges reach this file's symbols — structural coverage, not verification._\n\n")
+	for _, it := range tested {
+		sb.WriteString(fmt.Sprintf("- **%s** ← %s\n", it.Symbol, strings.Join(it.TestedBy, ", ")))
+	}
+	for _, it := range gaps {
+		sb.WriteString(fmt.Sprintf("- **%s** — _(no test exercises this)_\n", it.Symbol))
+	}
+	return sb.String()
+}
+
+// RelatedProximityResponse formats the graph-proximity recall section appended
+// to the exact affected-file list. Empty input yields an empty string (the
+// caller simply appends nothing). Pure.
+func RelatedProximityResponse(items []RelatedProximityItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n## Related by graph proximity\n\n")
+	sb.WriteString("_Ranked by distance in the fused code+reasoning graph (deterministic PPR, no embeddings)._\n\n")
+	for _, it := range items {
+		sb.WriteString(fmt.Sprintf("- **%s** [%s] `%s`\n", it.Title, it.Label, it.Ref))
+	}
 	return sb.String()
 }
 

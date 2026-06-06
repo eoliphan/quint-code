@@ -2,6 +2,7 @@ package present_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +57,76 @@ func TestNavStrip_AllFieldsRendered(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestDriftResponseSummary_StaysCompactOnLargeReports(t *testing.T) {
+	// Simulate a bloated report — 1 decision with 5000 added files (e.g. a
+	// Tauri/vendor subtree drift). Summary mode must NOT dump per-file rows.
+	files := []artifact.DriftItem{
+		{Path: "src/main.go", Status: artifact.DriftModified},
+		{Path: "src/util.go", Status: artifact.DriftModified},
+		{Path: "src/handler.go", Status: artifact.DriftModified},
+	}
+	for i := 0; i < 5000; i++ {
+		files = append(files, artifact.DriftItem{Path: fmt.Sprintf("vendor/lib%d/file.go", i), Status: artifact.DriftAdded})
+	}
+	for i := 0; i < 7; i++ {
+		files = append(files, artifact.DriftItem{Path: fmt.Sprintf("internal/removed%d.go", i), Status: artifact.DriftMissing})
+	}
+	reports := []artifact.DriftReport{
+		{
+			DecisionID:    "dec-vendor-bloat",
+			DecisionTitle: "Bloat case",
+			HasBaseline:   true,
+			Files:         files,
+		},
+	}
+
+	summary := present.DriftResponseSummary(reports, "")
+	verbose := present.DriftResponse(reports, "")
+
+	if !strings.Contains(summary, "3 modified, 5000 added, 7 missing") {
+		t.Fatalf("summary should report counts; got:\n%s", summary)
+	}
+	if strings.Contains(summary, "vendor/lib100/file.go") {
+		t.Fatalf("summary must NOT dump added paths (got per-file noise):\n%s", summary)
+	}
+	if strings.Contains(summary, "removed3.go") {
+		t.Fatalf("summary must NOT dump missing paths:\n%s", summary)
+	}
+	if !strings.Contains(summary, "src/main.go") {
+		t.Fatalf("summary should include top modified paths (actionable signal):\n%s", summary)
+	}
+
+	summaryLines := strings.Count(summary, "\n")
+	if summaryLines > 30 {
+		t.Fatalf("summary should stay compact on a 5010-file drift (≤30 lines); got %d lines", summaryLines)
+	}
+
+	verboseLines := strings.Count(verbose, "\n")
+	if verboseLines < 5000 {
+		t.Fatalf("verbose should dump everything (≥5000 lines); got %d", verboseLines)
+	}
+}
+
+func TestDriftResponseSummary_EmptyAndNoBaseline(t *testing.T) {
+	if got := present.DriftResponseSummary(nil, ""); !strings.Contains(got, "No drift detected") {
+		t.Fatalf("empty reports should say so; got:\n%s", got)
+	}
+
+	reports := []artifact.DriftReport{
+		{
+			DecisionID:        "dec-001",
+			DecisionTitle:     "Implemented decision",
+			HasBaseline:       false,
+			LikelyImplemented: true,
+			Files:             []artifact.DriftItem{{Path: "app.go", Status: artifact.DriftNoBaseline}},
+		},
+	}
+	got := present.DriftResponseSummary(reports, "")
+	if !strings.Contains(got, "git activity detected after decision date") {
+		t.Fatalf("summary should preserve LikelyImplemented hint:\n%s", got)
 	}
 }
 
@@ -299,6 +370,69 @@ func TestSearchResponse_PreservesQueryTitleAndBodyVerbatim(t *testing.T) {
 	}
 	if !strings.Contains(response, "DecisionRecord must stay verbatim here.") {
 		t.Fatalf("expected body preview to stay verbatim, got:\n%s", response)
+	}
+}
+
+// TestStatusResponse_RendersDriftSection — H1 of V2
+// (dec-20260526-9fdd33ed). /h-status must surface drift summary when
+// CheckDrift returned non-empty reports via StatusData.Drift.
+func TestStatusResponse_RendersDriftSection(t *testing.T) {
+	data := artifact.StatusData{
+		Drift: []artifact.DriftReport{
+			{
+				DecisionID:    "dec-foo",
+				DecisionTitle: "Foo decision",
+				HasBaseline:   true,
+				Files: []artifact.DriftItem{
+					{Path: "internal/foo/a.go", Status: artifact.DriftModified},
+					{Path: "internal/foo/b.go", Status: artifact.DriftModified},
+					{Path: "internal/foo/new.go", Status: artifact.DriftAdded},
+				},
+			},
+			{
+				DecisionID:    "dec-bar",
+				DecisionTitle: "Bar decision",
+				HasBaseline:   true,
+				Files: []artifact.DriftItem{
+					{Path: "internal/bar/gone.go", Status: artifact.DriftMissing},
+				},
+			},
+		},
+	}
+
+	response := present.StatusResponse(data)
+
+	wants := []string{
+		"### Drift Detected (2 decision(s))",
+		"Foo decision",
+		"dec-foo",
+		"2 modified",
+		"1 added",
+		"Bar decision",
+		"1 missing",
+		"/h-verify",
+		"/h-refresh scan",
+	}
+	for _, w := range wants {
+		if !strings.Contains(response, w) {
+			t.Errorf("StatusResponse drift section missing %q\nfull response:\n%s", w, response)
+		}
+	}
+}
+
+// TestStatusResponse_NoDriftSectionWhenEmpty — drift section MUST NOT
+// appear when StatusData.Drift is nil/empty. Avoids noise in solo-dev
+// sessions where projectRoot wasn't passed (e.g., test fixtures) or
+// where CheckDrift returned zero drifted decisions.
+func TestStatusResponse_NoDriftSectionWhenEmpty(t *testing.T) {
+	data := artifact.StatusData{
+		HealthyDecisions: []*artifact.Artifact{
+			{Meta: artifact.Meta{ID: "dec-x", Title: "Some decision"}},
+		},
+	}
+	response := present.StatusResponse(data)
+	if strings.Contains(response, "Drift Detected") {
+		t.Errorf("Drift section should not appear when StatusData.Drift is empty; got:\n%s", response)
 	}
 }
 

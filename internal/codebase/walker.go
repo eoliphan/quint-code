@@ -174,6 +174,110 @@ func (s *Scanner) ScanDependencies(ctx context.Context, projectRoot string) ([]I
 	return allEdges, nil
 }
 
+// ScanSymbols extracts and stores code symbols for every supported source file,
+// populating the code_symbols node layer of the code graph. Respects the same
+// ignore/exclusion rules as ScanModules; idempotent per file (delete-then-insert).
+// Per-file failures are skipped, not fatal. (Per-file transactions here — the P5
+// incremental layer narrows this to touched files; a full scan is the cold path.)
+func (s *Scanner) ScanSymbols(ctx context.Context, projectRoot string) (int, error) {
+	scanStart := time.Now()
+	store := NewSymbolStore(s.db)
+	if err := store.EnsureSchema(ctx); err != nil {
+		return 0, err
+	}
+	ignoreChecker := NewIgnoreChecker(projectRoot)
+	indexed := 0
+
+	err := filepath.WalkDir(projectRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if IsExcludedDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			if relDir, err := filepath.Rel(projectRoot, path); err == nil && ignoreChecker.IsIgnored(relDir) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if _, ok := languages[filepath.Ext(path)]; !ok {
+			return nil
+		}
+		relPath, err := filepath.Rel(projectRoot, path)
+		if err != nil {
+			return nil
+		}
+		if ignoreChecker.IsIgnored(relPath) {
+			return nil
+		}
+		if err := store.IndexFileSymbols(ctx, projectRoot, relPath); err != nil {
+			return nil // skip files that fail to parse
+		}
+		indexed++
+		return nil
+	})
+	if err != nil {
+		return indexed, fmt.Errorf("walk for symbols: %w", err)
+	}
+
+	logger.CodebaseOp("scan_symbols", indexed, time.Since(scanStart).Milliseconds())
+	return indexed, nil
+}
+
+// ScanEdges builds the code_edges layer for every file with a registered
+// EdgeResolver, via the language-agnostic port (Go today; other languages add
+// an adapter). Must run AFTER ScanSymbols — cross-file/dispatch resolution
+// reads the full node store. Idempotent per file; per-file failures skipped.
+func (s *Scanner) ScanEdges(ctx context.Context, projectRoot string) (int, error) {
+	scanStart := time.Now()
+	edgeStore := NewEdgeStore(s.db)
+	if err := edgeStore.EnsureSchema(ctx); err != nil {
+		return 0, err
+	}
+	symbols := NewSymbolStore(s.db)
+	ignoreChecker := NewIgnoreChecker(projectRoot)
+	total := 0
+
+	err := filepath.WalkDir(projectRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if IsExcludedDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			if relDir, err := filepath.Rel(projectRoot, path); err == nil && ignoreChecker.IsIgnored(relDir) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		resolver := s.registry.ResolverForFile(path)
+		if resolver == nil {
+			return nil // no edge resolver for this language yet
+		}
+		relPath, err := filepath.Rel(projectRoot, path)
+		if err != nil || ignoreChecker.IsIgnored(relPath) {
+			return nil
+		}
+		edges, err := resolver.ResolveFileEdges(ctx, projectRoot, relPath, symbols)
+		if err != nil {
+			return nil
+		}
+		if err := edgeStore.ReplaceFileEdges(ctx, relPath, edges); err != nil {
+			return nil
+		}
+		total += len(edges)
+		return nil
+	})
+	if err != nil {
+		return total, fmt.Errorf("walk for edges: %w", err)
+	}
+
+	logger.CodebaseOp("scan_edges", total, time.Since(scanStart).Milliseconds())
+	return total, nil
+}
+
 // GetModules returns all stored modules.
 func (s *Scanner) GetModules(ctx context.Context) ([]Module, error) {
 	rows, err := s.db.QueryContext(ctx,

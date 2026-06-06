@@ -409,12 +409,15 @@ func TestDecide_MissingAntiSelfDeceptionFields(t *testing.T) {
 		t.Fatal("expected error for missing anti-self-deception fields")
 	}
 
+	// Validator now emits structured per-field rows ("- <field> — <hint>")
+	// instead of inline "<field> is required" prose. Match by field name
+	// + " — " separator so the assertion survives hint text edits.
 	required := []string{
-		"selection_policy is required",
-		"counterargument is required",
-		"weakest_link is required",
-		"why_not_others is required",
-		"rollback.triggers is required",
+		"- selection_policy — ",
+		"- counterargument — ",
+		"- weakest_link — ",
+		"- why_not_others — ",
+		"- rollback — ",
 	}
 
 	for _, want := range required {

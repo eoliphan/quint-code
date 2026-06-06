@@ -40,6 +40,17 @@ import (
 type Config struct {
 	Model     string                  `yaml:"model" json:"model"`         // default model ID
 	Providers map[string]ProviderAuth `yaml:"providers" json:"providers"` // provider ID → auth
+	Embedding EmbeddingConfig         `yaml:"embedding,omitempty" json:"embedding,omitempty"`
+}
+
+// EmbeddingConfig controls the optional hybrid-recall embedding layer. An empty
+// Provider means "auto": use the local EmbeddingGemma sidecar when installed,
+// otherwise FTS5+PPR only. Set Provider to "none" to disable embeddings even
+// when the sidecar is present, or "openai" to use the API backend.
+type EmbeddingConfig struct {
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"` // local (default) | openai | none
+	Model    string `yaml:"model,omitempty" json:"model,omitempty"`       // provider-specific model id
+	Dim      int    `yaml:"dim,omitempty" json:"dim,omitempty"`           // MRL-truncated dimension (0 = native)
 }
 
 // ProviderAuth stores credentials for one provider.

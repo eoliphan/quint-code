@@ -101,7 +101,7 @@ func TestFetchStatusData_Dashboard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	data, err := FetchStatusData(ctx, store, "")
+	data, err := FetchStatusData(ctx, store, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestFetchStatusData_CommissionAttentionCoversBlockedRunningAndExpired(t *te
 		"fetched_at":   now.Add(-48 * time.Hour).Format(time.RFC3339),
 	})
 
-	data, err := FetchStatusData(ctx, store, "")
+	data, err := FetchStatusData(ctx, store, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestFetchStatusData_Empty(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()
 
-	data, err := FetchStatusData(ctx, store, "")
+	data, err := FetchStatusData(ctx, store, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestFetchStatusData_DerivesDecisionHealthBuckets(t *testing.T) {
 		ValidUntil:      now.Add(24 * time.Hour).Format(time.RFC3339),
 	})
 
-	data, err := FetchStatusData(ctx, store, "")
+	data, err := FetchStatusData(ctx, store, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

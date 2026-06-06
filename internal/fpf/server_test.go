@@ -202,6 +202,39 @@ func TestHaftDecisionSchemaExposesTaskContext(t *testing.T) {
 	}
 }
 
+func TestHandleToolsList_DecisionSchemaExposesTacticalSkipFields(t *testing.T) {
+	decisionSchema := mustListToolProperties(t, "haft_decision")
+
+	for _, key := range []string{"_skips", "_skip"} {
+		field, ok := decisionSchema[key].(map[string]interface{})
+		if !ok {
+			t.Fatalf("decision schema missing %q skip field", key)
+		}
+		if field["type"] != "array" {
+			t.Fatalf("%s type = %v, want array", key, field["type"])
+		}
+		items, ok := field["items"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s items = %T, want map[string]interface{}", key, field["items"])
+		}
+		if items["type"] != "string" {
+			t.Fatalf("%s items.type = %v, want string", key, items["type"])
+		}
+		description, _ := field["description"].(string)
+		if !strings.Contains(description, "_skip_reason") {
+			t.Fatalf("%s description should mention _skip_reason: %q", key, description)
+		}
+	}
+
+	reason, ok := decisionSchema["_skip_reason"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("decision schema missing _skip_reason field")
+	}
+	if reason["type"] != "string" {
+		t.Fatalf("_skip_reason type = %v, want string", reason["type"])
+	}
+}
+
 func TestHandleToolsList_DecisionSchemaRequiresCompletePredictions(t *testing.T) {
 	decisionSchema := mustListToolProperties(t, "haft_decision")
 

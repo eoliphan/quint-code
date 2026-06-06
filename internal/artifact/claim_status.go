@@ -69,6 +69,7 @@ func newDecisionClaims(inputs []PredictionInput) []DecisionClaim {
 			Status:        ClaimStatusUnverified,
 			VerifyAfter:   strings.TrimSpace(input.VerifyAfter),
 			Realizability: realizability,
+			Probability:   input.Probability,
 		}
 		if claim.Claim == "" && claim.Observable == "" && claim.Threshold == "" {
 			continue
@@ -92,6 +93,7 @@ func decisionClaimsFromPredictions(values []DecisionPrediction) []DecisionClaim 
 			Status:        normalizeClaimStatus(value.Status),
 			VerifyAfter:   strings.TrimSpace(value.VerifyAfter),
 			Realizability: realizability,
+			Probability:   value.Probability,
 		}
 		if claim.Claim == "" && claim.Observable == "" && claim.Threshold == "" {
 			continue
@@ -117,6 +119,7 @@ func normalizeDecisionClaims(values []DecisionClaim) []DecisionClaim {
 			Status:        normalizeClaimStatus(value.Status),
 			VerifyAfter:   strings.TrimSpace(value.VerifyAfter),
 			Realizability: realizability,
+			Probability:   value.Probability,
 		}
 		if claim.Claim == "" && claim.Observable == "" && claim.Threshold == "" {
 			continue
@@ -169,6 +172,7 @@ func decisionPredictionsFromClaims(values []DecisionClaim) []DecisionPrediction 
 			Status:        claim.Status,
 			VerifyAfter:   claim.VerifyAfter,
 			Realizability: claim.Realizability,
+			Probability:   claim.Probability,
 		})
 	}
 

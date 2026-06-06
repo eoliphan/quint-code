@@ -9,10 +9,13 @@ import (
 	ignore "github.com/sabhiram/go-gitignore"
 )
 
-// Registry maps file extensions to language detectors and import parsers.
+// Registry maps file extensions to language detectors, import parsers, and
+// code-graph edge resolvers. Adding a language = one adapter type + entries
+// here; orchestration codes against the interfaces, never a specific language.
 type Registry struct {
 	detectors map[string]ModuleDetector // lang -> detector
 	parsers   map[string]ImportParser   // extension -> parser
+	resolvers map[string]EdgeResolver   // extension -> code-graph edge resolver
 }
 
 // NewRegistry creates a registry with all supported languages.
@@ -20,27 +23,35 @@ func NewRegistry() *Registry {
 	r := &Registry{
 		detectors: make(map[string]ModuleDetector),
 		parsers:   make(map[string]ImportParser),
+		resolvers: make(map[string]EdgeResolver),
 	}
 
-	// Register Go
+	// Register Go (detector + import parser + code-graph edge resolver)
 	goImpl := &GoLang{}
 	r.detectors["go"] = goImpl
 	for _, ext := range goImpl.Extensions() {
 		r.parsers[ext] = goImpl
+		r.resolvers[ext] = goImpl
 	}
 
-	// Register JS/TS
+	// Register JS/TS (detector + import parser + code-graph edge resolver:
+	// class/interface `extends` + `implements` from explicit heritage clauses;
+	// call edges deferred)
 	jsImpl := &JSTSLang{}
 	r.detectors["jsts"] = jsImpl
 	for _, ext := range jsImpl.Extensions() {
 		r.parsers[ext] = jsImpl
+		r.resolvers[ext] = jsImpl
 	}
 
-	// Register Python
+	// Register Python (detector + import parser + code-graph edge resolver:
+	// class-inheritance `extends` edges; call edges deferred — Python dispatch is
+	// dynamic and not soundly resolvable from the AST alone)
 	pyImpl := &PythonLang{}
 	r.detectors["python"] = pyImpl
 	for _, ext := range pyImpl.Extensions() {
 		r.parsers[ext] = pyImpl
+		r.resolvers[ext] = pyImpl
 	}
 
 	// Register Rust
@@ -73,6 +84,14 @@ func (r *Registry) Detectors() []ModuleDetector {
 func (r *Registry) ParserForFile(path string) ImportParser {
 	ext := strings.ToLower(filepath.Ext(path))
 	return r.parsers[ext]
+}
+
+// ResolverForFile returns the code-graph edge resolver for a file, or nil if
+// no language adapter resolves edges for that extension (node extraction may
+// still work — edges are a separate, incrementally-grown capability).
+func (r *Registry) ResolverForFile(path string) EdgeResolver {
+	ext := strings.ToLower(filepath.Ext(path))
+	return r.resolvers[ext]
 }
 
 // IgnoreChecker determines if paths should be excluded from scanning.

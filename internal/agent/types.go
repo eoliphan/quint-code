@@ -366,9 +366,14 @@ const (
 
 // ToolResult is the typed return value from tool execution.
 // DisplayText goes to LLM and user. Meta is consumed by the coordinator only.
+// Warnings carry FPF-discipline soft-violations the tool detected but
+// chose not to reject. Providers SHOULD render warnings to the model
+// as part of the tool result so the agent can self-correct without an
+// operator intervention.
 type ToolResult struct {
 	DisplayText string        // shown to LLM and user
 	Meta        *ArtifactMeta // non-nil for artifact-producing tools
+	Warnings    []string      // FPF soft violations + advisory notes
 }
 
 // ArtifactMeta carries structured artifact identity from tool execution.

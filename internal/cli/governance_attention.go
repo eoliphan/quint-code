@@ -12,7 +12,8 @@ func scanGovernanceAttention(ctx context.Context, store *artifact.Store) artifac
 		return artifact.GovernanceAttention{}
 	}
 
-	statusData, _ := artifact.FetchStatusData(ctx, store, "")
+	// Attention scan does not need drift surfacing — pass "" to skip CheckDrift.
+	statusData, _ := artifact.FetchStatusData(ctx, store, "", "")
 	attention := artifact.GovernanceAttention{
 		BacklogCount:    len(statusData.BacklogProblems),
 		InProgressCount: len(statusData.InProgressProblems),

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	sitter "github.com/smacker/go-tree-sitter"
 )
@@ -17,10 +18,14 @@ import (
 type SymbolSnapshot struct {
 	FilePath   string `json:"file_path"`
 	SymbolName string `json:"symbol_name"`
-	SymbolKind string `json:"symbol_kind"` // func, type, class, interface, method
-	Line       int    `json:"line"`        // 1-based start line
-	EndLine    int    `json:"end_line"`    // 1-based end line
-	Hash       string `json:"hash"`        // SHA256 of the symbol's source text
+	SymbolKind string `json:"symbol_kind"`        // func, type, class, interface, method
+	Line       int    `json:"line"`               // 1-based start line
+	EndLine    int    `json:"end_line"`           // 1-based end line
+	Hash       string `json:"hash"`               // SHA256 of the symbol's source text
+	StartByte  int    `json:"start_byte"`         // body start byte offset — for byte-exact source slicing
+	EndByte    int    `json:"end_byte"`           // body end byte offset
+	Receiver   string `json:"receiver,omitempty"` // method receiver type (Go), "" otherwise
+	Exported   bool   `json:"exported"`           // first rune uppercase (Go export proxy)
 }
 
 // SymbolDrift describes how a single symbol changed between baseline and current.
@@ -81,29 +86,35 @@ func ExtractSymbolSnapshots(projectRoot, relPath string) ([]SymbolSnapshot, erro
 				break
 			}
 
-			var name string
-			var bodyStart, bodyEnd uint32
+			var name, receiverSrc string
+			var bodyNode *sitter.Node
 
 			for _, capture := range match.Captures {
 				captName := q.CaptureNameForId(capture.Index)
 				switch captName {
 				case "name":
 					name = capture.Node.Content(content)
+				case "receiver":
+					receiverSrc = capture.Node.Content(content)
 				case "body":
-					bodyStart = capture.Node.StartByte()
-					bodyEnd = capture.Node.EndByte()
+					bodyNode = capture.Node
 				}
 			}
 
-			if name == "" || bodyEnd <= bodyStart {
+			if name == "" || bodyNode == nil {
+				continue
+			}
+			bodyStart := bodyNode.StartByte()
+			bodyEnd := bodyNode.EndByte()
+			if bodyEnd <= bodyStart {
 				continue
 			}
 
 			bodyText := content[bodyStart:bodyEnd]
 			h := sha256.Sum256(bodyText)
 
-			startLine := int(match.Captures[0].Node.StartPoint().Row) + 1
-			endLine := int(match.Captures[len(match.Captures)-1].Node.EndPoint().Row) + 1
+			startLine := int(bodyNode.StartPoint().Row) + 1
+			endLine := int(bodyNode.EndPoint().Row) + 1
 
 			snapshots = append(snapshots, SymbolSnapshot{
 				FilePath:   relPath,
@@ -112,6 +123,10 @@ func ExtractSymbolSnapshots(projectRoot, relPath string) ([]SymbolSnapshot, erro
 				Line:       startLine,
 				EndLine:    endLine,
 				Hash:       hex.EncodeToString(h[:]),
+				StartByte:  int(bodyStart),
+				EndByte:    int(bodyEnd),
+				Receiver:   parseReceiverType(receiverSrc),
+				Exported:   isExportedName(name),
 			})
 		}
 		q.Close()
@@ -217,6 +232,35 @@ func FormatSymbolDrift(drifts []SymbolDrift) string {
 	return b.String()
 }
 
+// parseReceiverType extracts the bare receiver type from a Go method receiver
+// parameter list (e.g. "(s *Store)" → "Store", "(*Store)" → "Store",
+// "(s Store[T])" → "Store"). Best-effort; returns "" for non-method symbols.
+func parseReceiverType(receiverSrc string) string {
+	t := strings.TrimSpace(receiverSrc)
+	t = strings.TrimPrefix(t, "(")
+	t = strings.TrimSuffix(t, ")")
+	t = strings.TrimSpace(t)
+	if t == "" {
+		return ""
+	}
+	fields := strings.Fields(t)
+	last := fields[len(fields)-1] // the type token (or the only token)
+	last = strings.TrimPrefix(last, "*")
+	if i := strings.IndexByte(last, '['); i >= 0 {
+		last = last[:i] // drop generic type parameters
+	}
+	return last
+}
+
+// isExportedName reports whether a symbol name begins with an uppercase rune —
+// a Go export proxy, harmless (and roughly meaningful) for other languages.
+func isExportedName(name string) bool {
+	if name == "" {
+		return false
+	}
+	return unicode.IsUpper([]rune(name)[0])
+}
+
 // symbolBodyQuery captures both the symbol name and its full body for hashing.
 type symbolBodyQuery struct {
 	pattern string
@@ -230,7 +274,7 @@ func symbolBodyQueries(langName string, lang *sitter.Language) []symbolBodyQuery
 	case "go":
 		return []symbolBodyQuery{
 			{"(function_declaration name: (identifier) @name) @body", "func"},
-			{"(method_declaration name: (field_identifier) @name) @body", "method"},
+			{"(method_declaration receiver: (parameter_list) @receiver name: (field_identifier) @name) @body", "method"},
 			{"(type_declaration (type_spec name: (type_identifier) @name)) @body", "type"},
 		}
 	case "python":

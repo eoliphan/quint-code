@@ -301,6 +301,17 @@ func collectStaleArtifacts(ctx context.Context, store ArtifactStore, addItem fun
 }
 
 func staleArtifactShouldSurface(ctx context.Context, store ArtifactStore, item *Artifact) bool {
+	// Terminal-status artifacts (deprecated/superseded) were archived by the operator
+	// and must not resurface as stale debt. The expired-artifact collection path
+	// (collectStaleArtifacts -> FindStaleDecisions/FindStaleArtifacts) does not filter
+	// by status the way the active-decision scan does (see ScanStale's
+	// StatusActive/StatusRefreshDue filter), so exclude terminal items here for
+	// consistency — otherwise a deprecated-but-expired decision keeps showing its
+	// per-item expiry-debt even though it no longer counts toward the active budget.
+	if item.Meta.Status == StatusDeprecated || item.Meta.Status == StatusSuperseded {
+		return false
+	}
+
 	if item.Meta.Kind != KindWorkCommission {
 		return true
 	}

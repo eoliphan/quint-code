@@ -29,6 +29,7 @@ func formatAgentFPFSearch(query string, results []present.FPFSearchResult) strin
 	return formatAgentFPFSearchWithExplain(query, results, false)
 }
 
+//nolint:unused // exercised by package tests through buildFPFSearchFunc
 func formatAgentFPFSearchWithExplain(query string, results []present.FPFSearchResult, explain bool) string {
 	options := present.FPFSearchOptions{
 		EmptyMessage: "No FPF spec matches for: " + query,

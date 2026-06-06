@@ -8,21 +8,6 @@ permissions:
   contents: write
 
 jobs:
-  tui-bundle:
-    name: Build TUI
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-      - name: Build TUI bundle
-        run: cd tui && rm -rf node_modules package-lock.json && npm install --no-audit --no-fund && npm run build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tui-bundle
-          path: tui/dist/tui.mjs
-
   test:
     name: Pre-release tests
     runs-on: ubuntu-latest
@@ -35,16 +20,13 @@ jobs:
         with:
           go-version: '1.25'
           cache-dependency-path: go.sum
-      - name: Prepare desktop embed placeholder
-        run: |
-          mkdir -p desktop/frontend/dist
-          printf 'ci placeholder\n' > desktop/frontend/dist/.ci-placeholder
       - name: Run tests
-        run: go test -race $(go list ./... | grep -v /desktop)
+        run: go test -race ./...
+
 
   build:
     name: Build CLI ${{ matrix.goos }}-${{ matrix.goarch }}
-    needs: [test, tui-bundle]
+    needs: [test]
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -66,25 +48,22 @@ jobs:
         with:
           go-version: '1.25'
           cache-dependency-path: go.sum
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24'
       - uses: erlef/setup-beam@v1
         with:
           otp-version: '27'
           elixir-version: '1.18.3'
 
-      - name: Prepare desktop embed
-        run: |
-          cd desktop/frontend
-          rm -rf node_modules package-lock.json
-          npm install --no-audit --no-fund
-          npm run build
+      - name: Install Rust toolchain (embedding sidecar)
+        uses: dtolnay/rust-toolchain@stable
 
-      - uses: actions/download-artifact@v4
+      - name: Cache cargo (embedding sidecar)
+        uses: actions/cache@v4
         with:
-          name: tui-bundle
-          path: tui/dist
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            embed-sidecar/target
+          key: ${{ runner.os }}-${{ matrix.goarch }}-embed-cargo-${{ hashFiles('embed-sidecar/Cargo.lock') }}
 
       - name: Extract version from tag
         id: version
@@ -120,103 +99,43 @@ jobs:
           MIX_ENV=prod mix deps.get --only prod
           MIX_ENV=prod mix release --overwrite
 
+      # Optional embedding sidecar (haft-embed). ort statically links onnxruntime
+      # so the output is a single self-contained binary (no libonnxruntime to
+      # ship). continue-on-error: embeddings are OPTIONAL — a sidecar build
+      # failure must not block the release; search degrades to FTS5+PPR and
+      # install.sh can still source-build it where cargo is present.
+      - name: Build embedding sidecar
+        id: embed
+        continue-on-error: true
+        run: |
+          cd embed-sidecar
+          rm -f target/release/haft-embed
+          cargo build --release
+
       - name: Package
         run: |
           mkdir -p _dist
-          cp tui/dist/tui.mjs .
           mkdir -p runtimes/open-sleigh
           cp -R open-sleigh/_build/prod/rel/open_sleigh/. runtimes/open-sleigh/
+          mkdir -p runtimes/haft-embed/bin
+          sidecar_path=embed-sidecar/target/release/haft-embed
+          if [ "${{ steps.embed.outcome }}" = "success" ] && [ -x "$sidecar_path" ]; then
+            cp "$sidecar_path" runtimes/haft-embed/bin/haft-embed
+            echo "bundled haft-embed sidecar ($(du -h "$sidecar_path" | cut -f1))"
+          else
+            echo "::warning::haft-embed sidecar not built for ${{ matrix.goos }}-${{ matrix.goarch }} — semantic recall will fall back to FTS5+PPR or install.sh source build"
+          fi
           tar czf _dist/haft-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
-            haft tui.mjs runtimes README.md LICENSE CHANGELOG.md
+            haft runtimes README.md LICENSE CHANGELOG.md
 
       - uses: actions/upload-artifact@v4
         with:
           name: haft-${{ matrix.goos }}-${{ matrix.goarch }}
           path: _dist/*.tar.gz
 
-  desktop:
-    name: Desktop ${{ matrix.goos }}-${{ matrix.goarch }}
-    needs: [test]
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          - { runner: macos-latest,  goos: darwin, goarch: arm64, rust_target: aarch64-apple-darwin }
-          - { runner: macos-latest,  goos: darwin, goarch: amd64, rust_target: x86_64-apple-darwin }
-          - { runner: ubuntu-latest, goos: linux,  goarch: amd64, rust_target: x86_64-unknown-linux-gnu }
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: true
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_target }}
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop-tauri/target
-          key: ${{ runner.os }}-${{ matrix.rust_target }}-cargo-${{ hashFiles('desktop-tauri/Cargo.lock') }}
-
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
-
-      - name: Install Linux dependencies
-        if: matrix.goos == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libssl-dev
-
-      - name: Build frontend
-        working-directory: desktop/frontend
-        run: |
-          rm -rf node_modules package-lock.json
-          npm install --no-audit --no-fund
-          npm run build
-
-      - name: Build Tauri app
-        working-directory: desktop-tauri
-        run: cargo tauri build --target ${{ matrix.rust_target }}
-
-      - name: Extract version from tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Package macOS app
-        if: matrix.goos == 'darwin'
-        run: |
-          mkdir -p _dist
-          cd desktop-tauri/target/${{ matrix.rust_target }}/release/bundle/macos
-          tar czf "$GITHUB_WORKSPACE/_dist/haft-desktop-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" Haft.app
-
-      - name: Package Linux binary
-        if: matrix.goos == 'linux'
-        run: |
-          mkdir -p _dist
-          cp desktop-tauri/target/${{ matrix.rust_target }}/release/haft-desktop .
-          tar czf _dist/haft-desktop-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz haft-desktop
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: haft-desktop-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: _dist/*.tar.gz
-
   release:
     name: Create Release
-    needs: [build, desktop]
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

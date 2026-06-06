@@ -1,361 +1,441 @@
 ---
 name: h-reason
-description: "Think before building. Use when the user asks to reason about, analyze, evaluate, compare options, make an architecture decision, choose between approaches, think through a problem, or assess trade-offs. Also use when the user asks 'why did we...', 'should we...', 'what are our options', 'is this the right approach', or wants to frame/reframe a problem."
-argument-hint: "[problem, decision, architecture question, trade-off, or 'what's stale?']"
+description: |
+  Umbrella for FPF-style structured reasoning in a haft project. Carries the full reasoning palette in one place: framing, exploration, comparison, verification, notes, plus slideument patterns (NQD, Goldilocks, BLP, Scaling-Law Lens). Make sure to use this skill whenever the operator wants structured thinking but the workflow isn't pre-named — phrases like "давай подумаем", "помоги разобраться", "let's think this through", "structured approach", "apply FPF here", "FPF reasoning", "haft this" — or whenever a request is ambiguous between framing, exploration, and comparison. Also the manual entry point: /h-reason or /h-fpf alias. For sharp signals dedicated skills still fire (h-frame, h-diagnose, h-explore, h-compare, h-verify, h-status, h-note, h-onboard, h-spec-cover); binding choices use manual /h-decide; commissioning uses manual /h-commission.
+when_to_use: |
+  Operator wants haft-discipline thinking but doesn't pre-select a specific workflow, OR explicitly types /h-reason. Specialized skills auto-fire on sharper signals; this umbrella catches the rest.
+argument-hint: "[reasoning topic — what to think about / what to figure out]"
+allowed-tools: Bash Read Grep Glob Agent Write Edit mcp__haft__haft_problem mcp__haft__haft_solution mcp__haft__haft_decision mcp__haft__haft_query mcp__haft__haft_note mcp__haft__haft_refresh mcp__haft__haft_spec_section
 ---
 
-# Haft Reasoning — Think Before You Build
+# h-reason — FPF reasoning umbrella
 
-Haft helps with 5 engineering jobs: **Understand, Explore, Choose, Execute, Verify.** Plus **Note** for quick micro-decisions. This skill activates structured engineering reasoning powered by these modes.
+You are running the **haft umbrella reasoning workflow**. This skill replaces the old narrow `/h-fpf` (still aliased — same skill) with a complete reasoning palette: framing, exploration, comparison, verification, notes, plus key patterns from the slideument that don't have dedicated skills (Goldilocks problem selection, NQD discipline, BLP, Scaling-Law Lens).
 
-**When to use**: any non-trivial engineering question. Architecture choices, library selection, API design, data model changes, infrastructure decisions, process changes. Also: "think about", "reason about", "evaluate", or "compare" anything significant.
+**This is the manual entry point for FPF-style work** when the operator doesn't pre-pick a specific skill. Specialized skills (h-frame, h-diagnose, h-explore, h-compare, h-verify) still auto-fire on sharp signals and you SHOULD prefer them when the signal is clear — they carry deeper procedures. Use this umbrella when:
 
-**When NOT to use**: obvious bug fixes, formatting, tiny refactors with clear acceptance.
-
----
-
-## Context-aware entry — how much the agent drives
-
-**Before doing anything, assess the user's intent.** The 5 engineering modes (Understand/Explore/Choose/Execute/Verify) describe WHAT you're doing. The 4 interaction modes below describe HOW MUCH the agent drives. They're orthogonal.
-
-### Direct response / direct action
-**Trigger:** "think about X", "what do you think about X", "analyze X", "is this the right approach?", "what are our options?", "save this as md", "make this a ranked list", "turn this into a checklist", "move this to .context", "summarize what you found"
-
-Reason through the problem or do the direct artifact work with normal tools. **Do not call Haft MCP tools** unless the user explicitly asks to persist something. "Use FPF in your thinking" means reasoning discipline, not artifact workflow.
-
-### Research / prepare-and-wait
-**Trigger:** "/h-reason [topic], prepare for framing", "let's think about X before deciding", "I want to reason through X"
-
-Gather context (read code, search existing decisions, research). Present findings. **Stop and wait** for the user to decide the next step.
-
-### Delegated reasoning
-**Trigger:** "/h-reason [topic], go ahead", "work through the options and bring me a recommendation", natural-language delegation like "do it" / "go ahead"
-
-Drive frame → explore → compare in one pass. **Do not stop after frame. Do not require a manual `/h-explore` or `/h-compare` step.** Stop after compare, show the Pareto front, and ask the human to choose. The Transformer Mandate applies at the Choose → Execute boundary: the agent may frame/explore/compare when delegated, but the human still chooses before `/h-decide`.
-
-### Autonomous execution
-**Trigger:** "/h-reason [topic] and implement" ONLY when autonomous mode is already enabled for the session (Ctrl+Q / interaction=autonomous).
-
-Full cycle including decide + implement without pauses. If autonomous mode is OFF, phrases like "figure out the best approach and do it" or "fix everything" are NOT enough to skip the compare → decide pause. Treat them as delegated reasoning.
-
-**If unclear:** default to research / prepare-and-wait. Never default to autonomous execution.
+- The operator's signal is ambiguous between framing / exploration / comparison
+- The operator explicitly types `/h-reason` or `/h-fpf`
+- You want the whole palette of FPF wisdom (slideument patterns, FPF glossary) accessible in one place
+- The work spans multiple workflow steps (frame → explore → compare in one session)
 
 ---
 
-## What you have
+## The single most important rule: Description ≠ Work
 
-### Haft tools (MCP) — persist reasoning as artifacts
+This is the failure mode this umbrella is designed to NOT fall into.
 
-| Tool | What it does | Slash command |
-|------|-------------|---------------|
-| `haft_note` | Record micro-decisions with rationale validation | `/h-note` |
-| `haft_problem` | Frame problems and persist characterization dimensions on the ProblemCard | `/h-frame`, `/h-char` |
-| `haft_solution` | Explore variants, compare and identify Pareto front | `/h-explore`, `/h-compare` |
-| `haft_decision` | Decide with formal rationale; record measurement results | `/h-decide` |
-| `haft_commission` | Create/list/claim WorkCommissions for execution harnesses | `/h-commission` |
-| `haft_refresh` | Detect stale decisions, manage lifecycle | `/h-verify` |
-| `haft_query` | Search, status dashboard, file-to-decision lookup, FPF spec lookup, deterministic audience projections | `/h-search`, `/h-status`, `/h-view` |
+When asked open-ended design questions, the default impulse is to produce a useful chat response — variants with weakest-links, a Pareto front, a comparison table — without going through the haft kernel. **Stop.** The visual shape of FPF output is not a substitute for invoking the kernel.
 
-### FPF spec lookup — prefer MCP when available
+If you deliver an analysis without calling `mcp__haft__*` tools, the result is **ephemeral**: gone by tomorrow, no ProblemCard, no SolutionPortfolio, nothing to `/h-verify` in two weeks. The chat answer is wishlist, not work.
 
-```text
-haft_query(action="fpf", query="A.6")
-haft_query(action="fpf", query="How do I route boundary statements?", limit=3, explain=true)
-haft_query(action="fpf", query="Boundary Norm Square", full=true)
+**Concrete failure patterns to catch in yourself:**
+
+| About to do this in chat... | Stop and do this instead |
+|---|---|
+| Present 3+ alternative approaches | Call `haft_problem(action="frame")` then `haft_solution(action="explore")` |
+| Compare two approaches with trade-offs | Frame first if needed, then `haft_solution(action="compare")` |
+| State what the "real problem" is | Call `haft_problem(action="frame")` and persist it |
+| Suggest "remember this" inline | Call `haft_note` |
+| Verify a past decision claim | Call `haft_decision(action="evidence")` and `haft_refresh` |
+
+**Friction tradeoff (honest).** Yes, calling kernel tools costs more in-the-moment than answering directly. The friction is the price for **durability and measurability**. Your job is not "best chat answer right now" — it is "leave the project with future-verifiable memory."
+
+---
+
+## Self-check before long responses
+
+Before sending a long response, ask:
+
+1. Is this response presenting **3+ alternatives**, a **comparison**, an **analysis with recommendation**, or **framing what the problem is**?
+2. Did I call **any `mcp__haft__*` tool** in this turn?
+
+If (1) = yes and (2) = no — STOP. Pick the right kernel action below and call it before responding.
+
+---
+
+## Maintenance check (FPF B.3.4) — before reasoning
+
+When entering this umbrella, look at the most recent kernel response
+for `Refresh reminder: N days since last stale scan`. If N > 30 —
+call `mcp__haft__haft_refresh(action="scan")` BEFORE doing reasoning
+work.
+
+Reasoning on a stale graph is the same anti-pattern as reasoning on
+stale code: variants you generate may rediscover what was already
+decided, or contradict an already-decayed claim. Burn the
+1-second scan first; reason against fresh state. If the scan finds
+nothing new — mention briefly, proceed.
+
+Same discipline for drift detected on files touched in this session:
+re-baseline via `haft_decision(action="baseline", ...)` or surface
+the drift explicitly. Do not silently proceed past a drift warning.
+
+Surfacing the reminder is the kernel's job; acting on it is the
+agent's job. See CLAUDE.md Critical Reminders.
+
+---
+
+## Quick triage — what is the operator actually asking?
+
+Before doing anything, read the operator's signal carefully and classify:
+
+| Signal | Workflow | Section below |
+|---|---|---|
+| Proposing a refactor/rewrite/redesign/migration without naming the problem | Framing | [Framing](#framing) |
+| Concrete failure with unclear root cause (tests fail, X doesn't work) | Diagnosis | [Diagnosis](#diagnosis-failure-investigation) |
+| Asking for options / variants / alternatives / "how could we" | Exploration | [Exploration](#exploration-nqd-variants) |
+| Comparing 2+ approaches ("A or B", "which is better", "X vs Y") | Comparison | [Comparison](#comparison-parity-pareto) |
+| Wants to commit to a specific variant (a binding choice) | Decision (manual) | [Decision is manual](#decision-is-manual) |
+| Wants to check if a past decision still holds | Verification | [Verification](#verification) |
+| Wants to record a micro-decision with rationale | Note | [Note](#note-micro-decision) |
+| Wants situational awareness ("where are we", "what's stale") | Status | Call `haft_query(action="status")` directly |
+| Repository has no `.haft/` yet | Onboarding | Delegate to `/h-onboard` |
+| General FPF question ("what is FPF", "look up pattern E.9") | FPF spec lookup | Call `haft_query(action="fpf", query=...)` |
+
+If the signal is **ambiguous** (spans multiple workflows) — start with framing. Without a framed problem, exploration / comparison float.
+
+---
+
+## Framing
+
+Use when: a solution is proposed before the problem is stated, or scope/acceptance is unclear.
+
+**Procedure (compressed; full version in /h-frame):**
+
+1. **Stabilize the signal.** What's actually broken or wanted? In one sentence, what condition would make the operator say "solved"?
+2. **Type the problem** — pick one:
+   - `diagnosis` — something broke, root cause unknown
+   - `optimization` — known target, want better numbers
+   - `search` — looking for an unknown thing (e.g., a library, a pattern)
+   - `synthesis` — building something new
+3. **Umbrella-word repair** — if the signal uses overloaded terms ("service", "quality", "scalable", "готово"), unpack to specifics. Refuse to record a ProblemCard built on umbrella words.
+4. **Acceptance criterion** — one observable condition that signals "minimum viable success". Without this, the problem can't be verified later.
+5. **Record:**
+   ```
+   mcp__haft__haft_problem(
+     action="frame",
+     problem_type="<diagnosis|optimization|search|synthesis>",
+     title="<short title>",
+     signal="<what's happening / what's needed>",
+     acceptance="<observable condition>",
+     constraints=["<hard limit>"],
+     blast_radius="<what gets affected>",
+     reversibility="<low|medium|high>",
+     mode="<tactical|standard|deep>"
+   )
+   ```
+6. Surface the ProblemCard ID to the operator. They can edit, supersede, or move on.
+
+**Common mistakes:**
+- Framing during code-grinding sessions (h-reason isn't for every task — code work doesn't need a ProblemCard)
+- Letting acceptance stay vague ("works better") instead of observable
+- Skipping problem-type → comparisons later anchor wrong
+
+For deeper framing (B.4.1 + B.5.2 with parallel-rival generation on diagnosis problems), use `/h-frame` or `/h-diagnose` directly.
+
+---
+
+## Diagnosis (failure investigation)
+
+Use when: concrete failure, unclear cause. Stronger than framing — runs parallel rival-hypothesis testing.
+
+**Compressed procedure (full version in /h-diagnose):**
+
+1. **Stabilize** — what's the symptom in one sentence? When did it start? Reproducible?
+2. **Frame** as `problem_type="diagnosis"` via `haft_problem(action="frame")`.
+3. **Generate ≥3 rival hypotheses** (FPF B.5.2 four-step abductive). Optionally spawn parallel Agent subagents — each takes one hypothesis and tests it independently against the codebase. Sequential is fine for lightweight investigations.
+4. **Filter for falsifiability** — drop hypotheses with no testable prediction.
+5. **Rank by evidence weight.** Keep losing rivals visible (CC-B.5.2-2) — do not collapse to a single answer prematurely.
+6. **Record findings** as `haft_solution(action="explore", variants=[...])` where each variant = one hypothesis + its evidence + its weakest_link.
+7. **Recommend next action.** Usually: test the leading hypothesis, then `/h-decide` if a fix path is clear.
+
+For full parallel-subagent dance use `/h-diagnose` directly.
+
+---
+
+## Exploration (NQD variants)
+
+Use when: problem is framed, operator wants 3-5 distinct candidate solutions.
+
+**Compressed procedure (full version in /h-explore):**
+
+1. **Confirm there is a framed problem.** If not, frame first (above). Without a frame, variants float.
+2. **Generate 3-5 distinct variants — each must differ in KIND, not just degree** (FPF EXP-08). Parallel directions to consider:
+   - Data-flow restructure (avoid the operation)
+   - Algorithmic alternative (same op, different algo)
+   - Infrastructure swap (different runtime / service)
+   - Caching / batching / queuing (smooth load)
+   - Architectural extraction (move to different layer)
+   - Workflow restructure (change when/how triggered)
+   - Stepping-stone (suboptimal now, opens future search space)
+3. **Each variant carries:**
+   - `title`
+   - `description` (2-3 sentences)
+   - `novelty_marker` — what makes this distinct from typical AI suggestions
+   - `weakest_link` — what bounds quality if pursued (NOT title repeated)
+   - `stepping_stone: true|false` (+ basis if true)
+   - `risks` + `strengths`
+4. **Record:**
+   ```
+   mcp__haft__haft_solution(
+     action="explore",
+     problem_ref="<prob-...>",
+     variants=[...],
+     no_stepping_stone_rationale="<if all stepping_stone=false>"
+   )
+   ```
+5. Kernel returns SolutionPortfolio ID + may emit soft warnings about disguised duplicates, missing parity_rules, or weakest_links that just repeat titles. Read and self-correct.
+6. Recommend next step (usually `/h-compare` if 3+ variants).
+
+For full parallel-subagent generation use `/h-explore` directly — it spawns one Agent per direction in parallel.
+
+---
+
+## Comparison (parity + Pareto)
+
+Use when: SolutionPortfolio exists with 2+ variants, operator wants to evaluate.
+
+**Compressed procedure (full version in /h-compare):**
+
+1. **Characterize first.** Declare comparison dimensions BEFORE scoring (kernel rejects subjective dimensions or stale ones):
+   ```
+   mcp__haft__haft_problem(
+     action="characterize",
+     problem_ref="<prob-...>",
+     dimensions=[
+       {"name": "latency", "scale_type": "ratio", "unit": "ms", "polarity": "lower_better", "role": "target"},
+       {"name": "ops_complexity", "scale_type": "ordinal", "unit": "1-5", "polarity": "lower_better", "role": "target"},
+       {"name": "compliance_OK", "scale_type": "binary", "polarity": "true_better", "role": "constraint"},
+       ...
+     ],
+     valid_until="<ISO date>"
+   )
+   ```
+2. **Tag each dimension's indicator role:** `constraint` (hard limit), `target` (optimize), or `observation` (Anti-Goodhart — watch but don't optimize).
+3. **Declare parity plan + selection policy BEFORE scoring.** Equal budgets/windows for all variants. State the dominance rule (Pareto front, not scalar winner).
+4. **Score dim-wise** — one evaluator per dimension applies one scale to all variants. Prevents anchoring bias.
+5. **Compute non-dominated set.** Return Pareto front (NOT a scalar winner).
+6. **Record:**
+   ```
+   mcp__haft__haft_solution(
+     action="compare",
+     portfolio_ref="<sol-...>",
+     parity_plan={...},
+     selection_policy={...},
+     results={"dimensions": [...], "scores": {...}}
+   )
+   ```
+7. **Decision is manual.** See next section.
+
+For full dim-wise parallel scoring use `/h-compare` directly — it spawns one Agent per dimension.
+
+---
+
+## Decision is manual
+
+**You CANNOT auto-fire `/h-decide`.** It is `disable-model-invocation: true` per Transformer Mandate.
+
+When the operator is ready to commit to a chosen variant from a SolutionPortfolio:
+
+- Surface the Pareto front summary
+- Recommend the variant you would pick (with rationale)
+- Tell the operator: **«this needs your explicit /h-decide to bind»**
+- Stop and wait
+
+If they say "go ahead" without typing `/h-decide` — still stop. Ask them to type it. The principle is: agents generate options, humans bind.
+
+---
+
+## Verification
+
+Use when: a recorded DecisionRecord needs post-implementation reality check.
+
+**Compressed procedure (full version in /h-verify):**
+
+1. Find the decision via `haft_query(action="decisions", filter="active")` or specific ref.
+2. Read predictions from the DRR — what was supposed to be true?
+3. Gather evidence — run tests, check code, measure metrics, search docs.
+4. Record:
+   ```
+   mcp__haft__haft_decision(
+     action="evidence",
+     decision_ref="<dec-...>",
+     evidence_items=[{
+       "type": "<test|measurement|incident|review>",
+       "verdict": "<supports|refutes|weakens>",
+       "summary": "...",
+       "carrier_ref": "<file:line or URL or test name>",
+       "cl": "<CL3|CL2|CL1|CL0>"  // congruence level
+     }]
+   )
+   ```
+5. After enough evidence: refresh the decision status:
+   - `accepted` (predictions held)
+   - `weakened` (mixed)
+   - `superseded` (replace with new decision)
+   ```
+   mcp__haft__haft_refresh(action="<waive|supersede|deprecate>", artifact_ref="<dec-...>")
+   ```
+
+For full verify loop (drift detection across code/affected_files, FSRS-style intervals) use `/h-verify` directly.
+
+---
+
+## Note (micro-decision)
+
+Use when: small choice with rationale that doesn't justify full DRR ceremony.
+
+```
+mcp__haft__haft_note(
+  text="<one or two sentences: what + why>",
+  rationale="<the why is required — kernel rejects content-free notes>",
+  links={
+    "based_on": ["<prob-... or dec-...>"],
+    "tags": [...]
+  }
+)
 ```
 
-In shell-only environments: `haft fpf search "<query>"` with optional `--full`.
+Common moments to note:
+- After resolving a non-trivial bug — capture cause + fix lesson
+- After ruling out a variant during exploration — capture why
+- After a user correction — capture the right approach
+- A surprising discovery in the codebase
+- A constraint discovered mid-work
 
 ---
 
-## Feature maturity
+## Slideument patterns (Levenchuk's 2026 seminar wisdom)
 
-**Computed:** Pareto front (non-dominated set from comparison data), Refresh (valid_until expiry detection).
-**Tracked (persisted but not computed):** problem framing, characterization dimensions, WLNK label on variants, stepping-stone flag, CL on evidence, measurement records.
-**Textual (stored as rules, not enforced):** parity plan — you ensure it yourself.
+These don't have dedicated skills but you should apply them when relevant:
 
-**Key rule:** don't describe textual features as if they compute something. "WLNK bounds quality" means the user identified what bounds quality, not that the system calculated it. These skill instructions are **L1 — detection and questions**; the tools (L2) persist and enforce. Don't treat a prompt-based check as verified evidence.
+**Three factories.** Engineering has three production lines:
+1. **Problem factory** — generates new framed problems (problematization)
+2. **Solution factory** — generates solutions for framed problems
+3. **Factory of factories** — improves both production lines
+
+In haft: ProblemCard archive = problem factory output; SolutionPortfolio = solution factory output. Bring this lens when the operator confuses "what problem to solve" with "how to solve it" — they're separate factories.
+
+**Goldilocks problem selection.** Pick problems just above current capability (LLM heuristic: solvable in 10-20% of runs, not less, not more). Pre-pick checks:
+- Measurable acceptance (not vague)
+- Reversibility (can we undo?)
+- Stepping-stone potential (does solving open new search space?)
+- Multi-axis trade-off (otherwise not really a Pareto problem)
+- Valid_until on framing (postings rot)
+
+Apply: when triaging which problem to work on next, surface these criteria explicitly.
+
+**NQD discipline (Novelty / Quality / Diversity).**
+- **Novelty** — how different from known solutions
+- **Quality** — measurable use-value in acceptance spec
+- **Diversity** — coverage of independent niches by the portfolio
+
+Never collapse NQD into a scalar. Hold a Pareto front. Keep 1-2 stepping-stones (high N or D, lower Q now) for future search-space expansion. Apply: in exploration, score each variant on NQD axes, not just utility.
+
+**BLP — Bitter Lesson Preference.** When choosing between hand-tuned specialist and scalable universal agent, prefer the latter as tie-breaker. Apply: in comparisons that have tied Q-scores, BLP can break ties toward general-purpose / learnable approaches.
+
+**Scaling-Law Lens (SLL).** When claiming "this approach scales", declare:
+- Scale variables (compute / data / capacity / iteration budget)
+- ScaleWindow (range over which claim holds)
+- ElasticityClass (rising / knee / flat / declining)
+
+Don't say "X scales" without naming what S is, what window, what slope. Apply: in AI/agent-related comparisons especially.
+
+**Stepping stones** (Lehman & Stanley 2015). Sub-optimal-by-Q solutions that open new search areas. Keep 1-2 in portfolio explicitly. Apply: in exploration, mark them; in comparison, don't drop them based on current Q alone.
+
+**Anti-Goodhart via Indicator Roles.** Tag each dimension:
+- `constraint` — hard limit, must satisfy
+- `target` — what you optimize
+- `observation` — watch but DON'T optimize
+
+If you optimize an `observation`, you're Goodharting. Apply: at characterization time, before any scoring.
 
 ---
 
-## The 5 engineering modes
+## FPF glossary (key concepts)
 
-### Understand — "What's actually going on?"
+**R_eff (Effective Reliability):** computed trust score in [0,1]. `R_eff = min(evidence_scores)` with CL penalties. Never average — weakest-link principle.
 
-Frame before solving. Problem quality dominates solution speed in outcome.
+**CL (Congruence Level):** how well evidence transfers across contexts.
+- CL3: same context (internal test) — no penalty
+- CL2: similar context (related project) — 0.1 penalty
+- CL1: different context (external docs) — 0.4 penalty
+- CL0: opposed context — 0.9 penalty
 
-**Framing protocol — ask these questions before recording:**
+**Evidence Decay:** evidence has `valid_until`. Expired evidence scores 0.1 (weak, not absent). Graduated epistemic debt sorted by severity.
 
-1. **"What observation doesn't fit?"** — the signal, not the assumed cause. "Webhook retries hit 15%" not "we need a new queue."
-2. **"What have you already tried?"** — avoids re-treading dead ends.
-3. **"Who owns this problem?"** — a specific person with authority, not "the team."
-4. **"What would solved look like?"** — measurable acceptance, not "it should be better."
-5. **"What constraints are non-negotiable?"** — hard limits no variant can violate.
-6. **"How reversible is this? What's the blast radius?"** — determines depth (tactical vs standard vs deep).
-7. **"What should we watch but NOT optimize?"** — Anti-Goodhart indicators.
+**DRR (Decision Record):** FPF E.9 four-component structure: Problem Frame, Decision/Contract, Rationale, Consequences. Created ONLY via manual `/h-decide`.
 
-**Problem typing:** Before exploring, classify:
-- **Optimization** — working system, want it better on a known dimension
-- **Diagnosis** — something's broken, don't know why
-- **Search** — need to find something that doesn't exist yet
-- **Synthesis** — need to combine existing elements into something new
+**Indicator Roles:** see Anti-Goodhart above.
 
-Each type suggests different exploration strategies and ceremony levels.
+**Transformer Mandate:** systems cannot transform themselves. Humans bind; agents document. Autonomous binding = protocol violation.
 
-**Language precision triggers:**
-- If the signal uses ambiguous terms (service, process, function, quality, component), **unpack to precise meaning before recording.** "Which service — the OAuth provider, the token endpoint, or the session store?"
-- If the user says "it should do X," clarify: **hard constraint, preference, or observation?**
-- If two stakeholders use the same word differently, resolve before framing.
+**Strict Distinction (A.7):** Object ≠ Description ≠ Carrier. Plan ≠ Reality. Design-time ≠ Run-time. Promise/commitment ≠ actual delivery.
 
-**Characterization:** Define the **characteristic space** before evaluating options.
-- State the **selection policy BEFORE seeing results**
-- Ensure **parity** — same inputs, same scope, same budget across all options
-- Keep it **multi-dimensional** — never collapse to a single score unless the fold is explicit
+**Three systems always present:**
+1. **Target system** — what delivers value to users
+2. **Enabling system** — what creates / governs the target (team + tooling + process)
+3. **Method** — the way of creating it
 
-**Persist with:** `haft_problem(action="frame")`, `haft_problem(action="characterize")`
-**Commands:** `/h-frame`, `/h-char`
-**Goldilocks check:** When multiple problems are active, use `haft_problem(action="select")` to pick the one in the growth zone.
+Confusing these is the most common FPF anti-pattern.
 
-### Explore — "What are the real options?"
+---
 
-- **>=2 variants** that differ in **kind**, not degree (3+ preferred)
-- Each variant gets a **weakest link** label — what bounds its quality
-- Mark **stepping stones** — options that open future possibilities even if not optimal now
+## When to delegate to a specialized skill
 
-**Diversity self-check:** Before submitting variants, verify they aren't disguised copies of the same approach. If all variants are cache-based, at least one should explore a genuinely different direction (e.g., restructure data flow to eliminate caching need).
+This umbrella covers compressed versions of the workflows. For deeper procedures (parallel subagent dancing, full parity discipline, complete drift detection), recommend the specialized skill:
 
-**Hypothesis discipline:** When investigating during exploration, separate what you observe from what you hypothesize. State hypotheses explicitly. "I observe high latency on the /auth endpoint. Hypothesis: the bottleneck is the token validation call, not the database query."
+| Heavy version | When to delegate |
+|---|---|
+| `/h-frame` | Standard/deep mode with full B.4.1 stabilize-route + problem-typing |
+| `/h-diagnose` | Need parallel rival hypothesis testing across the codebase |
+| `/h-explore` | Need parallel Agent-per-direction NQD variant generation |
+| `/h-compare` | Need parallel dim-wise scoring (one evaluator per dimension) |
+| `/h-verify` | Full drift detection + Evidence Decay scan + FSRS-style scheduling |
+| `/h-decide` (manual) | Always — binding action |
+| `/h-commission` (manual) | Always — execution authority grant |
+| `/h-onboard` | No `.haft/` directory yet |
+| `/h-status` | Cheap dashboard, can call directly |
+| `/h-spec-cover` | Module-level coverage analysis |
 
-**Past solutions:** Use `haft_solution(action="similar")` to search for relevant precedents from past or cross-project work.
+For routing on natural language signal, the specialized skill descriptions ALSO auto-trigger — so if the signal is sharp, you may never enter this umbrella. That's fine: both routes converge on the same kernel.
 
-**Persist with:** `haft_solution(action="explore")`
-**Command:** `/h-explore`
+---
 
-### Choose — "Which is better — and should I even decide now?"
+## What NOT to do in this umbrella
 
-**Probe-or-commit gate:** Before jumping to comparison, assess readiness:
+- DO NOT auto-fire `/h-decide` or `/h-commission`. Transformer Mandate. Even if the user says "decide for me" — stop and ask for explicit slash command.
+- DO NOT skip `haft_problem(action="frame")` before exploration. Without framing, variants are wishlist.
+- DO NOT collapse NQD into a scalar. Always present Pareto front.
+- DO NOT use FPF jargon in your responses to the operator unless they used it first. Translate `R_eff` to "trust score", `CL2` to "different project context", `Evidence Decay` to "stale evidence".
+- DO NOT replicate full procedures from specialized skills here. This umbrella's job is compressed coverage. For thoroughness — delegate.
+- DO NOT skip the kernel — even compressed procedures must persist via `mcp__haft__*` calls.
 
-1. Are all key dimensions covered with data for all variants?
-2. Do the variants span genuinely different approaches?
-3. Is there a specific investigation that could change the ranking?
+---
 
-If 1+2 yes and 3 no → **commit** to comparison.
-If 3 yes → **probe** — name the specific next investigation, what comparison defect it repairs, and estimated cost.
-If 2 no → **widen** — explore more variants first.
-If the burden shifted (this isn't really a choice problem) → **reroute** to Understand.
+## FPF spec lookup
 
-**Fair comparison:**
-- Identify the **non-dominated set** (Pareto front) — variants not strictly worse on all dimensions
-- Apply the pre-declared selection policy
-- **Constraint elimination:** Constraints are hard limits. A variant that violates a constraint dimension is eliminated before Pareto computation, not merely scored lower.
-- Record what was compared, what won, and why
-
-**Language precision in comparison:** If comparison dimensions use subjective terms (maintainable, simple, scalable), ask for measurable specifics before scoring. "Maintainability" could mean: fewer dependencies? Lower cyclomatic complexity? Team already knows the stack? These point to different winners.
-
-**Reroute upstream:** If comparison reveals that the framing was ambiguous, that the problem type was wrong, or that variants address different problems → reroute to Understand. Don't force a choice on a broken comparison basis.
-
-**Transformer Mandate:** The human chooses at the Choose → Execute boundary. Agent may frame/explore/compare when delegated, but the human confirms the selection before recording a decision. Exception: autonomous mode.
-
-**Persist with:** `haft_solution(action="compare")`
-**Command:** `/h-compare`
-
-### Execute — "Let's do it — carefully."
-
-The decision record should contain:
-- **Invariants** — what MUST hold at all times
-- **Pre-conditions** — what must be true before implementation begins
-- **Post-conditions** — checklist for implementation completion
-- **Admissibility** — what is NOT acceptable
-- **Evidence requirements** — what proof the verification loop must gather
-- **Predictions** — falsifiable claims with `claim`, `observable`, and `threshold`
-- **Refresh triggers** — concrete signals that should reopen the decision
-- **Valid-until date** — when to re-evaluate automatically
-- **Weakest link** — what most plausibly breaks this choice
-
-**Async evidence:** When a claim can't be verified immediately (e.g., "error rate drops 30% after 1 week of production"), add a `verify_after` date to the prediction. This surfaces automatically in Verify mode when the date passes.
-
-**Baseline:** After implementation, call `haft_decision(action="baseline")` to snapshot affected file hashes for drift detection.
-
-**Projections for handoff:** Use projections when reasoning already exists and you need a boundary-crossing view:
-- `/h-view brief` for delegated-agent implementation handoff
-- `/h-view rationale` for PR/change rationale
-- `/h-view audit` for evidence/assurance review
-- `/h-view compare` for the current Pareto/trade-off surface
-
-Projections render the same artifact graph for a different audience — no new semantics.
-
-**Persist with:** `haft_decision(action="decide")`, `haft_decision(action="baseline")`, `haft_commission(...)`
-**Commands:** `/h-decide`, `/h-view`, `/h-commission`
-
-### Verify — "Did it work? Is it still valid?"
-
-**Post-implementation verification:**
-1. **Baseline first** — if the decision has `affected_files`, call `haft_decision(action="baseline")`
-2. **Verify inductively** — run tests, read affected files, or ask the user to confirm
-3. **Attach evidence** — `haft_decision(action="evidence")` with type/verdict/CL
-4. **Record measurement** — `haft_decision(action="measure")` with findings and verdict
-
-**Calling measure from memory without verification is a violation.**
-**Calling measure without baseline degrades evidence to CL1 self-evidence.**
-**Evidence without measure doesn't close the loop.**
-
-**Ongoing verification:**
-- **Claim status:** Which predictions were verified, which aren't?
-- **Drift detection:** Files changed since baseline → classify as cosmetic / incidental / material
-- **Staleness scan:** Expired valid_until, decayed evidence
-- **Pending verifications:** Claims with verify_after dates that have passed — surface proactively
-
-**Entity preservation:** When summarizing verification results, preserve entity count and identity. Don't merge "5 claims" into "several verified items."
-
-**Lifecycle management:**
-- `haft_refresh(action="waive")` — extend validity with evidence
-- `haft_refresh(action="reopen")` — start new problem cycle from a decision
-- `haft_refresh(action="supersede")` — replace one artifact with another
-- `haft_refresh(action="deprecate")` — archive as no longer relevant
-
-When reopening a stale decision, the new ProblemCard inherits lineage.
-
-**Persist with:** `haft_decision(action="measure/evidence")`, `haft_refresh(...)`
-**Commands:** `/h-verify`, `/h-status`
-
-### The loop and legitimate reroutes
+For deep references on any concept:
 
 ```
-Understand → Explore → Choose → Execute → Verify
-    ↑            ↑        ↑        ↑        │
-    └────────────┴────────┴────────┴────────┘
+mcp__haft__haft_query(action="fpf", query="<topic or pattern-id>")
 ```
 
-- **Choose → Understand** — comparison reveals bad framing or ambiguity
-- **Explore → Understand** — exploration reveals wrong problem type
-- **Execute → Choose** — implementation reveals chosen option doesn't work
-- **Verify → any** — verification shows problem was misframed, option failed, or comparison basis invalidated
+Add `full=true` for complete pattern text, `explain=true` for guided explanation.
 
-Reroutes are not failures. They prevent compounding errors downstream. The simple forward arrow is the common case; reroutes are the important case.
-
-### Fast path: Note
-
-Not everything needs the 5-mode ceremony. Quick micro-decisions go to `haft_note`: captures what was decided and why, stays in the artifact graph for future recall and conflict detection.
-
----
-
-## Depth calibration
-
-| Depth | When | What changes |
-|-------|------|-------------|
-| **note** | Micro-decisions during coding | `/h-note` — done |
-| **tactical** | Reversible, <2 weeks blast radius | Compact Understand + Explore + Choose, standard Execute |
-| **standard** | Most architectural decisions | Full Understand with characterization, 3+ variants in Explore, full Choose with Pareto |
-| **deep** | Irreversible, security, cross-team | All standard + rich parity rules, runbook, refresh triggers, evidence requirements |
-
-**Default is tactical.** Escalate when: hard to reverse, multiple teams affected, or problem framing is unclear. Depth changes how much evidence and structure you show, not whether the modes exist.
-
----
-
-## Key distinctions (always maintain)
-
-- **Object ≠ Description ≠ Carrier** — the system, its spec, and its code are three things
-- **Plan ≠ Reality** — a model is not the thing it models
-- **Target system ≠ Enabling system** — what must work vs who builds/maintains it
-- **Design-time ≠ Run-time** — stored reasoning artifacts ≠ verified system behavior
-
----
-
-## Proactive agent behavior
-
-### Auto-capture mode (always on)
-
-Record notes automatically when you observe decisions in conversation. Don't ask — just call `haft_note`. Validation rejects bad notes.
-
-Triggers: "I'm going with X", "let's use Y instead of Z", config choice, library pick, approach selection.
-**Do NOT auto-capture:** formatting choices, import ordering, variable naming.
-
-### Proactive checks
-
-- **At session start**: call `haft_query(action="status")` to surface stale decisions and active problems
-- **When code changed after a decision**: read `git diff`, classify as cosmetic / incidental / material
-- **If status returns zero artifacts on a project with code**: suggest `/h-onboard`
-- **When dev works on files**: call `haft_query(action="related", file="path")` to find linked decisions
-- **When dev says "let's just do X" without rationale**: ask "why X?" before recording
-- **When auto-captured note conflicts with active decision**: surface the conflict
-
-### User steering
-
-Slash commands are course corrections, not mandatory triggers:
-- In **research / prepare-and-wait** mode, the user triggers `/h-frame`, `/h-explore`, etc. when ready.
-- In **delegated reasoning** mode, natural-language delegation continues through modes without extra commands.
-- Direct operational requests stay direct. Don't escalate them into `/h-frame` just because they touch engineering content.
-
-### NavStrip interpretation
-
-The `── Haft ──` strip appended to tool responses shows current state and available actions.
-- **"Available:" = menu for the user**, not instructions for the agent.
-- **Mode determines ceremony depth**, not whether Choose may bypass Explore.
-- In research + wait mode, do not auto-advance. In delegated reasoning, you may advance through modes without extra commands.
-
----
-
-## FPF pattern retrieval
-
-FPF pattern hints are **auto-injected into reasoning tool responses** — you see them for free when you call `haft_problem`, `haft_solution`, `haft_decision`. Each hint lists the pattern IDs relevant to the current phase with short labels.
-
-When a hint names a pattern you want to apply, retrieve the full text with `haft_query(action="fpf", query="<PATTERN-ID>")` (e.g. `FRAME-01`, `CHR-02`). Cite specific patterns when applying them. Do not pre-fetch the whole phase before every reasoning step — that is ceremony creep.
-
----
-
-## FPF Micro-Patterns (always-available baseline)
-
-These compressed patterns are your floor — always in context. For full detail, use `haft_query(action="fpf")`.
-
-### Frame
-- **FRAME-01 Signal typing**: Make the trigger explicit — anomaly, opportunity, probe, or cue. Typed signals prevent drift.
-- **FRAME-02 Scope boundary**: Declare what's in-scope AND out-of-scope. Prevents silent inflation.
-- **FRAME-03 Acceptance criteria**: What observable condition signals solved? Bridge framing to evidence.
-- **FRAME-05 Problem typing**: Classify: optimization / diagnosis / search / synthesis. Each needs different exploration.
-- **FRAME-07 Goldilocks**: Select problems in the zone of proximal development — beyond current capability but reachable.
-- **FRAME-08 Reading checklist**: Before acting on ANY incoming artifact, run 6 questions: object of talk / context / statement type / lexicon vs term / re-expression vs reinterpretation / result purpose.
-- **FRAME-09 Strict distinction quad**: Role ≠ Capability ≠ Method ≠ Work. Assigned ≠ can do ≠ should do ≠ did.
-
-### Characterize
-- **CHR-01 Indicator roles**: Every dimension = constraint (hard limit), target (optimize 1-3), observation (watch, Anti-Goodhart).
-- **CHR-02 Pipeline**: normalize > indicatorize > score > compare > select. Never average disparate scales.
-- **CHR-04 Assurance tuple**: F (formality) + G (scope) + R (reliability) + CL (congruence). Snapshot of trust.
-- **CHR-08 L1/L2/L3 ambiguity**: L1=flag vague terms. L2=persist disambiguations. L3=check entity preservation.
-- **CHR-09 Parity plan**: Equal budgets, time windows, eval protocol, data freshness across variants.
-- **CHR-10 Boundary norm square (L/A/D/E)**: Decompose mixed boundary statements into Law (definition) / Admissibility (gate) / Deontics (duty) / Evidence (carrier). Split before acting.
-- **CHR-11 Relational precision pipeline**: umbrella-word → ground by relations → math lens → restored ontology → precise lexicon. Lexical fix alone isn't enough.
-- **CHR-12 Umbrella specializations**: Quality / action-invitation / service / sameness / wholeness / relation-slot / basedness — each family has its own repair.
-
-### Explore
-- **EXP-01 Abduction**: Frame prompt > generate rivals > apply filters > select prime hypothesis. Keep rivals visible.
-- **EXP-04 WLNK per variant**: "What breaks first?" Name the Achilles' heel. Focus evidence on testing it.
-- **EXP-05 Stepping stones**: Non-optimal but opens future search space. Allocate 1-2 bets.
-- **EXP-07 Portfolio thinking**: Pareto front = set of tradeoffs, not one winner. NQD guides selection.
-- **EXP-08 NQD**: Is this genuinely new? If yes, existing templates may mislead.
-
-### Compare
-- **CMP-01 Parity**: Same budget, assumptions, scope for all variants. Rigged comparison = no comparison.
-- **CMP-02 Selection policy up front**: Declare rule BEFORE scoring. Separates judgment from evaluation.
-- **CMP-03 Pareto front**: Identify non-dominated set. Dominated variants eliminated with rationale.
-- **CMP-06 CL across options**: CL3=exact context, CL2=similar, CL1=related, CL0=opposed. Low CL = lower trust.
-
-### Decide
-- **DEC-01 Record structure**: Problem frame + Decision + Rationale + Consequences. Traceable.
-- **DEC-04 Invariants**: Load-bearing constraints: before, during, after. Violation = rollback.
-- **DEC-05 Rollback**: Triggers + Steps + Blast radius + Timeline. Honest about reversibility.
-- **DEC-06 Predictions**: "If X, we see Y within Z under K." Falsifiable. Become measurement targets. Predictions are causal claims — check realizability: can you actually sample the target distribution under physical / ethical / operational constraints? See C.27 / C.28 for causal-use calculus and CounterfactualSamplingRealizabilityProfile.
-- **DEC-08 Counterargument**: Strongest genuine attack on the chosen option. Self-deception check.
-
-### Verify
-- **VER-01 Evidence graph**: Every claim anchored to evidence. Typed links + CL. No floating claims.
-- **VER-02 Decay**: valid_until on all evidence. Expired = 0.1 (weak, not absent). Epistemic debt.
-- **VER-03 R_eff**: min(Rs) - penalty(CL_min). Never average. Weakest link dominates.
-- **VER-07 Refresh triggers**: Evidence expiry, context change, WLNK failure, competing alternative.
-
-### Cross-cutting
-- **X-WLNK**: System reliability <= min(component reliabilities). Never average. Invest in weakest.
-- **X-SCOPE**: Every claim has explicit where + under what + when. "Always fast" = scope inflation.
-- **X-TRANSFORMER**: External agent decides. System doesn't self-improve. Human is the principal.
-- **X-STATEMENT-TYPE**: Every load-bearing sentence = rule / promise / explanation / gate / evidence. Mixed = L1 error; decompose.
-- **X-FANOUT-AUDIT**: On concept rename, sweep all carriers: prose + filenames + manifests + review bundles + provenance + tests + schemas. Fixed-point until clean.
-- **X-SOURCE-RESTORATION** (A.15.4): Before relying on a dashboard, generated explanation, credential view, projection output, or any agent-produced artifact as evidence — recover the project source that makes the reliance admissible. The carrier may look ready for action before the underlying source is verifiable. Object ≠ Description ≠ Carrier is detection; source restoration is the operational rule.
+Common pattern IDs:
+- `A.1` — Holonic Foundation (target vs enabling system)
+- `A.7` — Strict Distinction (Clarity Lattice)
+- `A.17` / `A.18` — Characteristic Norm (dimension declaration)
+- `B.3` — Trust & Assurance (R_eff, CL)
+- `B.3.4` — Evidence Decay
+- `B.4.1` — Observe → Notice → Stabilize → Route
+- `B.5.2` — Abductive Loop (four-step rival generation)
+- `B.5.2.1` — NQD-style Creative Abduction
+- `C.18` — NQD-CAL (Open-Ended Search Calculus)
+- `C.18.1` — Scaling-Law Lens
+- `C.19` — Explore/Exploit Governor + BLP
+- `E.9` — Design-Rationale Record method (DRR)
+- `E.16` — Autonomy Budget
+- `F.18` — Local-First Unification Naming
