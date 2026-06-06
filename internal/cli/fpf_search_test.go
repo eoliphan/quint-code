@@ -292,6 +292,59 @@ func TestFPFEmbeddingConfigHonorsDisabledProvider(t *testing.T) {
 	}
 }
 
+func TestFpfHybridResolveEmbedderClosesRaceLoser(t *testing.T) {
+	embedders := []*trackedFPFEmbedder{
+		{fpfSearchTestEmbedder: fpfSearchTestEmbedder{}},
+		{fpfSearchTestEmbedder: fpfSearchTestEmbedder{}},
+	}
+
+	started := make(chan struct{}, len(embedders))
+	release := make(chan struct{})
+	var mu sync.Mutex
+	next := 0
+
+	hybrid := NewFpfHybrid(func() (embedding.Embedder, error) {
+		mu.Lock()
+		if next >= len(embedders) {
+			mu.Unlock()
+			t.Fatal("unexpected extra embedder factory call")
+		}
+		embedder := embedders[next]
+		next++
+		mu.Unlock()
+
+		started <- struct{}{}
+		<-release
+		return embedder, nil
+	})
+
+	done := make(chan embedding.Embedder, len(embedders))
+	for range embedders {
+		go func() {
+			done <- hybrid.resolveEmbedder()
+		}()
+	}
+
+	waitForStarts(t, started, len(embedders))
+	close(release)
+
+	first := waitForEmbedder(t, done)
+	second := waitForEmbedder(t, done)
+	if first != second {
+		t.Fatalf("expected both callers to receive cached winner, got %p and %p", first, second)
+	}
+
+	closed := 0
+	for _, embedder := range embedders {
+		if embedder.isClosed() {
+			closed++
+		}
+	}
+	if closed != 1 {
+		t.Fatalf("closed duplicate embedders = %d, want 1", closed)
+	}
+}
+
 func TestBuildFPFSearchFunc_UsesSharedRetriever(t *testing.T) {
 	dbPath := buildFPFSearchTestDB(t)
 
@@ -340,6 +393,28 @@ func (f fpfSearchTestEmbedder) Close() error {
 	return nil
 }
 
+type trackedFPFEmbedder struct {
+	fpfSearchTestEmbedder
+
+	mu     sync.Mutex
+	closed bool
+}
+
+func (e *trackedFPFEmbedder) Close() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.closed = true
+	return nil
+}
+
+func (e *trackedFPFEmbedder) isClosed() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return e.closed
+}
+
 type fpfSearchSpecEmbedder struct{}
 
 func (f fpfSearchSpecEmbedder) Descriptor() fpf.SemanticEmbedderDescriptor {
@@ -378,6 +453,30 @@ func hasSearchTier(results []fpf.SpecSearchResult, tier string) bool {
 		}
 	}
 	return false
+}
+
+func waitForStarts(t *testing.T, started <-chan struct{}, want int) {
+	t.Helper()
+
+	for range want {
+		select {
+		case <-started:
+		case <-time.After(1 * time.Second):
+			t.Fatalf("waited for %d embedder factory starts", want)
+		}
+	}
+}
+
+func waitForEmbedder(t *testing.T, done <-chan embedding.Embedder) embedding.Embedder {
+	t.Helper()
+
+	select {
+	case embedder := <-done:
+		return embedder
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for resolveEmbedder")
+	}
+	return nil
 }
 
 func waitForFpfHybridIdle(t *testing.T, hybrid *FpfHybrid) {

@@ -344,12 +344,16 @@ func (h *FpfHybrid) resolveEmbedder() embedding.Embedder {
 	embedder, err := newEmbedder()
 
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.embedder != nil {
-		return h.embedder
+		cached := h.embedder
+		h.mu.Unlock()
+		closeDiscardedEmbedder(embedder)
+		return cached
 	}
+	defer h.mu.Unlock()
 	if err != nil {
 		h.embedderUnavailable = true
+		closeDiscardedEmbedder(embedder)
 		logger.Info().Err(err).Msg("embedding sidecar unavailable — FPF spec search degrades to FTS")
 		return nil
 	}
@@ -359,6 +363,12 @@ func (h *FpfHybrid) resolveEmbedder() embedding.Embedder {
 	}
 	h.embedder = embedder
 	return embedder
+}
+
+func closeDiscardedEmbedder(embedder embedding.Embedder) {
+	if embedder != nil {
+		_ = embedder.Close()
+	}
 }
 
 // buildIndex loads the baked section vectors and splits them into the card and
