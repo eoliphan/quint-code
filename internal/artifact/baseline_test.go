@@ -194,6 +194,61 @@ func TestCheckDriftDetectsModifiedFile(t *testing.T) {
 	}
 }
 
+func TestCheckDriftFailsSafeWhenAddedSymbolsAccompanyNonSymbolEdits(t *testing.T) {
+	store := setupTestDB(t)
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+
+	writeTestFile(t, projectRoot, "app.go", `package main
+
+func Run() string {
+	return "run"
+}
+`)
+
+	dec := createTestDecision(t, store, "dec-test-010b", "App runner")
+	err := store.SetAffectedFiles(ctx, dec.Meta.ID, []AffectedFile{{Path: "app.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Baseline(ctx, store, projectRoot, BaselineInput{DecisionRef: dec.Meta.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestFile(t, projectRoot, "app.go", `package main
+
+var enabled = true
+
+func Run() string {
+	return "run"
+}
+
+func Extra() string {
+	return "extra"
+}
+`)
+
+	reports, err := CheckDrift(ctx, store, projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("expected 1 drift report, got %d", len(reports))
+	}
+
+	file := reports[0].Files[0]
+	if file.Status != DriftModified {
+		t.Fatalf("status = %s, want %s", file.Status, DriftModified)
+	}
+	if len(file.Symbols) != 0 {
+		t.Fatalf("symbols = %+v, want fail-safe empty evidence", file.Symbols)
+	}
+	if got := reports[0].SymbolVerdict(); got != SymbolVerdictNeedsReview {
+		t.Fatalf("SymbolVerdict() = %q, want %q", got, SymbolVerdictNeedsReview)
+	}
+}
+
 func TestCheckDriftDetectsDeletedFile(t *testing.T) {
 	store := setupTestDB(t)
 	ctx := context.Background()

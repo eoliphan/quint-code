@@ -1265,9 +1265,10 @@ func groupSymbolsByFile(symbols []AffectedSymbol, err error) map[string][]Affect
 // computeSymbolDrift partitions a modified file's change at symbol granularity
 // against its stored baseline. It returns nil — which SymbolVerdict reads as
 // needs-review (fail-safe to the operator) — whenever the file cannot be proven
-// benign: no symbol baseline, an unanalyzable/empty current parse, or a change
-// outside any tracked symbol body. A non-nil result lists each added/modified/
-// removed symbol, the deterministic floor the triage keys off.
+// benign: no symbol baseline, an unanalyzable/empty current parse, a change
+// outside any tracked symbol body, or an existing file whose only symbol delta is
+// additions. Without a stored non-symbol baseline, added symbols in a modified
+// file cannot prove imports/package vars/comments stayed unchanged.
 func computeSymbolDrift(projectRoot, relPath string, baseline []AffectedSymbol) []SymbolDriftItem {
 	if len(baseline) == 0 {
 		return nil
@@ -1294,6 +1295,12 @@ func computeSymbolDrift(projectRoot, relPath string, baseline []AffectedSymbol) 
 		// symbol bodies (imports, package vars, comments). Not provably benign.
 		return nil
 	}
+	if onlyAddedSymbolDrift(drifts) {
+		// The file hash changed and the only visible symbol deltas are additions.
+		// Because the baseline stores symbol hashes, not the old non-symbol gaps,
+		// this could also include import/package-var/comment edits. Fail safe.
+		return nil
+	}
 	items := make([]SymbolDriftItem, 0, len(drifts))
 	for _, d := range drifts {
 		items = append(items, SymbolDriftItem{
@@ -1303,6 +1310,18 @@ func computeSymbolDrift(projectRoot, relPath string, baseline []AffectedSymbol) 
 		})
 	}
 	return items
+}
+
+func onlyAddedSymbolDrift(drifts []codebase.SymbolDrift) bool {
+	if len(drifts) == 0 {
+		return false
+	}
+	for _, d := range drifts {
+		if d.Status != "added" {
+			return false
+		}
+	}
+	return true
 }
 
 func persistDriftManifests(
