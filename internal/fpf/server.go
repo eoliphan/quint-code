@@ -634,6 +634,20 @@ func (s *Server) handleToolsList(req JSONRPCRequest) {
 						"type":        "string",
 						"description": "(evidence) C.28 basis for causal-use claim support. Accepts: observational | interventional | realized_counterfactual | identified_estimate | simulation_only (long FPF forms also accepted). simulation-only caps R_eff at 0.5 per CC-B3.9.",
 					},
+					"_skips": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]string{"type": "string"},
+						"description": "(decide) Tactical-mode required-field bypass list. Requires _skip_reason.",
+					},
+					"_skip": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]string{"type": "string"},
+						"description": "(decide) Legacy alias for _skips; prefer _skips. Requires _skip_reason.",
+					},
+					"_skip_reason": map[string]string{
+						"type":        "string",
+						"description": "(decide) Operator rationale required when _skips/_skip is non-empty.",
+					},
 					"context": map[string]string{"type": "string", "description": "Optional context name"},
 					"mode":    map[string]string{"type": "string", "description": "(decide) tactical, standard (default), deep"},
 				},
