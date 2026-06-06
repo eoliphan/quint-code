@@ -201,9 +201,8 @@ func embeddingConfigFromFile() embedding.Config {
 		embCfg.Model = cfg.Embedding.Model
 		embCfg.Dim = cfg.Embedding.Dim
 	}
-	// Env override (wins over the config file) — the runtime query embedder must
-	// use the SAME model the FPF vectors were baked with, or the contract mismatch
-	// degrades to FTS.
+	// Env override (wins over the config file) for artifact/cross-project recall
+	// experiments. FPF spec search pins its own baked-vector contract.
 	if m := strings.TrimSpace(os.Getenv("HAFT_EMBED_MODEL")); m != "" {
 		embCfg.Model = m
 	}

@@ -53,19 +53,31 @@ func ensureFPFHybrid() *FpfHybrid {
 	return fpfHybrid
 }
 
-// buildFPFHybrid wires the optional FPF spec semantic layer, forcing the baked
-// MRL dimension so the runtime query embeds match the baked vectors. nil when
-// embeddings are disabled by config.
+// buildFPFHybrid wires the optional FPF spec semantic layer. It uses the global
+// config only for the explicit "none" kill switch; FPF query vectors must stay
+// pinned to the committed baked-vector contract.
 func buildFPFHybrid() *FpfHybrid {
-	embCfg := embeddingConfigFromFile()
-	if strings.EqualFold(strings.TrimSpace(embCfg.Provider), embedding.ProviderNone) {
+	embCfg, ok := fpfEmbeddingConfigFrom(embeddingConfigFromFile())
+	if !ok {
 		return nil
 	}
-	embCfg.Dim = specEmbeddingDim
 	newEmbedder := func() (embedding.Embedder, error) {
 		return embedding.New(embCfg)
 	}
 	return NewFpfHybrid(newEmbedder)
+}
+
+func fpfEmbeddingConfigFrom(global embedding.Config) (embedding.Config, bool) {
+	provider := strings.TrimSpace(global.Provider)
+	if strings.EqualFold(provider, embedding.ProviderNone) {
+		return embedding.Config{}, false
+	}
+
+	return embedding.Config{
+		Provider: embedding.ProviderLocal,
+		Model:    embedding.DefaultLocalModel,
+		Dim:      specEmbeddingDim,
+	}, true
 }
 
 // FpfHybrid adds semantic recall to FPF-spec search by fusing the deterministic

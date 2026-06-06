@@ -230,6 +230,37 @@ func TestFpfHybridSearchDoesNotBlockOnColdEmbedderFactory(t *testing.T) {
 	waitForFpfHybridIdle(t, hybrid)
 }
 
+func TestFPFEmbeddingConfigPinsShippedContract(t *testing.T) {
+	global := embedding.Config{
+		Provider: embedding.ProviderOpenAI,
+		Model:    "text-embedding-3-large",
+		Dim:      3072,
+	}
+
+	got, ok := fpfEmbeddingConfigFrom(global)
+	if !ok {
+		t.Fatal("expected FPF embeddings to stay enabled")
+	}
+	if got.Provider != embedding.ProviderLocal {
+		t.Fatalf("provider = %q, want %q", got.Provider, embedding.ProviderLocal)
+	}
+	if got.Model != embedding.DefaultLocalModel {
+		t.Fatalf("model = %q, want %q", got.Model, embedding.DefaultLocalModel)
+	}
+	if got.Dim != specEmbeddingDim {
+		t.Fatalf("dim = %d, want %d", got.Dim, specEmbeddingDim)
+	}
+}
+
+func TestFPFEmbeddingConfigHonorsDisabledProvider(t *testing.T) {
+	global := embedding.Config{Provider: " none "}
+
+	_, ok := fpfEmbeddingConfigFrom(global)
+	if ok {
+		t.Fatal("expected provider=none to disable FPF embeddings")
+	}
+}
+
 func TestBuildFPFSearchFunc_UsesSharedRetriever(t *testing.T) {
 	dbPath := buildFPFSearchTestDB(t)
 
