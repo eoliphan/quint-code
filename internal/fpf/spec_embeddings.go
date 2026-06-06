@@ -308,8 +308,9 @@ func HydrateSections(db *sql.DB, ids []int) (map[int]SpecSearchResult, error) {
 	for _, id := range ids {
 		var r SpecSearchResult
 		var patternID sql.NullString
-		err := db.QueryRow(`SELECT pattern_id, heading, summary FROM sections WHERE id=?`, id).
-			Scan(&patternID, &r.Heading, &r.Summary)
+		var bodyPrefix string
+		err := db.QueryRow(`SELECT pattern_id, heading, summary, substr(body, 1, 280) FROM sections WHERE id=?`, id).
+			Scan(&patternID, &r.Heading, &r.Summary, &bodyPrefix)
 		if err == sql.ErrNoRows {
 			continue
 		}
@@ -320,6 +321,7 @@ func HydrateSections(db *sql.DB, ids []int) (map[int]SpecSearchResult, error) {
 		r.PatternID = patternID.String
 		r.Tier = "semantic"
 		r.Reason = "semantic match"
+		r.Snippet = firstNonEmpty(bodyPrefix, r.Summary, r.Heading)
 		out[id] = r
 	}
 	return out, nil

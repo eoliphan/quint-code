@@ -815,6 +815,37 @@ func TestSearchFTSSectionIDsUsesExplicitSectionID(t *testing.T) {
 	}
 }
 
+func TestHydrateSectionsPopulatesSemanticSnippet(t *testing.T) {
+	chunks := []SpecChunk{
+		{
+			ID:      7,
+			Heading: "Semantic prose",
+			Level:   2,
+			Body:    "Semantic-only body excerpt should survive hydration for default retrieval output.",
+			Summary: "Semantic summary.",
+		},
+	}
+
+	_, db, cleanup := buildIndexWithChunks(t, chunks, false)
+	defer cleanup()
+
+	results, err := HydrateSections(db, []int{7})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, ok := results[7]
+	if !ok {
+		t.Fatalf("expected hydrated section 7, got %#v", results)
+	}
+	if result.Snippet == "" {
+		t.Fatalf("expected semantic hit snippet, got %#v", result)
+	}
+	if !strings.Contains(result.Snippet, "Semantic-only body excerpt") {
+		t.Fatalf("expected body excerpt snippet, got %q", result.Snippet)
+	}
+}
+
 func TestSearchSpec_NoResults(t *testing.T) {
 	_, db, cleanup := buildTestIndex(t)
 	defer cleanup()
