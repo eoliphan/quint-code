@@ -306,8 +306,7 @@ func makeV5Handler(store *artifact.Store, searcher recall.Searcher, crossHybrid 
 func dispatchTool(ctx context.Context, store *artifact.Store, searcher recall.Searcher, haftDir string, name string, args map[string]any) (string, string, error) {
 	switch name {
 	case "haft_note":
-		result, err := handleQuintNote(ctx, store, haftDir, args)
-		return result, "", err
+		return handleQuintNote(ctx, store, haftDir, args)
 	case "haft_problem":
 		result, err := handleQuintProblem(ctx, store, haftDir, args)
 		return result, "", err
@@ -646,7 +645,7 @@ func resolveSymbolAnchor(ctx context.Context, syms *codebase.SymbolStore, ref st
 	}
 }
 
-func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string, args map[string]any) (string, error) {
+func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string, args map[string]any) (string, string, error) {
 	input := artifact.NoteInput{}
 	if v, ok := args["title"].(string); ok {
 		input.Title = v
@@ -676,7 +675,7 @@ func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string,
 		}
 		as, err := resolveSymbolAnchor(ctx, symStore, an.Ref)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		input.AffectedSymbols = append(input.AffectedSymbols, as)
 	}
@@ -688,7 +687,7 @@ func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string,
 	navStrip := present.NavStrip(artifact.ComputeNavState(ctx, store, input.Context))
 
 	if !validation.OK {
-		return present.NoteRejection(validation, navStrip), nil
+		return present.NoteRejection(validation, navStrip), "", nil
 	}
 
 	a, filePath, err := artifact.CreateNote(ctx, store, haftDir, input)
@@ -698,10 +697,10 @@ func handleQuintNote(ctx context.Context, store *artifact.Store, haftDir string,
 		if errors.As(err, &ww) {
 			validation.Warnings = append(validation.Warnings, ww.Warnings...)
 		} else {
-			return "", err
+			return "", "", err
 		}
 	}
-	return present.NoteResponse(a, filePath, validation, navStrip), nil
+	return present.NoteResponse(a, filePath, validation, navStrip), a.Meta.ID, nil
 }
 
 func handleQuintProblem(ctx context.Context, store *artifact.Store, haftDir string, args map[string]any) (string, error) {
