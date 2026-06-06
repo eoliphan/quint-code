@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -137,6 +138,44 @@ func (f *fakeEmbedderProj) Embed(_ context.Context, _ embedding.Role, texts []st
 
 func (f *fakeEmbedderProj) Close() error { return nil }
 
+func blockingCrossFactory(embedder embedding.Embedder) (func() (embedding.Embedder, error), <-chan struct{}, func()) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	var releaseOnce sync.Once
+	factory := func() (embedding.Embedder, error) {
+		startedOnce.Do(func() {
+			close(started)
+		})
+		<-release
+		return embedder, nil
+	}
+	releaseFactory := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	return factory, started, releaseFactory
+}
+
+func waitForCrossHybridIdle(t *testing.T, hybrid *CrossHybrid) {
+	t.Helper()
+
+	deadline := time.Now().Add(1 * time.Second)
+	for {
+		hybrid.mu.Lock()
+		building := hybrid.building
+		hybrid.mu.Unlock()
+		if !building {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cross hybrid warm did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func projTopicVector(text string) []float32 {
 	lower := strings.ToLower(text)
 	switch {
@@ -201,6 +240,54 @@ func TestCrossHybridFiltersSelfSemanticHits(t *testing.T) {
 	if rankIn(results, "other|dec-other") >= crossRankMiss {
 		t.Fatalf("other-project semantic hit should remain after filtering self hits: %v", recallIDs(results))
 	}
+}
+
+func TestCrossHybridSearchNonBlockingDuringColdEmbedderStart(t *testing.T) {
+	ctx := context.Background()
+	store := newTempIndexStore(t)
+	seedDecision(t, ctx, store, "haft", "dec-brier", "Calibration of decision predictions via Brier scoring", "decomposed Brier", "measure overconfidence in forecasts")
+	seedDecision(t, ctx, store, "haft", "dec-other", "Ceremony auto-scaler safety floor", "hard floor", "block risky changes from tactical")
+
+	factory, started, releaseFactory := blockingCrossFactory(&fakeEmbedderProj{})
+	defer releaseFactory()
+
+	hybrid := NewCrossHybrid(store, factory)
+	hybrid.Prewarm()
+	select {
+	case <-started:
+	case <-time.After(1 * time.Second):
+		t.Fatal("background cross-project embedder start did not begin")
+	}
+
+	want, err := store.Search(ctx, "brier zzznomatch", "other", "go", 5)
+	if err != nil {
+		t.Fatalf("store search: %v", err)
+	}
+
+	type searchResult struct {
+		results []IndexRecall
+		err     error
+	}
+	done := make(chan searchResult, 1)
+	go func() {
+		results, err := hybrid.Search(ctx, "brier zzznomatch", "other", "go", 5)
+		done <- searchResult{results: results, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("hybrid search: %v", got.err)
+		}
+		if !reflect.DeepEqual(want, got.results) {
+			t.Fatalf("cold embedder degrade not byte-identical to FTS:\n want %#v\n got  %#v", want, got.results)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Search blocked behind cold cross-project embedder startup")
+	}
+
+	releaseFactory()
+	waitForCrossHybridIdle(t, hybrid)
 }
 
 // queryFaultEmbedder embeds documents fine (so Warm builds a ready index) but

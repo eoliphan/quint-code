@@ -13,6 +13,7 @@ import (
 // SpecSearchResult represents a single FPF spec search hit.
 type SpecSearchResult struct {
 	PatternID string
+	SectionID int
 	Heading   string
 	Summary   string
 	Snippet   string
@@ -53,7 +54,10 @@ type Route struct {
 }
 
 // SpecIndexSchemaVersion identifies the current SQLite index layout contract.
-const SpecIndexSchemaVersion = "2"
+// v4 adds explicit fpf_fts.section_id so FTS rows join through the canonical
+// section key. Empty fpf_embeddings is valid for sidecar-less builds; the runtime
+// treats schema_version mismatch or zero matching vectors as FTS-only.
+const SpecIndexSchemaVersion = "4"
 
 // SpecIndexInfo exposes inspectable build provenance for the embedded index.
 type SpecIndexInfo struct {
@@ -131,7 +135,7 @@ func BuildSpecIndex(dbPath string, chunks []SpecChunk, routes []Route) error {
 			queries_json TEXT NOT NULL DEFAULT '[]',
 			aliases_json TEXT NOT NULL DEFAULT '[]'
 		)`,
-		`CREATE VIRTUAL TABLE fpf_fts USING fts5(pattern_id, heading, body, keywords, queries, aliases, tokenize='porter unicode61')`,
+		`CREATE VIRTUAL TABLE fpf_fts USING fts5(section_id UNINDEXED, pattern_id, heading, body, keywords, queries, aliases, tokenize='porter unicode61')`,
 		`CREATE TABLE section_edges (
 			from_pattern_id TEXT NOT NULL,
 			to_pattern_id TEXT NOT NULL,
@@ -146,6 +150,22 @@ func BuildSpecIndex(dbPath string, chunks []SpecChunk, routes []Route) error {
 			chain_json TEXT NOT NULL
 		)`,
 		`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`,
+		// Optional baked per-section embeddings for hybrid semantic search.
+		// Keyed by section_id (the only stable per-row key — pattern_id is
+		// nullable + non-unique) plus the model contract (provider/model/dim);
+		// content_hash gates re-embedding a changed section. Created empty by
+		// the index build; populated by a separate bake pass when haft-embed is
+		// present. Drop = recompute, never a migration.
+		`CREATE TABLE fpf_embeddings (
+			section_id INTEGER NOT NULL,
+			provider TEXT NOT NULL,
+			model TEXT NOT NULL,
+			dim INTEGER NOT NULL,
+			content_hash TEXT NOT NULL,
+			vector BLOB NOT NULL,
+			PRIMARY KEY (section_id, provider, model, dim),
+			FOREIGN KEY (section_id) REFERENCES sections(id)
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -164,7 +184,7 @@ func BuildSpecIndex(dbPath string, chunks []SpecChunk, routes []Route) error {
 	}
 	defer func() { _ = secIns.Close() }()
 
-	ftsIns, err := tx.Prepare(`INSERT INTO fpf_fts (pattern_id, heading, body, keywords, queries, aliases) VALUES (?, ?, ?, ?, ?, ?)`)
+	ftsIns, err := tx.Prepare(`INSERT INTO fpf_fts (section_id, pattern_id, heading, body, keywords, queries, aliases) VALUES (?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -190,7 +210,7 @@ func BuildSpecIndex(dbPath string, chunks []SpecChunk, routes []Route) error {
 		if _, err := secIns.Exec(c.ID, nullIfEmpty(c.PatternID), c.Heading, c.Level, c.Body, c.Summary, nullIfEmpty(c.ParentPatternID), keywordsJSON, queriesJSON, aliasesJSON); err != nil {
 			return fmt.Errorf("insert section %d: %w", c.ID, err)
 		}
-		if _, err := ftsIns.Exec(c.PatternID, c.Heading, c.Body, strings.Join(c.Keywords, " "), strings.Join(c.Queries, " "), strings.Join(c.Aliases, " ")); err != nil {
+		if _, err := ftsIns.Exec(c.ID, c.PatternID, c.Heading, c.Body, strings.Join(c.Keywords, " "), strings.Join(c.Queries, " "), strings.Join(c.Aliases, " ")); err != nil {
 			return fmt.Errorf("insert fts section %d: %w", c.ID, err)
 		}
 		for _, edge := range c.Edges {
@@ -748,9 +768,9 @@ func searchFTS(db *sql.DB, query string, limit int) ([]SpecSearchResult, error) 
 
 func runFTSQuery(db *sql.DB, ftsQuery string, limit int) ([]SpecSearchResult, error) {
 	rows, err := db.Query(`
-		SELECT s.pattern_id, s.heading, s.summary, snippet(fpf_fts, 2, '>>>', '<<<', '...', 64), rank
+		SELECT s.id, s.pattern_id, s.heading, s.summary, snippet(fpf_fts, 3, '>>>', '<<<', '...', 64), rank
 		FROM fpf_fts
-		JOIN sections s ON s.id = fpf_fts.rowid - 1
+		JOIN sections s ON s.id = fpf_fts.section_id
 		WHERE fpf_fts MATCH ?
 			AND s.pattern_id IS NOT NULL
 			AND s.pattern_id <> ''
@@ -766,7 +786,7 @@ func runFTSQuery(db *sql.DB, ftsQuery string, limit int) ([]SpecSearchResult, er
 	for rows.Next() {
 		var r SpecSearchResult
 		var patternID sql.NullString
-		if err := rows.Scan(&patternID, &r.Heading, &r.Summary, &r.Snippet, &r.Rank); err != nil {
+		if err := rows.Scan(&r.SectionID, &patternID, &r.Heading, &r.Summary, &r.Snippet, &r.Rank); err != nil {
 			return nil, err
 		}
 		r.PatternID = patternID.String

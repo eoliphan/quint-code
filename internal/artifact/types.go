@@ -730,10 +730,21 @@ const (
 
 // DriftItem describes drift for a single file.
 type DriftItem struct {
-	Path         string      `json:"path"`
-	Status       DriftStatus `json:"status"`
-	LinesChanged string      `json:"lines_changed,omitempty"` // e.g., "+8 -2"
-	Invariants   []string    `json:"invariants,omitempty"`
+	Path         string            `json:"path"`
+	Status       DriftStatus       `json:"status"`
+	LinesChanged string            `json:"lines_changed,omitempty"` // e.g., "+8 -2"
+	Invariants   []string          `json:"invariants,omitempty"`
+	Symbols      []SymbolDriftItem `json:"symbols,omitempty"` // symbol-level breakdown for a modified file
+}
+
+// SymbolDriftItem is the per-symbol change inside a modified governed file.
+// It is the deterministic signal the session-start triage partitions on:
+// a file whose only symbol drift is "added" is structurally additive; any
+// "modified" or "removed" symbol means a governed body changed.
+type SymbolDriftItem struct {
+	SymbolName string `json:"symbol_name"`
+	SymbolKind string `json:"symbol_kind"` // func, type, class, interface, method
+	Status     string `json:"status"`      // "added", "modified", "removed"
 }
 
 // DriftReport describes drift for a single decision.
@@ -744,6 +755,64 @@ type DriftReport struct {
 	LikelyImplemented bool           `json:"likely_implemented,omitempty"` // no baseline but files changed in git since decision
 	Files             []DriftItem    `json:"files,omitempty"`
 	ImpactedModules   []ModuleImpact `json:"impacted_modules,omitempty"` // Level C: impact propagation
+}
+
+// Symbol-level triage verdicts for a drift report. These partition session-start
+// drift deterministically so benign additive drift can be auto-baselined while
+// anything touching a governed symbol body is surfaced to the operator.
+const (
+	// SymbolVerdictAdditiveOnly: every modified file's drift is provably
+	// additive (new symbols only) — safe to re-baseline without operator review.
+	SymbolVerdictAdditiveOnly = "additive_only"
+	// SymbolVerdictGovernedModified: a governed symbol body was modified or
+	// removed (or a file deleted) — must reach the operator.
+	SymbolVerdictGovernedModified = "governed_modified"
+	// SymbolVerdictNeedsReview: the partition could not be proven benign
+	// (no symbol baseline, unanalyzable language, or a change outside any
+	// tracked symbol body) — fail-safe to the operator.
+	SymbolVerdictNeedsReview = "needs_review"
+)
+
+// SymbolVerdict classifies this report's drift by symbol-level change. It is
+// conservative by construction: a decision is SymbolVerdictAdditiveOnly only
+// when EVERY modified file is provably additive; any governed-symbol
+// modification/removal, deleted file, or unanalyzable change routes to the
+// operator. This is the kernel-computed floor the agent triage keys off —
+// never the agent's eyeball judgment.
+func (r DriftReport) SymbolVerdict() string {
+	sawAdditive := false
+	needsReview := false
+	for _, f := range r.Files {
+		switch f.Status {
+		case DriftMissing:
+			return SymbolVerdictGovernedModified
+		case DriftModified:
+			if len(f.Symbols) == 0 {
+				// File changed but no symbol evidence: extraction unavailable
+				// or the change sits outside any tracked symbol body. Cannot
+				// prove benign — fail-safe.
+				needsReview = true
+				continue
+			}
+			for _, s := range f.Symbols {
+				if s.Status != "added" {
+					return SymbolVerdictGovernedModified
+				}
+			}
+			sawAdditive = true
+		case DriftAdded:
+			sawAdditive = true
+		case DriftNoBaseline:
+			needsReview = true
+		}
+	}
+	if needsReview {
+		return SymbolVerdictNeedsReview
+	}
+	if sawAdditive {
+		return SymbolVerdictAdditiveOnly
+	}
+	return SymbolVerdictNeedsReview
 }
 
 // ModuleImpact describes a dependent module affected by drift propagation.

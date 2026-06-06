@@ -49,8 +49,18 @@ jobs:
             echo "FPF updated: ${OLD_SHA:0:7} → ${NEW_SHA:0:7}"
           fi
 
-      - name: Rebuild FTS5 index
+      - name: Set up Rust
         if: steps.check.outputs.changed == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build embedding sidecar
+        if: steps.check.outputs.changed == 'true'
+        run: cargo build --release --manifest-path embed-sidecar/Cargo.toml
+
+      - name: Rebuild FPF index
+        if: steps.check.outputs.changed == 'true'
+        env:
+          HAFT_EMBED_BIN: ${{ github.workspace }}/embed-sidecar/target/release/haft-embed
         run: |
           NEW_SHA=${{ steps.check.outputs.new_sha }}
           go run ./cmd/indexer/ data/FPF/FPF-Spec.md internal/cli/fpf.db "$NEW_SHA"
@@ -82,7 +92,7 @@ jobs:
 
           Submodule \`data/FPF\` updated to [\`${SHORT}\`](https://github.com/ailev/FPF/commit/$NEW_SHA).
 
-          FTS5 index rebuilt: \`internal/cli/fpf.db\`
+          FPF index rebuilt: \`internal/cli/fpf.db\` (FTS5 + baked vectors)
 
           **Previous:** [\`${OLD_SHORT}\`](https://github.com/ailev/FPF/commit/$OLD_SHA)
           **New:** [\`${SHORT}\`](https://github.com/ailev/FPF/commit/$NEW_SHA)" \

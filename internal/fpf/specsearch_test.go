@@ -740,6 +740,112 @@ func TestSearchSpec_FTSIgnoresBlankPatternSections(t *testing.T) {
 	}
 }
 
+func TestSearchSpec_FTSUsesExplicitSectionID(t *testing.T) {
+	chunks := []SpecChunk{
+		{
+			ID:      0,
+			Heading: "Spec prose",
+			Level:   2,
+			Body:    "Plain prose without the target phrase.",
+		},
+		{
+			ID:        PatternChunkIDBase,
+			Heading:   "TEST-01 - Pattern Card",
+			Level:     2,
+			Body:      "Noncontiguous card targetphrase.",
+			PatternID: "TEST-01",
+			Keywords:  []string{"targetphrase"},
+		},
+	}
+
+	_, db, cleanup := buildIndexWithChunks(t, chunks, false)
+	defer cleanup()
+
+	results, err := SearchSpecWithOptions(db, "targetphrase", SpecSearchOptions{
+		Limit: 5,
+		Tier:  SpecSearchTierFTS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected noncontiguous pattern-card FTS hit")
+	}
+	if results[0].SectionID != PatternChunkIDBase {
+		t.Fatalf("section id = %d, want %d", results[0].SectionID, PatternChunkIDBase)
+	}
+	if results[0].PatternID != "TEST-01" {
+		t.Fatalf("pattern id = %q, want TEST-01", results[0].PatternID)
+	}
+}
+
+func TestSearchFTSSectionIDsUsesExplicitSectionID(t *testing.T) {
+	chunks := []SpecChunk{
+		{
+			ID:      0,
+			Heading: "Spec prose",
+			Level:   2,
+			Body:    "Plain prose without the target phrase.",
+		},
+		{
+			ID:        PatternChunkIDBase,
+			Heading:   "TEST-01 - Pattern Card",
+			Level:     2,
+			Body:      "Noncontiguous card hybridtarget.",
+			PatternID: "TEST-01",
+			Keywords:  []string{"hybridtarget"},
+		},
+	}
+
+	_, db, cleanup := buildIndexWithChunks(t, chunks, false)
+	defer cleanup()
+
+	results, err := SearchFTSSectionIDs(db, "hybridtarget", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected noncontiguous pattern-card section FTS hit")
+	}
+	if results[0].SectionID != PatternChunkIDBase {
+		t.Fatalf("section id = %d, want %d", results[0].SectionID, PatternChunkIDBase)
+	}
+	if results[0].PatternID != "TEST-01" {
+		t.Fatalf("pattern id = %q, want TEST-01", results[0].PatternID)
+	}
+}
+
+func TestHydrateSectionsPopulatesSemanticSnippet(t *testing.T) {
+	chunks := []SpecChunk{
+		{
+			ID:      7,
+			Heading: "Semantic prose",
+			Level:   2,
+			Body:    "Semantic-only body excerpt should survive hydration for default retrieval output.",
+			Summary: "Semantic summary.",
+		},
+	}
+
+	_, db, cleanup := buildIndexWithChunks(t, chunks, false)
+	defer cleanup()
+
+	results, err := HydrateSections(db, []int{7})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, ok := results[7]
+	if !ok {
+		t.Fatalf("expected hydrated section 7, got %#v", results)
+	}
+	if result.Snippet == "" {
+		t.Fatalf("expected semantic hit snippet, got %#v", result)
+	}
+	if !strings.Contains(result.Snippet, "Semantic-only body excerpt") {
+		t.Fatalf("expected body excerpt snippet, got %q", result.Snippet)
+	}
+}
+
 func TestSearchSpec_NoResults(t *testing.T) {
 	_, db, cleanup := buildTestIndex(t)
 	defer cleanup()

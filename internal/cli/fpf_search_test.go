@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/m0n0x41d/haft/internal/embedding"
 	"github.com/m0n0x41d/haft/internal/fpf"
 	"github.com/m0n0x41d/haft/internal/tools"
 	_ "modernc.org/sqlite"
@@ -74,76 +77,6 @@ func TestRunFPFSearch_FullFlagLoadsFullSectionBody(t *testing.T) {
 	}
 }
 
-func TestRunFPFSemanticSearch_ExplainAndFull(t *testing.T) {
-	dbPath := buildFPFSearchTestDB(t)
-
-	restoreOpen := stubOpenFPFDB(t, dbPath)
-	defer restoreOpen()
-
-	artifactPath := filepath.Join(t.TempDir(), "semantic-cli.json.gz")
-	embedder := newCLISemanticTestEmbedder()
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("sql.Open returned error: %v", err)
-	}
-	if err := fpf.BuildSemanticArtifact(context.Background(), db, embedder, artifactPath); err != nil {
-		_ = db.Close()
-		t.Fatalf("BuildSemanticArtifact returned error: %v", err)
-	}
-	_ = db.Close()
-
-	restoreFactory := stubFPFSemanticEmbedderFactory(t, func(model string, dimensions int) (fpf.SemanticEmbedder, error) {
-		return embedder, nil
-	})
-	defer restoreFactory()
-
-	restoreFlags := stubFPFSemanticSearchFlags(t, 1, true, true, artifactPath, "test-semantic-cli", 6)
-	defer restoreFlags()
-
-	output, err := captureStdout(t, func() error {
-		return runFPFSemanticSearch(nil, []string{"boundary", "contract", "unpacking"})
-	})
-	if err != nil {
-		t.Fatalf("runFPFSemanticSearch returned error: %v", err)
-	}
-	if !strings.Contains(output, "tier: semantic · semantic route seed Boundary discipline and routing") {
-		t.Fatalf("expected semantic explain metadata, got:\n%s", output)
-	}
-	if !strings.Contains(output, "TAIL-MARKER") {
-		t.Fatalf("expected semantic --full output to include the full section body, got:\n%s", output)
-	}
-}
-
-func TestRunFPFSemanticIndex_BuildsArtifact(t *testing.T) {
-	dbPath := buildFPFSearchTestDB(t)
-
-	restoreOpen := stubOpenFPFDB(t, dbPath)
-	defer restoreOpen()
-
-	artifactPath := filepath.Join(t.TempDir(), "semantic-build.json.gz")
-	embedder := newCLISemanticTestEmbedder()
-	restoreFactory := stubFPFSemanticEmbedderFactory(t, func(model string, dimensions int) (fpf.SemanticEmbedder, error) {
-		return embedder, nil
-	})
-	defer restoreFactory()
-
-	restoreFlags := stubFPFSemanticSearchFlags(t, 0, false, false, artifactPath, "test-semantic-cli", 6)
-	defer restoreFlags()
-
-	output, err := captureStdout(t, func() error {
-		return runFPFSemanticIndex(nil, nil)
-	})
-	if err != nil {
-		t.Fatalf("runFPFSemanticIndex returned error: %v", err)
-	}
-	if !strings.Contains(output, artifactPath) {
-		t.Fatalf("expected artifact path in output, got:\n%s", output)
-	}
-	if _, err := os.Stat(artifactPath); err != nil {
-		t.Fatalf("expected built artifact at %q: %v", artifactPath, err)
-	}
-}
-
 func TestRunFPFSearch_TreeModeIsExplicitAndReachable(t *testing.T) {
 	dbPath := buildFPFSearchTestDB(t)
 
@@ -196,6 +129,222 @@ func TestRetrieveEmbeddedFPF_ReturnsStructuredResults(t *testing.T) {
 	}
 }
 
+func TestRetrieveEmbeddedFPF_InitializesHybridForStandaloneCLI(t *testing.T) {
+	dbPath := buildFPFSearchTestDB(t)
+
+	restoreOpen := stubOpenFPFDB(t, dbPath)
+	defer restoreOpen()
+
+	originalHybrid := fpfHybrid
+	originalBuilder := buildFPFHybridFunc
+	fpfHybrid = nil
+	buildCalls := 0
+	buildFPFHybridFunc = func() *FpfHybrid {
+		buildCalls++
+		return NewFpfHybrid(nil)
+	}
+	defer func() {
+		fpfHybrid = originalHybrid
+		buildFPFHybridFunc = originalBuilder
+	}()
+
+	_, err := retrieveEmbeddedFPF(fpf.SpecRetrievalRequest{
+		Query: "A.6",
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("retrieveEmbeddedFPF returned error: %v", err)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("buildFPFHybridFunc calls = %d, want 1", buildCalls)
+	}
+	if fpfHybrid == nil {
+		t.Fatal("retrieveEmbeddedFPF did not initialize fpfHybrid")
+	}
+}
+
+func TestFpfHybridSearchDoesNotBlockOnColdEmbedderFactory(t *testing.T) {
+	dbPath := buildFPFSearchTestDB(t)
+
+	restoreOpen := stubOpenFPFDB(t, dbPath)
+	defer restoreOpen()
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	var releaseOnce sync.Once
+	releaseFactory := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	defer releaseFactory()
+
+	hybrid := NewFpfHybrid(func() (embedding.Embedder, error) {
+		startedOnce.Do(func() {
+			close(started)
+		})
+		<-release
+		return fpfSearchTestEmbedder{}, nil
+	})
+
+	hybrid.Prewarm()
+	select {
+	case <-started:
+	case <-time.After(1 * time.Second):
+		t.Fatal("background FPF embedder start did not begin")
+	}
+
+	type searchResult struct {
+		results []fpf.SpecSearchResult
+		err     error
+	}
+	done := make(chan searchResult, 1)
+	go func() {
+		results, err := hybrid.Search(db, "A.6", 1)
+		done <- searchResult{results: results, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("Search returned error: %v", got.err)
+		}
+		if len(got.results) == 0 {
+			t.Fatal("Search returned no deterministic fallback results")
+		}
+		if got.results[0].PatternID != "A.6" {
+			t.Fatalf("Search returned %q, want deterministic A.6 fallback", got.results[0].PatternID)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Search blocked behind cold FPF embedder startup")
+	}
+
+	releaseFactory()
+	waitForFpfHybridIdle(t, hybrid)
+}
+
+func TestFpfHybridSearchBuildsSynchronouslyOnFirstSearch(t *testing.T) {
+	dbPath := buildFPFSearchTestDB(t)
+	bakeFPFSearchTestEmbeddings(t, dbPath)
+
+	restoreOpen := stubOpenFPFDB(t, dbPath)
+	defer restoreOpen()
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	buildCalls := 0
+	hybrid := NewFpfHybrid(func() (embedding.Embedder, error) {
+		buildCalls++
+		return fpfSearchTestEmbedder{}, nil
+	})
+
+	results, err := hybrid.Search(db, "semantic-only", 2)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("embedder factory calls = %d, want 1", buildCalls)
+	}
+	if !hasSearchTier(results, "semantic") {
+		t.Fatalf("expected first search to include semantic hits, got %#v", results)
+	}
+}
+
+func TestFPFEmbeddingConfigPinsShippedContract(t *testing.T) {
+	global := embedding.Config{
+		Provider: embedding.ProviderOpenAI,
+		Model:    "text-embedding-3-large",
+		Dim:      3072,
+	}
+
+	got, ok := fpfEmbeddingConfigFrom(global)
+	if !ok {
+		t.Fatal("expected FPF embeddings to stay enabled")
+	}
+	if got.Provider != embedding.ProviderLocal {
+		t.Fatalf("provider = %q, want %q", got.Provider, embedding.ProviderLocal)
+	}
+	if got.Model != embedding.DefaultLocalModel {
+		t.Fatalf("model = %q, want %q", got.Model, embedding.DefaultLocalModel)
+	}
+	if got.Dim != specEmbeddingDim {
+		t.Fatalf("dim = %d, want %d", got.Dim, specEmbeddingDim)
+	}
+}
+
+func TestFPFEmbeddingConfigHonorsDisabledProvider(t *testing.T) {
+	global := embedding.Config{Provider: " none "}
+
+	_, ok := fpfEmbeddingConfigFrom(global)
+	if ok {
+		t.Fatal("expected provider=none to disable FPF embeddings")
+	}
+}
+
+func TestFpfHybridResolveEmbedderClosesRaceLoser(t *testing.T) {
+	embedders := []*trackedFPFEmbedder{
+		{fpfSearchTestEmbedder: fpfSearchTestEmbedder{}},
+		{fpfSearchTestEmbedder: fpfSearchTestEmbedder{}},
+	}
+
+	started := make(chan struct{}, len(embedders))
+	release := make(chan struct{})
+	var mu sync.Mutex
+	next := 0
+
+	hybrid := NewFpfHybrid(func() (embedding.Embedder, error) {
+		mu.Lock()
+		if next >= len(embedders) {
+			mu.Unlock()
+			t.Fatal("unexpected extra embedder factory call")
+		}
+		embedder := embedders[next]
+		next++
+		mu.Unlock()
+
+		started <- struct{}{}
+		<-release
+		return embedder, nil
+	})
+
+	done := make(chan embedding.Embedder, len(embedders))
+	for range embedders {
+		go func() {
+			done <- hybrid.resolveEmbedder()
+		}()
+	}
+
+	waitForStarts(t, started, len(embedders))
+	close(release)
+
+	first := waitForEmbedder(t, done)
+	second := waitForEmbedder(t, done)
+	if first != second {
+		t.Fatalf("expected both callers to receive cached winner, got %p and %p", first, second)
+	}
+
+	closed := 0
+	for _, embedder := range embedders {
+		if embedder.isClosed() {
+			closed++
+		}
+	}
+	if closed != 1 {
+		t.Fatalf("closed duplicate embedders = %d, want 1", closed)
+	}
+}
+
 func TestBuildFPFSearchFunc_UsesSharedRetriever(t *testing.T) {
 	dbPath := buildFPFSearchTestDB(t)
 
@@ -221,6 +370,130 @@ func TestBuildFPFSearchFunc_UsesSharedRetriever(t *testing.T) {
 	}
 	if !strings.Contains(output, "TAIL-MARKER") {
 		t.Fatalf("expected agent output to use the shared full-content retrieval, got:\n%s", output)
+	}
+}
+
+type fpfSearchTestEmbedder struct{}
+
+func (f fpfSearchTestEmbedder) Descriptor() embedding.Descriptor {
+	return embedding.Descriptor{Provider: "fake", Model: "topic-v1", Dimensions: specEmbeddingDim}
+}
+
+func (f fpfSearchTestEmbedder) Embed(_ context.Context, _ embedding.Role, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		vector := make([]float32, specEmbeddingDim)
+		vector[0] = 1
+		out[i] = vector
+	}
+	return out, nil
+}
+
+func (f fpfSearchTestEmbedder) Close() error {
+	return nil
+}
+
+type trackedFPFEmbedder struct {
+	fpfSearchTestEmbedder
+
+	mu     sync.Mutex
+	closed bool
+}
+
+func (e *trackedFPFEmbedder) Close() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.closed = true
+	return nil
+}
+
+func (e *trackedFPFEmbedder) isClosed() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return e.closed
+}
+
+type fpfSearchSpecEmbedder struct{}
+
+func (f fpfSearchSpecEmbedder) Descriptor() fpf.SemanticEmbedderDescriptor {
+	descriptor := fpfSearchTestEmbedder{}.Descriptor()
+	return fpf.SemanticEmbedderDescriptor{
+		Provider:   descriptor.Provider,
+		Model:      descriptor.Model,
+		Dimensions: descriptor.Dimensions,
+	}
+}
+
+func (f fpfSearchSpecEmbedder) EmbedTexts(ctx context.Context, texts []string) ([][]float32, error) {
+	return fpfSearchTestEmbedder{}.Embed(ctx, embedding.RoleDocument, texts)
+}
+
+func bakeFPFSearchTestEmbeddings(t *testing.T, dbPath string) {
+	t.Helper()
+
+	if err := fpf.SetSpecMeta(dbPath, "schema_version", fpf.SpecIndexSchemaVersion); err != nil {
+		t.Fatalf("SetSpecMeta schema_version failed: %v", err)
+	}
+
+	baked, err := fpf.BakeSpecEmbeddings(context.Background(), dbPath, fpfSearchSpecEmbedder{}, fpf.ScopeAllSections)
+	if err != nil {
+		t.Fatalf("BakeSpecEmbeddings failed: %v", err)
+	}
+	if baked == 0 {
+		t.Fatal("BakeSpecEmbeddings baked no vectors")
+	}
+}
+
+func hasSearchTier(results []fpf.SpecSearchResult, tier string) bool {
+	for _, result := range results {
+		if result.Tier == tier {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForStarts(t *testing.T, started <-chan struct{}, want int) {
+	t.Helper()
+
+	for range want {
+		select {
+		case <-started:
+		case <-time.After(1 * time.Second):
+			t.Fatalf("waited for %d embedder factory starts", want)
+		}
+	}
+}
+
+func waitForEmbedder(t *testing.T, done <-chan embedding.Embedder) embedding.Embedder {
+	t.Helper()
+
+	select {
+	case embedder := <-done:
+		return embedder
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for resolveEmbedder")
+	}
+	return nil
+}
+
+func waitForFpfHybridIdle(t *testing.T, hybrid *FpfHybrid) {
+	t.Helper()
+
+	deadline := time.Now().Add(1 * time.Second)
+	for {
+		hybrid.mu.Lock()
+		building := hybrid.building
+		hybrid.mu.Unlock()
+		if !building {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("FPF hybrid warm did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -428,6 +701,12 @@ func stubOpenFPFDB(t *testing.T, dbPath string) func() {
 	t.Helper()
 
 	original := openFPFDBFunc
+	originalHybrid := fpfHybrid
+	originalBuilder := buildFPFHybridFunc
+	fpfHybrid = nil
+	buildFPFHybridFunc = func() *FpfHybrid {
+		return nil
+	}
 	openFPFDBFunc = func() (*sql.DB, func(), error) {
 		db, err := sql.Open("sqlite", dbPath)
 		if err != nil {
@@ -441,6 +720,8 @@ func stubOpenFPFDB(t *testing.T, dbPath string) func() {
 
 	return func() {
 		openFPFDBFunc = original
+		fpfHybrid = originalHybrid
+		buildFPFHybridFunc = originalBuilder
 	}
 }
 
@@ -466,97 +747,6 @@ func stubFPFSearchFlags(t *testing.T, limit int, full bool, explain bool, tier s
 		fpfSearchTier = originalTier
 		fpfSearchMode = originalMode
 	}
-}
-
-func stubFPFSemanticSearchFlags(
-	t *testing.T,
-	limit int,
-	full bool,
-	explain bool,
-	artifactPath string,
-	model string,
-	dimensions int,
-) func() {
-	t.Helper()
-
-	originalLimit := fpfSemanticSearchLimit
-	originalFull := fpfSemanticSearchFull
-	originalExplain := fpfSemanticSearchExplain
-	originalArtifactPath := fpfSemanticArtifactPath
-	originalModel := fpfSemanticModel
-	originalDimensions := fpfSemanticDimensions
-
-	fpfSemanticSearchLimit = limit
-	fpfSemanticSearchFull = full
-	fpfSemanticSearchExplain = explain
-	fpfSemanticArtifactPath = artifactPath
-	fpfSemanticModel = model
-	fpfSemanticDimensions = dimensions
-
-	return func() {
-		fpfSemanticSearchLimit = originalLimit
-		fpfSemanticSearchFull = originalFull
-		fpfSemanticSearchExplain = originalExplain
-		fpfSemanticArtifactPath = originalArtifactPath
-		fpfSemanticModel = originalModel
-		fpfSemanticDimensions = originalDimensions
-	}
-}
-
-func stubFPFSemanticEmbedderFactory(
-	t *testing.T,
-	factory func(model string, dimensions int) (fpf.SemanticEmbedder, error),
-) func() {
-	t.Helper()
-
-	original := newFPFSemanticEmbedder
-	newFPFSemanticEmbedder = factory
-
-	return func() {
-		newFPFSemanticEmbedder = original
-	}
-}
-
-type cliSemanticTestEmbedder struct{}
-
-func newCLISemanticTestEmbedder() cliSemanticTestEmbedder {
-	return cliSemanticTestEmbedder{}
-}
-
-func (cliSemanticTestEmbedder) Descriptor() fpf.SemanticEmbedderDescriptor {
-	return fpf.SemanticEmbedderDescriptor{
-		Provider:   "test",
-		Model:      "test-semantic-cli",
-		Dimensions: 6,
-	}
-}
-
-func (cliSemanticTestEmbedder) EmbedTexts(ctx context.Context, texts []string) ([][]float32, error) {
-	_ = ctx
-
-	vectors := make([][]float32, 0, len(texts))
-	for _, text := range texts {
-		lower := strings.ToLower(text)
-		vectors = append(vectors, []float32{
-			axisScore(lower, "boundary", "contract", "routing"),
-			axisScore(lower, "norm", "square", "deontic"),
-			axisScore(lower, "decision", "record", "rationale"),
-			0,
-			0,
-			0,
-		})
-	}
-	return vectors, nil
-}
-
-func axisScore(text string, terms ...string) float32 {
-	score := float32(0)
-	for _, term := range terms {
-		if strings.Contains(text, term) {
-			score++
-		}
-	}
-	return score
 }
 
 func captureStdout(t *testing.T, fn func() error) (string, error) {

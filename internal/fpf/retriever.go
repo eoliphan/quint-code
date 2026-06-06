@@ -7,18 +7,23 @@ import (
 
 const SpecRetrievalModeSemantic = "semantic"
 
+// SpecRetrievalModeFTS forces the deterministic FTS+tier path, bypassing the
+// hybrid — a reproducible escape hatch.
+const SpecRetrievalModeFTS = "fts"
+
 // SpecRetrievalRequest captures deterministic spec retrieval controls for
 // higher-level agent, CLI, and MCP surfaces.
 type SpecRetrievalRequest struct {
-	Query                   string
-	Limit                   int
-	Tier                    string
-	Full                    bool
-	Mode                    string
-	SemanticArtifactPath    string
-	SemanticMinScore        float64
-	SemanticEmbedder        SemanticEmbedder
-	SemanticEmbedderFactory func() (SemanticEmbedder, error)
+	Query string
+	Limit int
+	Tier  string
+	Full  bool
+	Mode  string
+	// HybridSearch, when set by the composition root, makes spec search hybrid
+	// (FTS+graph fused with baked section vectors) BY DEFAULT. fpf stays
+	// provider-free: the implementation lives in the shell (internal/cli) and is
+	// injected as this func. nil => the deterministic SearchSpecWithOptions path.
+	HybridSearch func(db *sql.DB, query string, limit int) ([]SpecSearchResult, error)
 }
 
 // SpecRetrievalResult is the structured retrieval response returned to shell
@@ -60,29 +65,48 @@ func RetrieveSpec(db *sql.DB, request SpecRetrievalRequest) (SpecRetrievalResult
 }
 
 func retrieveSpecSearchResults(db *sql.DB, query string, request SpecRetrievalRequest) ([]SpecSearchResult, error) {
-	switch normalizeSpecRetrievalMode(request.Mode) {
-	case SpecRetrievalModeSemantic:
-		return SearchSpecSemantically(db, query, SemanticSearchOptions{
-			Limit:           request.Limit,
-			MinScore:        request.SemanticMinScore,
-			ArtifactPath:    request.SemanticArtifactPath,
-			Embedder:        request.SemanticEmbedder,
-			EmbedderFactory: request.SemanticEmbedderFactory,
-		})
-	default:
+	deterministic := func() ([]SpecSearchResult, error) {
+		// Only the tree sub-mode is a SearchSpecWithOptions mode; retrieval-layer
+		// modes (fts, the retired semantic) map to the deterministic default.
+		specMode := ""
+		if strings.EqualFold(strings.TrimSpace(request.Mode), SpecSearchModeTree) {
+			specMode = SpecSearchModeTree
+		}
 		return SearchSpecWithOptions(db, query, SpecSearchOptions{
 			Limit: request.Limit,
 			Tier:  request.Tier,
-			Mode:  request.Mode,
+			Mode:  specMode,
 		})
 	}
+	// Explicit controls force the reproducible deterministic path. HybridSearch
+	// only accepts query+limit, so it cannot honor tier filters or tree mode.
+	if hasExplicitSpecRetrievalControls(request) {
+		return deterministic()
+	}
+	// Hybrid by default when the composition root wired it (degrade-safe — the
+	// hybrid itself falls back to the deterministic path when the sidecar or
+	// baked vectors are unavailable).
+	if request.HybridSearch != nil {
+		return request.HybridSearch(db, query, request.Limit)
+	}
+	return deterministic()
+}
+
+func hasExplicitSpecRetrievalControls(request SpecRetrievalRequest) bool {
+	if strings.TrimSpace(request.Tier) != "" {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(request.Mode), SpecSearchModeTree) {
+		return true
+	}
+	return normalizeSpecRetrievalMode(request.Mode) == SpecRetrievalModeFTS
 }
 
 func normalizeSpecRetrievalMode(mode string) string {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	switch mode {
-	case SpecRetrievalModeSemantic:
-		return SpecRetrievalModeSemantic
+	case SpecRetrievalModeFTS:
+		return SpecRetrievalModeFTS
 	}
 	return ""
 }

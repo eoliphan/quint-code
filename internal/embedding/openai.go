@@ -1,8 +1,8 @@
 // Package embedding provides concrete embedding-model implementations used by
-// the optional FPF semantic-search prototype. The abstract SemanticEmbedder
-// interface lives in internal/fpf (Core layer); this package owns the
-// provider-bound implementations so the Core layer stays free of provider /
-// agent / flow imports.
+// the FPF baked-vector hybrid path (BakeSpecEmbeddings). The abstract
+// SemanticEmbedder interface lives in internal/fpf (Core layer); this package
+// owns the provider-bound implementations so the Core layer stays free of
+// provider / agent / flow imports.
 package embedding
 
 import (
