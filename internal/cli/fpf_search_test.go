@@ -1,13 +1,17 @@
 package cli
 
 import (
+	"context"
 	"database/sql"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/m0n0x41d/haft/internal/embedding"
 	"github.com/m0n0x41d/haft/internal/fpf"
 	"github.com/m0n0x41d/haft/internal/tools"
 	_ "modernc.org/sqlite"
@@ -159,6 +163,73 @@ func TestRetrieveEmbeddedFPF_InitializesHybridForStandaloneCLI(t *testing.T) {
 	}
 }
 
+func TestFpfHybridSearchDoesNotBlockOnColdEmbedderFactory(t *testing.T) {
+	dbPath := buildFPFSearchTestDB(t)
+
+	restoreOpen := stubOpenFPFDB(t, dbPath)
+	defer restoreOpen()
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	var releaseOnce sync.Once
+	releaseFactory := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	defer releaseFactory()
+
+	hybrid := NewFpfHybrid(func() (embedding.Embedder, error) {
+		startedOnce.Do(func() {
+			close(started)
+		})
+		<-release
+		return fpfSearchTestEmbedder{}, nil
+	})
+
+	hybrid.Prewarm()
+	select {
+	case <-started:
+	case <-time.After(1 * time.Second):
+		t.Fatal("background FPF embedder start did not begin")
+	}
+
+	type searchResult struct {
+		results []fpf.SpecSearchResult
+		err     error
+	}
+	done := make(chan searchResult, 1)
+	go func() {
+		results, err := hybrid.Search(db, "A.6", 1)
+		done <- searchResult{results: results, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("Search returned error: %v", got.err)
+		}
+		if len(got.results) == 0 {
+			t.Fatal("Search returned no deterministic fallback results")
+		}
+		if got.results[0].PatternID != "A.6" {
+			t.Fatalf("Search returned %q, want deterministic A.6 fallback", got.results[0].PatternID)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Search blocked behind cold FPF embedder startup")
+	}
+
+	releaseFactory()
+	waitForFpfHybridIdle(t, hybrid)
+}
+
 func TestBuildFPFSearchFunc_UsesSharedRetriever(t *testing.T) {
 	dbPath := buildFPFSearchTestDB(t)
 
@@ -184,6 +255,44 @@ func TestBuildFPFSearchFunc_UsesSharedRetriever(t *testing.T) {
 	}
 	if !strings.Contains(output, "TAIL-MARKER") {
 		t.Fatalf("expected agent output to use the shared full-content retrieval, got:\n%s", output)
+	}
+}
+
+type fpfSearchTestEmbedder struct{}
+
+func (f fpfSearchTestEmbedder) Descriptor() embedding.Descriptor {
+	return embedding.Descriptor{Provider: "fake", Model: "topic-v1", Dimensions: specEmbeddingDim}
+}
+
+func (f fpfSearchTestEmbedder) Embed(_ context.Context, _ embedding.Role, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		vector := make([]float32, specEmbeddingDim)
+		vector[0] = 1
+		out[i] = vector
+	}
+	return out, nil
+}
+
+func (f fpfSearchTestEmbedder) Close() error {
+	return nil
+}
+
+func waitForFpfHybridIdle(t *testing.T, hybrid *FpfHybrid) {
+	t.Helper()
+
+	deadline := time.Now().Add(1 * time.Second)
+	for {
+		hybrid.mu.Lock()
+		building := hybrid.building
+		hybrid.mu.Unlock()
+		if !building {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("FPF hybrid warm did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -391,6 +500,12 @@ func stubOpenFPFDB(t *testing.T, dbPath string) func() {
 	t.Helper()
 
 	original := openFPFDBFunc
+	originalHybrid := fpfHybrid
+	originalBuilder := buildFPFHybridFunc
+	fpfHybrid = nil
+	buildFPFHybridFunc = func() *FpfHybrid {
+		return nil
+	}
 	openFPFDBFunc = func() (*sql.DB, func(), error) {
 		db, err := sql.Open("sqlite", dbPath)
 		if err != nil {
@@ -404,6 +519,8 @@ func stubOpenFPFDB(t *testing.T, dbPath string) func() {
 
 	return func() {
 		openFPFDBFunc = original
+		fpfHybrid = originalHybrid
+		buildFPFHybridFunc = originalBuilder
 	}
 }
 

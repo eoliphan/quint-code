@@ -203,18 +203,33 @@ func (h *Hybrid) warmAsync() {
 // degrade to FTS5+PPR, not a failure.
 func (h *Hybrid) resolveEmbedder() embedding.Embedder {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.embedderUnavailable || h.newEmbedder == nil {
 		h.embedderUnavailable = true
+		h.mu.Unlock()
 		return nil
 	}
 	if h.embedder != nil {
+		embedder := h.embedder
+		h.mu.Unlock()
+		return embedder
+	}
+	newEmbedder := h.newEmbedder
+	h.mu.Unlock()
+
+	embedder, err := newEmbedder()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.embedder != nil {
 		return h.embedder
 	}
-	embedder, err := h.newEmbedder()
 	if err != nil {
 		h.embedderUnavailable = true
 		logger.Info().Err(err).Msg("embedding sidecar unavailable — hybrid recall degrades to FTS5+PPR")
+		return nil
+	}
+	if embedder == nil {
+		h.embedderUnavailable = true
 		return nil
 	}
 	h.embedder = embedder

@@ -245,18 +245,33 @@ func (h *CrossHybrid) warmAsync() {
 
 func (h *CrossHybrid) resolveEmbedder() embedding.Embedder {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.embedderUnavailable || h.newEmbedder == nil {
 		h.embedderUnavailable = true
+		h.mu.Unlock()
 		return nil
 	}
 	if h.embedder != nil {
+		embedder := h.embedder
+		h.mu.Unlock()
+		return embedder
+	}
+	newEmbedder := h.newEmbedder
+	h.mu.Unlock()
+
+	embedder, err := newEmbedder()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.embedder != nil {
 		return h.embedder
 	}
-	embedder, err := h.newEmbedder()
 	if err != nil {
 		h.embedderUnavailable = true
 		logger.Info().Err(err).Msg("embedding sidecar unavailable — cross-project recall degrades to FTS")
+		return nil
+	}
+	if embedder == nil {
+		h.embedderUnavailable = true
 		return nil
 	}
 	h.embedder = embedder

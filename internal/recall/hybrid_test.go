@@ -74,6 +74,26 @@ func staticFactory(embedder embedding.Embedder) func() (embedding.Embedder, erro
 	return func() (embedding.Embedder, error) { return embedder, nil }
 }
 
+func blockingFactory(embedder embedding.Embedder) (func() (embedding.Embedder, error), <-chan struct{}, func()) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	var releaseOnce sync.Once
+	factory := func() (embedding.Embedder, error) {
+		startedOnce.Do(func() {
+			close(started)
+		})
+		<-release
+		return embedder, nil
+	}
+	releaseFactory := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	return factory, started, releaseFactory
+}
+
 func topicVector(text string) []float32 {
 	lower := strings.ToLower(text)
 	switch {
@@ -155,6 +175,24 @@ func testDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store.GetRawDB()
+}
+
+func waitForHybridIdle(t *testing.T, hybrid *Hybrid) {
+	t.Helper()
+
+	deadline := time.Now().Add(1 * time.Second)
+	for {
+		hybrid.mu.Lock()
+		building := hybrid.building
+		hybrid.mu.Unlock()
+		if !building {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("hybrid warm did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // TestHybridPromotesSemanticHit is the killer case: the document that FTS ranks
@@ -259,6 +297,49 @@ func TestHybridSearchNonBlockingBeforeWarm(t *testing.T) {
 	if len(results) == 0 {
 		t.Fatal("first search before warm should still return FTS results, got none")
 	}
+}
+
+func TestHybridSearchNonBlockingDuringColdEmbedderStart(t *testing.T) {
+	corpus := []*artifact.Artifact{
+		decisionArtifact("dec-1", "A", "alpha"),
+		decisionArtifact("dec-2", "B", "beta"),
+	}
+	src := fakeSource{corpus: corpus, ftsOrder: corpus}
+	factory, started, releaseFactory := blockingFactory(&fakeEmbedder{})
+	defer releaseFactory()
+
+	hybrid := NewHybrid(src, factory, testDB(t))
+	hybrid.Prewarm()
+	select {
+	case <-started:
+	case <-time.After(1 * time.Second):
+		t.Fatal("background embedder start did not begin")
+	}
+
+	type searchResult struct {
+		results []*artifact.Artifact
+		err     error
+	}
+	done := make(chan searchResult, 1)
+	go func() {
+		results, err := hybrid.Search(context.Background(), "alpha", 5)
+		done <- searchResult{results: results, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("search: %v", got.err)
+		}
+		if orderIDs(got.results) != "dec-1,dec-2" {
+			t.Fatalf("cold embedder should pass through FTS order, got %s", orderIDs(got.results))
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Search blocked behind cold embedder startup")
+	}
+
+	releaseFactory()
+	waitForHybridIdle(t, hybrid)
 }
 
 // TestHybridInvalidatePicksUpNewArtifact proves Invalidate triggers a background
