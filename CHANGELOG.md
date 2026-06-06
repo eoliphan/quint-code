@@ -16,6 +16,11 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 
 ### Removed
 
+- **Artifact-based FPF "semantic search" prototype** (`haft fpf semantic-search`
+  / `haft fpf semantic-index` and the `.json.gz` semantic artifact). Superseded
+  by the baked-vector FPF hybrid (see Added); the dead command surface and the
+  `BuildSemanticArtifact` / `SearchSpecSemantically` path are gone. The live
+  `haft fpf search` / `section` / `info` commands are unchanged.
 - `haft agent` standalone interactive agent — all of `internal/agentcore`,
   `internal/agentdriver`, `internal/agentproto`, `internal/agentserver`,
   `internal/agentstore`
@@ -263,6 +268,22 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
   AND-only) → 0.75 (OR-fallback) → 1.00 (hybrid), MRR → 1.00. Implements
   `dec-20260605-8096a563`; the shipped per-project recall is untouched and
   `internal/project` gains no `recall` import (no cycle).
+- **Semantic recall over the FPF spec itself (baked into `fpf.db`).** FPF spec
+  retrieval is now hybrid-by-default: a reworded "how do I think about X"
+  question recovers the right pattern by meaning, not just keyword. Per-section
+  vectors are **baked into the embedded `fpf.db` at index time** (committed,
+  deterministic — end users never embed the ~5700-section spec), keyed by
+  `section_id` + model contract (`fpf_embeddings`, spec schema v3). The runtime
+  fuses section-level FTS5 with **two SEPARATE cosine arms — pattern cards and
+  spec prose — plus a card-priority merge**: a single pooled index let the
+  ~5600 prose sections drown the 66 thinking-pattern cards (measured card R@10
+  collapse 0.88 → 0.24), so cards and prose are ranked in their own
+  populations. On paraphrased queries this recovers both — pattern-card R@10
+  **0.24 → 0.88** (MRR 0.728) and spec-prose R@10 **0.00 → 0.47** over
+  deterministic FTS. Degrades byte-identically to the deterministic tier+FTS
+  path when the sidecar or baked vectors are absent. CI only **verifies** the
+  committed index is fresh + vector-baked (`indexer -verify`); the heavy CPU
+  bake runs on the maintainer's machine, never on a runner.
 - **Decomposed-Brier calibration on decision predictions.** A decision
   prediction can now carry an optional `probability` in `[0,1]` (sampled as
   2–3 noisy votes, never one authoritative number); verified outcomes feed a
@@ -314,6 +335,13 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 
 ### Changed
 
+- **Embedding sidecar defaults to int8-quantized EmbeddingGemma.** The local
+  `haft-embed` sidecar now defaults to `embeddinggemma-300m-q`: measured
+  retrieval parity with the fp32 model (FPF card R@10 0.88, MRR ~0.73) at a
+  **~304 MB first-use model download instead of ~1.1 GB**. Applies to every
+  embedding consumer (FPF spec, per-project and cross-project recall); the baked
+  FPF vectors carry the same model id so the runtime contract matches. Selectable
+  via `config.embedding.model` (`embeddinggemma-300m` for fp32, `-q4` for 4-bit).
 - **`/h-fpf` renamed to `/h-reason` and expanded into a full FPF
   reasoning umbrella.** The v8 pivot had split the old `/h-reason` into
   15 specialized skills + a narrow `/h-fpf` fallback, betting that
@@ -425,6 +453,12 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 
 ### Fixed
 
+- **Embedding bake no longer OOMs on the full spec corpus.** The FPF vector
+  bake batched 256 sections per sidecar round-trip; transformer attention is
+  O(batch · seq²), so a batch of long sections built a multi-GB activation
+  tensor and the sidecar ballooned past 6 GB and stalled. The batch is bounded
+  small (peak activation back in the low hundreds of MB), with negligible
+  throughput cost.
 - **Terminal-status artifacts no longer resurface as expiry debt** — the
   `haft_refresh` stale-collection path now excludes `deprecated` / `superseded`
   artifacts, matching the active-decision scan's status filter. An archived-but-

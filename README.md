@@ -4,9 +4,9 @@
 
 **FPF governance substrate for AI-assisted software delivery.**
 
-Your agents (Claude Code, Codex, etc.) write code fast. Most repositories are
-not ready for serious harness engineering: the target system is underspecified,
-the enabling system is implicit, term maps are missing, and runtime evidence is
+Your agents (Claude Code, Codex) write code fast. Most repositories are not ready
+for serious harness engineering: the target system is underspecified, the
+enabling system is implicit, term maps are missing, and runtime evidence is
 detached from the spec. Haft makes the project harnessable before it scales
 execution.
 
@@ -16,43 +16,66 @@ execution.
 
 Haft is a **governance substrate** that makes a repository harnessable for
 principal-led FPF engineering work. It turns problem frames, comparisons,
-decisions, commissions, and evidence into auditable artifacts with structured
-enforcement at the kernel boundary.
+decisions, commissions, and evidence into auditable artifacts, with enforcement
+at the kernel boundary.
 
 **Specify → Think → Run → Govern.**
 
-Not a coding agent. Not a generic documentation tool. The handle between the
-tool and the hand — the part that turns raw capability into formal
+Not a coding agent. Not a documentation generator. The handle between the tool
+and the hand: the part that turns raw model capability into formal
 specification, governed decisions, bounded commissions, and evidence-backed
 engineering work.
 
 ### Three surfaces, one artifact graph
 
-Haft is consumed via three surfaces sharing one `.haft/` artifact graph:
+Haft is consumed through three surfaces over one `.haft/` artifact graph:
 
-- **Skills + slash commands** in your AI coding agent (Claude Code, Codex, OpenCode, Cursor) — auto-trigger workflow skills + manual `/h-frame /h-decide /h-verify ...` commands
-- **CLI** (`haft problem`, `haft solution`, `haft decision`, ...) — direct manual access without an LLM in the loop
-- **MCP server** (`haft serve`) — programmatic access for any LLM agent through the Model Context Protocol
+- **Skills + slash commands** in your coding agent (Claude Code, Codex, OpenCode, Cursor) — workflow skills auto-trigger; `/h-frame /h-decide /h-verify ...` run manually
+- **CLI** (`haft problem`, `haft solution`, `haft decision`, ...) — manual access, no LLM in the loop
+- **MCP server** (`haft serve`) — programmatic access for any LLM agent over the Model Context Protocol
 
-The kernel MCP server is the **cross-host enforcement surface**: it validates
-args server-side and returns structured errors for FPF discipline violations
-(missing required fields, parity gaps, weakest-link omissions, predictions
-without verify_after, etc.). Skills carry the procedural instructions; the
-kernel carries the gates.
+The kernel MCP server is the cross-host enforcement surface: it validates
+arguments server-side and returns structured errors for FPF violations (missing
+required fields, parity gaps, weakest-link omissions, predictions without
+verify_after). Skills carry the procedure; the kernel carries the gates.
 
-### What changed in v8 (governance substrate pivot)
+### What changed in v8
 
 v8 dropped the standalone interactive agent (`haft agent`), the TUI, and the
-desktop wrappers. Per [dec-20260525-v8-architecture-pivot]
-(`.haft/decisions/dec-20260525-v8-architecture-pivot-from-standalone-agent-to-g-bbe45cb7.md`),
-haft no longer competes with general coding agents on the runtime surface —
-it adds governance discipline on top of whichever coding agent the operator
-already uses. See the pivot DRR for the full rationale, parity-compared
-variants, rollback plan, and falsifiable predictions.
+desktop wrappers. Haft no longer competes with general coding agents on the
+runtime surface — it adds governance discipline on top of whichever agent you
+already use. The pivot, with parity-compared variants, rollback plan, and
+falsifiable predictions, is recorded in
+`.haft/decisions/dec-20260525-v8-architecture-pivot-from-standalone-agent-to-g-bbe45cb7.md`.
 
-**Upgrading from v7?** Read [MIGRATION-v8.md](MIGRATION-v8.md) — short upgrade
-checklist plus what was dropped (`haft agent`, TUI, desktop, `/h-reason`,
-v7 helper commands) and what replaced it.
+Upgrading from v7? See [MIGRATION-v8.md](MIGRATION-v8.md) — the upgrade checklist
+plus what was dropped (`haft agent`, TUI, desktop, v7 helper commands).
+
+---
+
+## Built on First Principles Framework
+
+[FPF](https://github.com/ailev/FPF) by
+[Anatoly Levenchuk](https://www.linkedin.com/in/ailev/) — a rigorous,
+transdisciplinary architecture for thinking.
+
+The skill set (`h-frame`, `h-explore`, `h-compare`, `h-decide`, `h-verify`, and
+the full catalog below) gives your agent an FPF-native operating system for
+engineering decisions: framing before solutions, characterization before
+comparison, parity enforcement, evidence with congruence penalties,
+weakest-link assurance, and a cycle that reopens itself when evidence ages or a
+measurement fails.
+
+The framing and comparison skills auto-trigger on operator context. The binding
+step (`h-decide`, `h-commission`) is manual-only per the Transformer Mandate:
+agents frame and compare; the human principal records the binding choice.
+
+`haft fpf search` (and `haft_query(action="fpf")` from MCP) searches the indexed
+FPF specification. Retrieval is hybrid: exact pattern id first, then keyword
+(FTS5) fused with semantic recall over baked section vectors, so a reworded "how
+do I think about X" finds the pattern that answers it. The vectors ship inside
+the binary; semantic recall degrades to keyword when the embedding sidecar is
+absent.
 
 ---
 
@@ -62,89 +85,53 @@ v7 helper commands) and what replaced it.
 curl -fsSL https://raw.githubusercontent.com/m0n0x41d/haft/main/install.sh | bash
 ```
 
-The install URL still points at the historical `quint-code` repository path. The installed binary is `haft`.
+The install URL still points at the historical `quint-code` path. The installed
+binary is `haft`.
 
-Then in your project, run init **with your supported host-agent flag**:
-
-```bash
-# Claude Code (default if no flag)
-haft init
-
-# Claude Code with repo-local commands
-haft init --local
-
-# Codex CLI / Codex App
-haft init --codex
-
-# Claude Code + Codex
-haft init --all
-```
-
-v7 supported embedded host-agent surfaces:
-
-```text
-Claude Code
-Codex CLI / Codex App
-```
-
-Cursor, Gemini CLI, JetBrains Air, and generic MCP clients remain
-experimental/legacy integration targets. Their flags may exist while the
-runtime and docs converge, but v7 product support is intentionally narrowed to
-Claude Code and Codex.
+Then in your project, init with your host-agent flag:
 
 ```bash
-# Experimental Cursor config
-haft init --cursor
-
-# Experimental Gemini CLI config
-haft init --gemini
-
-# Experimental OpenCode config
-haft init --opencode
+haft init            # Claude Code (default)
+haft init --local    # Claude Code, repo-local commands
+haft init --codex    # Codex CLI / Codex App
+haft init --all      # Claude Code + Codex
 ```
+
+Claude Code and Codex are the supported hosts. Cursor, Gemini CLI, and OpenCode
+have experimental config flags (`--cursor`, `--gemini`, `--opencode`) while
+their runtime and docs converge.
+
+**Cursor:** after init, open Settings → MCP → find `haft` → enable the toggle.
+Cursor adds MCP servers disabled by default.
 
 ### What init does per tool
 
-The binary is the same — only the MCP config and command/prompt installation
-locations differ. Supported v8 hosts:
+The binary is the same; only the MCP config and command/skill install locations
+differ.
 
-| Tool | MCP Config | Commands / Prompts | Skills |
+| Tool | MCP config | Commands / prompts | Skills |
 |------|-----------|--------------------|--------|
-| Claude Code | `.mcp.json` (project root) | `~/.claude/commands/` or `.claude/commands/` with `--local` | `~/.claude/skills/` (15 skills installed, see catalog below) |
-| Codex CLI / Codex App | `.codex/config.toml` | `~/.codex/prompts/` or `.codex/prompts/` with `--local` | `~/.agents/skills/` (15 skills + per-command skills) |
+| Claude Code | `.mcp.json` (project root) | `~/.claude/commands/` (or `.claude/commands/` with `--local`) | `~/.claude/skills/` (15 skills) |
+| Codex CLI / App | `.codex/config.toml` | `~/.codex/prompts/` (or `.codex/prompts/` with `--local`) | `~/.agents/skills/` (15 skills) |
 
-Experimental/legacy hosts:
+Project-scoped configs (`.mcp.json`, `.codex/config.toml`) use portable
+project-root paths, so they are safe to commit for shared repositories.
 
-| Tool | MCP Config | Commands / Prompts | Skill |
-|------|-----------|--------------------|-------|
-| Cursor | `.cursor/mcp.json` | `~/.cursor/commands/` or `.cursor/commands/` with `--local` | `~/.cursor/skills/` (v8 skill set; some skills route via prompts on hosts that don't surface skills natively) |
-| Gemini CLI | `~/.gemini/settings.json` | `~/.gemini/commands/` or local install with `--local` | — (commands only) |
-| OpenCode | `opencode.json` (project root) | `~/.config/opencode/commands/` or `.opencode/commands/` with `--local` | `~/.config/opencode/skills/` (v8 skill set) |
-| Air | `.codex/config.toml` | project `skills/` | project `skills/` (v8 skill set) |
+Existing project? Run `/h-onboard` after init. It builds a parseable
+target-system spec, enabling-system spec, term map, and spec-coverage graph —
+not just a codebase summary.
 
-**Important for Cursor:** After init, open Cursor Settings → MCP → find `haft` → enable the toggle. Cursor adds MCP servers as disabled by default.
-
-Project-scoped MCP configs are safe to commit for shared repositories: Claude
-Code `.mcp.json` and Codex `.codex/config.toml` use portable project-root
-values instead of your machine's absolute checkout path.
-
-Existing project? Run `/h-onboard` after init. The target direction is deeper
-than codebase summarization: onboarding should build a parseable target-system
-spec, enabling-system spec, term map, and spec coverage graph before broad
-harness execution.
-
-Check the spec carriers locally with:
+Check spec carriers locally:
 
 ```bash
 haft spec check
 haft spec check --json
 ```
 
-`haft spec check` is intentionally deterministic L0/L1/L1.5 only: it parses
-fenced `yaml spec-section` blocks, checks required structural fields, validates
-known carrier shapes, and verifies that the term-map carrier contains parseable
-term entries. It does not make L2 semantic judgments, perform LLM review, prove
-product correctness, or make L3 runtime/evidence claims.
+`haft spec check` is deterministic L0/L1/L1.5 only: it parses fenced
+`yaml spec-section` blocks, checks required structural fields, validates known
+carrier shapes, and confirms the term-map carrier parses. It makes no L2
+semantic judgment, no LLM review, and no L3 runtime claim.
 
 ---
 
@@ -154,13 +141,13 @@ product correctness, or make L3 runtime/evidence claims.
 
 | Tool | What it does |
 |------|-------------|
-| `haft_note` | Micro-decisions with validation + auto-expiry |
-| `haft_problem` | Frame problems, define comparison dimensions with roles |
-| `haft_solution` | Explore variants with diversity check, compare with parity |
-| `haft_decision` | Decision contract with invariants, claims, evidence, baseline lifecycle |
-| `haft_commission` | WorkCommission create/list/claim lifecycle for execution harnesses |
-| `haft_refresh` | Lifecycle management for all artifacts |
-| `haft_query` | Search, status dashboard, file-to-decision lookup, FPF spec search |
+| `haft_note` | Micro-decisions — atomic facts with typed anchors, validation, auto-expiry |
+| `haft_problem` | Frame problems, declare comparison dimensions with indicator roles |
+| `haft_solution` | Explore variants with diversity check, compare under parity |
+| `haft_decision` | Decision contracts: invariants, claims, evidence, baseline lifecycle |
+| `haft_commission` | WorkCommission lifecycle for execution harnesses |
+| `haft_refresh` | Lifecycle management for every artifact kind |
+| `haft_query` | Search, status dashboard, code graph (callers/callees/impact/explore — each reached symbol fused with the decisions governing it), FPF spec search |
 
 ### Fifteen skills installed by `haft init`
 
@@ -168,191 +155,139 @@ product correctness, or make L3 runtime/evidence claims.
 |---|---|---|
 | **h-reason** | auto (umbrella) | Full FPF reasoning palette in one entry — framing, exploration, comparison, verification, notes, plus slideument patterns (Goldilocks, NQD, BLP, Scaling-Law Lens). Manual `/h-reason` always works; auto-fires on broad "let's think this through" signals where no specialized skill matches sharply. |
 | **h-frame** | auto | Frame a problem with B.4.1 stabilize + problem typing + umbrella-word repair |
-| **h-diagnose** | auto | Diagnose a failure with parallel hypothesis testing (Agent subagents per hypothesis to prevent anchoring) |
+| **h-diagnose** | auto | Diagnose a failure with parallel hypothesis testing (one Agent subagent per hypothesis to prevent anchoring) |
 | **h-explore** | auto | Generate distinct candidate variants with NQD diversity discipline (parallel direction-assigned agents) |
-| **h-compare** | auto | Fair comparison with dim-wise parallel scoring + Pareto front (NOT a scalar winner) |
+| **h-compare** | auto | Fair comparison with dim-wise parallel scoring + Pareto front (not a scalar winner) |
 | **h-decide** | **manual** | Record a binding DecisionRecord with full DRR — Transformer Mandate (`disable-model-invocation`) |
 | **h-verify** | auto | Baseline → measure → evidence loop with drift detection |
 | **h-status** | auto | Read-only project FPF state dashboard |
 | **h-onboard** | auto | First-frame ceremony for projects new to haft |
-| **h-spec-cover** | auto | Spec coverage check with blind/stale module triage |
+| **h-spec-cover** | auto | Spec-coverage check with blind/stale module triage |
 | **h-note** | auto | Lightweight micro-decision recording |
-| **h-commission** | **manual** | WorkCommission lifecycle — sacred per Transformer Mandate (`disable-model-invocation`) |
+| **h-commission** | **manual** | WorkCommission lifecycle — manual per Transformer Mandate (`disable-model-invocation`) |
 | **h-abduct** | subroutine | Pure B.5.2 abductive four-step (frame prompt → ≥3 rivals → filters → prime) |
 | **h-boundary-unpack** | subroutine | A.6.B L/A/D/E decomposition of boundary statements |
-| **h-semio-review** | subroutine | X-FANOUT-AUDIT — concept rename / spec consistency audit |
+| **h-semio-review** | subroutine | X-FANOUT-AUDIT — concept-rename / spec-consistency audit |
 
 Auto-triggering skills fire when their description matches operator context.
-Manual-only skills (h-decide, h-commission) require explicit `/h-skill-name`
-invocation per Transformer Mandate (binding artifacts come from the human
-principal, not the agent). Subroutines (h-abduct, h-boundary-unpack,
-h-semio-review) are typically called from other skills or invoked explicitly
-when working on a specific FPF sub-discipline.
+Manual-only skills (`h-decide`, `h-commission`) require explicit invocation per
+the Transformer Mandate — binding artifacts come from the human principal, not
+the agent. Subroutines (`h-abduct`, `h-boundary-unpack`, `h-semio-review`) are
+called from other skills or invoked explicitly when working a specific FPF
+sub-discipline.
 
-The skill catalog plus their routing reliability is testable via
-`haft check routing` (40 golden prompts, current pass rate 82.5%).
+Routing reliability is testable: `haft check routing` runs 40 golden prompts
+(current pass rate 82.5%).
 
-### From decision to code: `haft run`
+### Evidence workflow
 
-Once you have a decision, implement it:
+Attach evidence with `haft_decision(action="evidence", ...)`. Evidence carries
+formality levels (F0–F3), congruence levels (CL0–CL3), and expiry dates. Trust
+scores (R_eff) degrade as evidence ages; stale evidence triggers refresh. Use
+`haft_decision(action="measure", ...)` for post-implementation verification.
+
+### Harness — execution engine (beta, Codex only)
+
+The harness implements code from `DecisionRecord` artifacts under a real Codex
+agent in an isolated workspace. It is **beta**, and the execution agent is
+**Codex only** — there is no Claude execution path. Single-commission
+`haft harness run` is the trustworthy operator path; drain mode and auto-apply
+are validated on docs-class commissions, so treat them as beta on
+production-code commissions.
+
+Two entry points spawn the engine. `haft run` implements one decision directly:
 
 ```bash
 haft run dec-20260414-001
 ```
 
-Haft reads the decision's invariants, claims, affected files, and governing invariants from the knowledge graph — then spawns an agent (Codex or Claude) with full reasoning context. After execution, takes a baseline snapshot automatically.
+It reads the decision's invariants, claims, and affected files from the graph,
+builds a prompt with full reasoning context, spawns a Codex agent with the
+invariants as guardrails, and takes a baseline snapshot on completion.
 
-```
-operator: "let's think about the caching layer"
-  ↓ h-frame auto-triggers in Claude Code / Codex
-  ↓ h-explore generates variants
-  ↓ h-compare produces Pareto front
-  ↓ operator picks → /h-decide records DRR (manual, per Transformer Mandate)
-  ↓
-haft run dec-20260414-001 --agent codex
-  ↓ reads decision → builds prompt → spawns agent
-  ↓ agent implements with invariants as guardrails
-  ↓ baseline snapshot on completion
-  ↓
-haft check
-  ↓ verify governance health
-```
-
-### WorkCommission harness
-
-Open-Sleigh uses `WorkCommission` as the bounded execution authority between a
-DecisionRecord and a runtime run. In plugin mode, use `/h-commission` to create
-the missing WorkCommissions without starting execution. In Codex this installs
-as an explicit-only `$h-commission` skill.
-
-The packaged CLI path is:
+`haft harness` runs commissioned work through Open-Sleigh, with scope guards
+(`allowed_paths` / `forbidden_paths`), per-commission locks, and discrete
+revertable apply commits:
 
 ```bash
-haft harness run --prepare-only  # create/reuse commissions, do not start runtime
-haft harness run                 # create/reuse commissions and start Open-Sleigh
-haft harness status              # inspect active/recent runs
-haft harness result wc-...       # inspect one completed run and workspace diff
-haft harness apply wc-...        # apply a completed workspace patch to this checkout
+haft harness run --prepare-only      # create/reuse commissions, do not start runtime
+haft harness run                     # create/reuse commissions and start Open-Sleigh
+haft harness run --drain --concurrency 4   # drain the queue (apply still manual by default)
+haft harness status                  # inspect active/recent runs
+haft harness result wc-...           # inspect one completed run and its workspace diff
+haft harness apply wc-...            # apply a completed workspace patch to this checkout
 ```
 
-Broad harness execution is blocked for `needs_onboard` projects by default. If
-you intentionally need tactical out-of-spec work, pass
-`--force-skip-specs "..."`; Haft records that reason on the selected
-WorkCommissions.
+Commissions carry a `delivery_policy`. The default `workspace_patch_manual`
+keeps changes in the isolated workspace until you run `haft harness apply`.
+`workspace_patch_auto_on_pass` applies a passing run as a discrete commit;
+`blocked_policy` / failed runs wait for an operator decision.
 
-Starting Open-Sleigh is an operator/runtime action. Use the CLI Harness for
-that boundary rather than a plugin slash command. MCP may create or inspect
-WorkCommissions, but it must not own the long-running runtime lifecycle.
+Broad harness execution is blocked for `needs_onboard` projects by default. For
+intentional tactical out-of-spec work, pass `--force-skip-specs "<reason>"`;
+haft records the reason on the selected commissions.
 
-Commissions carry a `delivery_policy`. The default is
-`workspace_patch_manual`: Open-Sleigh changes stay in the isolated workspace
-until an operator runs `haft harness apply <commission-id>`. Use
-`--delivery-policy workspace_patch_manual` explicitly when preparing or running
-plans that must not mutate the main checkout automatically.
-
-Release installs include the Open-Sleigh runtime under:
+Release archives bundle the Open-Sleigh BEAM runtime, so normal harness use
+needs no Elixir/Mix install:
 
 ```text
 ~/.haft/runtimes/open-sleigh/current
 ```
 
-`haft harness run` uses a repo-local `open-sleigh/` checkout when present and
-falls back to that installed runtime. Release archives bundle the BEAM runtime,
-so users do not need to install Elixir/Mix for normal harness use. Source
-fallback installs may install Elixir when they need to build the runtime
-locally.
-
-The lower-level MCP tool is `haft_commission`; the local CLI helper is:
-
-```bash
-haft commission create-from-decision dec-...
-haft commission create-batch dec-a dec-b
-haft commission create-from-plan .haft/plans/implementation.yaml
-haft commission create --json commission.json
-haft commission list --selector stale
-haft commission show wc-...
-haft commission requeue wc-... --reason stale_operator_recovery
-haft commission cancel wc-... --reason no_longer_relevant
-haft commission complete-external wc-... --runner external-runner --reason external_runtime_succeeded --payload-file runtime-evidence.json
-haft commission list-runnable
-haft commission claim wc-...
-```
-
-For the repeatable local E2E smoke:
-
-```bash
-task open-sleigh:smoke-real-haft
-```
-
-A commission action — whether triggered manually or by an agent — must
-become a typed artifact transition, not a free prompt:
+The lower-level surface is the `haft_commission` MCP tool and the `haft commission`
+CLI (`create-from-decision`, `create-batch`, `create-from-plan`, `list`, `show`,
+`requeue`, `cancel`, `claim`, ...). Every commission action becomes a typed
+artifact transition, never a free prompt:
 
 ```text
-SpecSection(s) -> DecisionRecord -> WorkCommission -> RuntimeRun -> Evidence -> SpecCoverage
+SpecSection(s) → DecisionRecord → WorkCommission → RuntimeRun → Evidence → SpecCoverage
 ```
-
-### Evidence workflow
-
-Attach evidence to decisions with `haft_decision(action="evidence", ...)`. Evidence has formality levels (F0-F3), congruence levels (CL0-CL3), and expiry dates. Trust scores (R_eff) degrade as evidence ages. Stale evidence triggers refresh.
-
-Use `haft_decision(action="measure", ...)` for post-implementation verification.
 
 ---
 
-## Cookbook — common v8 workflows
+## Cookbook — common workflows
 
-### Recording an architectural choice
+### Record an architectural choice
 
 ```text
 operator (to Claude Code): "we need to pick a queue for the new ingestion path"
 ↓ h-explore auto-triggers, generates 3+ distinct variants with NQD diversity
-↓ h-compare auto-triggers, scores dim-wise in parallel, surfaces Pareto front
-↓ operator picks variant, then explicitly types:
+↓ h-compare auto-triggers, scores dim-wise in parallel, surfaces the Pareto front
+↓ operator picks a variant, then explicitly types:
 /h-decide
 ↓ kernel validates required DRR fields; missing fields → structured error
 ↓ on pass: DRR written to .haft/decisions/, ready for `haft run`
 ```
 
-### Diagnosing a failure with rival hypotheses
+### Diagnose a failure with rival hypotheses
 
 ```text
 operator: "tests are failing on the schema migration after the deploy"
-↓ h-diagnose auto-triggers, spawns 3+ parallel Agent subagents per hypothesis
+↓ h-diagnose auto-triggers, spawns 3+ parallel Agent subagents, one per hypothesis
 ↓ each subagent reads only what its hypothesis needs (no anchoring)
-↓ results merged; ranked by FPF B.5.2 filter chain
+↓ results merged, ranked by the FPF B.5.2 filter chain
 ↓ if confirmed: /h-note records the diagnosis; if architectural: /h-frame
 ```
 
-### Verifying a decision is still valid
+### Verify a decision still holds
 
 ```text
-operator: "did the dec-20260420-cache-redesign actually work"
+operator: "did dec-20260420-cache-redesign actually work"
 ↓ h-verify auto-triggers
 ↓ reads decision predictions + valid_until + baseline file hashes
-↓ measures observable claims (test output, metric query, etc.)
+↓ measures observable claims (test output, metric query, ...)
 ↓ writes evidence with CL/freshness; updates R_eff
-↓ if R_eff < 0.5 → marks stale; if predictions failed → reopens problem
-```
-
-### Auditing a concept rename
-
-```text
-operator: "rename Service to EnablingSystem across the project"
-↓ explicit: /h-semio-review (manual-only; subroutine)
-↓ enumerates carriers (prose, code, manifests, filenames, test fixtures)
-↓ classifies hits by statement type (rule / promise / decision / evidence)
-↓ flags same-name/different-thing collisions for operator approval
-↓ produces ordered repair plan; iterates to fixed-point per X-FANOUT-AUDIT
+↓ if R_eff < 0.5 → marks stale; if predictions failed → reopens the problem
 ```
 
 ### Quick operator status
 
 ```bash
-haft check         # CI-friendly governance verification (exit 0/1)
-haft check routing # sanity-check skill description routing reliability
+haft check          # CI-friendly governance verification (exit 0 clean / 1 findings)
+haft check routing  # sanity-check skill routing reliability
 ```
 
-From the host AI: `/h-status` for the full dashboard.
+From the host agent: `/h-status` for the full dashboard.
 
 ---
 
@@ -360,148 +295,43 @@ From the host AI: `/h-status` for the full dashboard.
 
 - **Decisions are live** — computed trust scores (R_eff) degrade as evidence ages
 - **Comparison is honest** — parity enforced, constraint-aware Pareto elimination, anti-Goodhart observation indicators
-- **Invariants linked to code** — knowledge graph maps decisions to modules via dependency graph
+- **Reasoning fused with code** — `haft_query` surfaces the decisions governing a symbol while you read or traverse it, so a governed node never reads as safe-to-change
 - **Memory across sessions** — related past decisions surface during framing, similar variants during exploration
 - **The loop closes** — failed measurements reopen decisions, evidence decay triggers review, drift detection flags violations
 - **Decisions are contracts** — invariants, claims with thresholds, rollback plan, valid-until date
 
 ---
 
-## Batch Harness (Beta — v7.x)
-
-> **Status:** Single-commission `haft harness run` is the trustworthy operator path. Drain mode (`--drain --concurrency N`) and `workspace_patch_auto_on_pass` auto-apply landed in v7.x and have been validated end-to-end on docs-class commissions; treat them as Beta on production-code commissions.
-
-The harness lets you commission work from `DecisionRecord` artifacts and run it under a real codex agent in an isolated workspace, with scope guards (`allowed_paths`/`forbidden_paths`), per-commission lockset enforcement, and discrete revertable apply commits per commission.
-
-```bash
-# 1. Decision exists (via /h-decide or haft_decision MCP). Create commissions:
-haft harness run --prepare-only         # auto-selects active decisions
-haft commission create-from-decision dec-... --delivery-policy workspace_patch_auto_on_pass
-
-# 2. Drain the queue overnight (manual apply by default; auto on pass when policy allows):
-haft harness run --drain --concurrency 4
-
-# 3. Outcome:
-#    workspace_patch_manual    -> diff held in workspace clone, run `haft harness apply <id>`
-#    workspace_patch_auto_on_pass + verdict=pass -> auto-applied as a discrete commit
-#    blocked_policy / failed   -> stays for operator decision (requeue / cancel)
-```
-
-`AutonomyEnvelope` continues to gate creation, preflight, and execute; the apply step is purely policy + verdict per the V3 invariant. Stale claims older than the configurable cap (default 24h) are skipped at intake with a typed `lease_too_old` reason.
-
-Detailed guide, real-world flows, and known rough edges: see [`docs/7.x/harness-batch`](https://haft.dev/docs/7.0/harness-batch).
-
----
-
-## Built on First Principles Framework
-
-[FPF](https://github.com/ailev/FPF) by [Anatoly Levenchuk](https://www.linkedin.com/in/ailev/) — a rigorous, transdisciplinary architecture for thinking.
-
-The v8 skill set (`h-frame`, `h-explore`, `h-compare`, `h-decide`, `h-verify`, plus the catalog above) gives your AI agent an FPF-native operating system for engineering decisions: problem framing before solutions, characterization before comparison, parity enforcement, evidence with congruence penalties, weakest-link assurance, and the lemniscate cycle that closes itself when evidence ages or measurements fail.
-
-The h-frame/h-explore/h-compare skills auto-trigger when operator context matches. The binding step (h-decide, h-commission) is manual-only per Transformer Mandate — agents may frame and compare, but the human principal records the binding choice.
-
-`haft fpf search` (and `haft_query(action="fpf")` from MCP) gives access to the indexed FPF specification with tiered retrieval: exact pattern id → route-aware concept matching → keyword fallback.
-
----
-
 ## Roadmap
 
-### v6.1 — Harden the Contract (shipped)
+### v8 — Governance Substrate Pivot (current)
 
-Decision quality enforcement before automating execution:
-- `haft check` for local governance verification (exit 0 = clean, exit 1 = findings)
-- `/h-verify` surfaces full governance state (problems, invariants, drift)
-- `.haft/workflow.md` — repo-level agent policy, injected into every prompt
-- Problem typing (optimization / diagnosis / search / synthesis)
-- G1 enforced (one decision per problem), G2/G4 warnings (parity plan, subjective dimensions)
-- Claim-scoped R_eff, evidence supersession, CL0 rejection
-- Deep `/h-onboard` with module-by-module analysis for legacy projects
+Standalone interactive agent, TUI, and desktop wrappers dropped. Haft is a
+kernel + CLI + MCP server + 15 skills, shared across Claude Code, Codex,
+OpenCode, and Cursor over one `.haft/` artifact graph. The kernel MCP returns
+structured errors as hard enforcement gates; binding artifacts stay manual-only
+per the Transformer Mandate. Rationale:
+`dec-20260525-v8-architecture-pivot-...`.
 
-### v6.2 — Dashboard + Execution + Design System (shipped 2026-04-20)
+Shipped history lives in [CHANGELOG.md](CHANGELOG.md).
 
-The desktop became a real operator surface, the reasoning vocabulary grew semiotic teeth, and the two transport layers stopped drifting from each other:
+### Next
 
-- **Unified Dashboard** — decisions, governance findings, recent activity in one view
-- **Implement** — click a decision, agent spawns in worktree with full reasoning context, baseline taken on success, PR body generated from decision rationale
-- **Adopt** — governance finding → agent thread for interactive resolution; agent never auto-resolves
-- **`haft run`** — same Implement pipeline from CLI, with planning + per-task verification + final invariant review
-- **Tauri v2 desktop migration** (from Wails v2)
-- **Haft Design System** — typed React primitives (Eyebrow, Button, Badge, Card, Input, StatCard, MonoId, Pill) + ComparisonTable with border-first Pareto grid + DecayWindow progress bar on decision detail
-- **Seven new FPF semiotic patterns** (FRAME-08 / FRAME-09 / CHR-10 / CHR-11 / CHR-12 / X-STATEMENT-TYPE / X-FANOUT-AUDIT) sourced from Levenchuk's seminar, auto-injected into reasoning tool responses
-- **`governance_mode` on DecisionRecord** — file-level vs module-level governance, opt-in, honors FPF X-SCOPE
-- **Random-hex artifact IDs** (`dec-20260420-a3f7c1d2`) with optional DecisionRecord task slugs (`dec-20260420-task-4-a3f7c1d2`) to prevent merge conflicts while keeping filenames navigable ([#63](https://github.com/m0n0x41d/haft/issues/63), [#66](https://github.com/m0n0x41d/haft/issues/66))
-- **MCP `parity_plan` exposure** for deep-mode comparison ([#62](https://github.com/m0n0x41d/haft/issues/62))
-- **Transport-parity drift detection** + layered architecture boundary tests
-- **`internal/embedding` extraction**; `internal/fpf` is now pure Core
-- **`Valid-until` self-application** on FPF pattern files with a failing test when content ages past six months
-
-### v7 — Project Harnessability MVP
-
-One proved cycle:
-
-**Add project → Init → Target spec → Enabling spec → Spec check → Decision → WorkCommission → RuntimeRun → Evidence → SpecCoverage.**
-
-The goal is not a better task runner. The goal is to turn an arbitrary repo
-into a harnessable engineering system.
-
-### v8 — Governance Substrate Pivot (in progress 2026-05)
-
-Architectural pivot recorded in `dec-20260525-v8-architecture-pivot-from-standalone-agent-to-g-bbe45cb7`. Standalone interactive agent (`haft agent`), TUI, and desktop wrappers dropped. Haft becomes a kernel + CLI + MCP server + skills plugin shared across Claude Code, Codex, OpenCode, and Cursor.
-
-Replaces previously-planned v8 architecture (TS+Bun+OpenTUI+SolidJS standalone TUI, gradual deprecation in v8.0 + removal in v8.1 — both superseded). FPF reasoner critique 2026-05-25 confirmed BLP violation in the original direction.
-
-Three operator surfaces, one artifact graph:
-- **Skills + slash commands** in your AI coding agent (auto-trigger + manual `/h-*`)
-- **CLI** for direct manual access without an LLM
-- **MCP server** for programmatic access from any LLM agent
-
-Kernel MCP returns structured errors as hard enforcement gates (Transformer Mandate via manual-only `h-decide` / `h-commission` skills; standard/deep mode validation on required DRR fields with explicit skip mechanism for tactical work).
-
-### Cross-repo harness — research track (post-v7.0)
-
-Multi-project workflows where each registered haft project becomes an
-addressable endpoint that other projects' agents can ask typed questions of
-("what does your enabling spec say about commission policy?", "what's the
-status of decision X?") and request typed changes from
-(MessageEnvelope → ProblemCard → DecisionRecord → WorkCommission in the
-target project, with the target's normal decide-then-commission discipline
-intact). Built on what v7 already ships: spec carriers as the addressable
-"what this repo is about" surface, AutonomyEnvelope's `allowed_repos`
-whitelist as the structural cross-repo gate, Open-Sleigh worktree clones at
-`base_sha` as the read-only-by-default response runner, and the existing
-Evidence model as the "no claim without carrier" response contract. **This
-is post-v7.0 work**: target audience is multi-repo developers who currently
-copy context between repos by hand; sequencing starts with cross-project
-READ through `haft_query(project_ref=..., ...)` (small, additive, no new
-artifact kinds) and only moves to typed change requests after the read
-surface earns evidence on real multi-repo work. Detailed mapping of how
-this composes with v7 primitives lives in
-`.context/cross-repo-mail-haft-mapping.md`. Not committed to a release
-version yet.
-
-### Desktop App — alpha track (no committed version)
-
-The Tauri v2 desktop app exists as an alpha exploration of a human surface
-over the same Haft Core. It is **not part of the v7 production envelope**: not
-extensively tested, not the canonical operator surface, and not load-bearing
-for any v7 acceptance criteria. The canonical surfaces for v7 are MCP plugin
-(`haft serve`) and CLI Harness (`haft harness ...`); the desktop app will
-graduate out of alpha when (a) its onboarding, harness, and verify panels each
-have end-to-end dogfood evidence on the level of CLI/MCP, and (b)
-desktop-specific contracts (Tauri IPC argument shape, transcript filtering,
-readiness projection) carry their own regression suites at the same depth as
-the Go/MCP surfaces. Until then it ships as a "preview from source" build
-behind the alpha warning. No release version is committed to it on the v7
-timeline.
+The defensible edge is the fusion of the code graph with the reasoning graph,
+and the liveness of that reasoning graph — not raw code-graph coverage. Active
+directions (idea-stage, tracked as live problems under `.haft/`): edit-time
+invariant guardrails on governed symbols, trust state surfaced at the symbol,
+coherence checks over the governance graph, and a run-time harness that measures
+whether the fused graph actually reduces reads and prevents broken decisions.
+None are committed to a release version.
 
 ---
 
 ## Requirements
 
-- Go 1.25+ (for building from source)
-- Claude Code or Codex for supported v7 plugin mode
-- Rust toolchain + Tauri v2 (only when building the desktop app from source)
+- **Go 1.25+** — building from source
+- **Claude Code or Codex** — plugin mode
+- **Rust toolchain** — only to build the embedding sidecar (`haft-embed`) from source; without it, FPF semantic search degrades to keyword
 
 ## License
 
