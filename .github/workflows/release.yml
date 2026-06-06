@@ -52,7 +52,18 @@ jobs:
         with:
           go-version: '1.25'
           cache-dependency-path: go.sum
-      - uses: erlef/setup-beam@v1
+      - name: Set up Erlang/Elixir
+        if: matrix.runner != 'ubuntu-24.04-arm'
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27'
+          elixir-version: '1.18.3'
+      - name: Set up Erlang/Elixir (linux arm64)
+        if: matrix.runner == 'ubuntu-24.04-arm'
+        uses: erlef/setup-beam@v1
+        env:
+          # setup-beam does not yet recognize GitHub's ubuntu24-arm64 ImageOS.
+          ImageOS: ubuntu24
         with:
           otp-version: '27'
           elixir-version: '1.18.3'
