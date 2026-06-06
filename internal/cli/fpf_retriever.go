@@ -16,8 +16,8 @@ func retrieveEmbeddedFPF(request fpf.SpecRetrievalRequest) (fpf.SpecRetrievalRes
 
 	// Hybrid-by-default: the process-lived FPF searcher fuses FTS+graph with baked
 	// section vectors, degrading to deterministic FTS when unavailable.
-	if fpfHybrid != nil {
-		request.HybridSearch = fpfHybrid.Search
+	if hybrid := ensureFPFHybrid(); hybrid != nil {
+		request.HybridSearch = hybrid.Search
 	}
 
 	return fpf.RetrieveSpec(db, request)

@@ -125,6 +125,40 @@ func TestRetrieveEmbeddedFPF_ReturnsStructuredResults(t *testing.T) {
 	}
 }
 
+func TestRetrieveEmbeddedFPF_InitializesHybridForStandaloneCLI(t *testing.T) {
+	dbPath := buildFPFSearchTestDB(t)
+
+	restoreOpen := stubOpenFPFDB(t, dbPath)
+	defer restoreOpen()
+
+	originalHybrid := fpfHybrid
+	originalBuilder := buildFPFHybridFunc
+	fpfHybrid = nil
+	buildCalls := 0
+	buildFPFHybridFunc = func() *FpfHybrid {
+		buildCalls++
+		return NewFpfHybrid(nil)
+	}
+	defer func() {
+		fpfHybrid = originalHybrid
+		buildFPFHybridFunc = originalBuilder
+	}()
+
+	_, err := retrieveEmbeddedFPF(fpf.SpecRetrievalRequest{
+		Query: "A.6",
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("retrieveEmbeddedFPF returned error: %v", err)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("buildFPFHybridFunc calls = %d, want 1", buildCalls)
+	}
+	if fpfHybrid == nil {
+		t.Fatal("retrieveEmbeddedFPF did not initialize fpfHybrid")
+	}
+}
+
 func TestBuildFPFSearchFunc_UsesSharedRetriever(t *testing.T) {
 	dbPath := buildFPFSearchTestDB(t)
 

@@ -277,7 +277,7 @@ func runSectionFTS(db *sql.DB, matchExpr string, limit int) ([]SpecSearchResult,
 	rows, err := db.Query(`
 		SELECT s.id, s.pattern_id, s.heading, s.summary, rank
 		FROM fpf_fts
-		JOIN sections s ON s.id = fpf_fts.rowid - 1
+		JOIN sections s ON s.id = fpf_fts.section_id
 		WHERE fpf_fts MATCH ?
 		ORDER BY rank
 		LIMIT ?`, matchExpr, limit)

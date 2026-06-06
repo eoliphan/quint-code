@@ -79,6 +79,41 @@ func TestBuildSpecIndexMetadata_LeavesCommitEmptyOutsideGit(t *testing.T) {
 	}
 }
 
+func TestVerifyIndexRejectsSchemaVersionMismatch(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "fpf.db")
+	expectedCommit := "expected-sha"
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	stmts := []string{
+		`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`,
+		`CREATE TABLE fpf_embeddings (provider TEXT NOT NULL, model TEXT NOT NULL, dim INTEGER NOT NULL)`,
+		`INSERT INTO meta (key, value) VALUES ('fpf_commit', 'expected-sha')`,
+		`INSERT INTO meta (key, value) VALUES ('schema_version', '3')`,
+		`INSERT INTO fpf_embeddings (provider, model, dim) VALUES ('local', 'test', 256)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("exec %q: %v", stmt, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	err = verifyIndex([]string{dbPath, expectedCommit})
+	if err == nil {
+		t.Fatal("expected schema mismatch error")
+	}
+	if !strings.Contains(err.Error(), "schema_version") {
+		t.Fatalf("expected schema_version error, got %v", err)
+	}
+}
+
 func TestCleanSpecCommitRef(t *testing.T) {
 	tests := []struct {
 		name string

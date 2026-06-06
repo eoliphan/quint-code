@@ -33,8 +33,25 @@ var errFPFSemanticUnavailable = errors.New("fpf semantic index unavailable (no s
 
 // fpfHybrid is the process-lived FPF semantic searcher. The FPF index is
 // embedded + static, so a single cached vector Index across calls is correct.
-// Set once at server startup; nil => FPF search stays deterministic FTS.
-var fpfHybrid *FpfHybrid
+// Initialized lazily by CLI/server paths; nil => FPF search stays deterministic FTS.
+var (
+	fpfHybrid          *FpfHybrid
+	fpfHybridMu        sync.Mutex
+	buildFPFHybridFunc = buildFPFHybrid
+)
+
+func ensureFPFHybrid() *FpfHybrid {
+	fpfHybridMu.Lock()
+	defer fpfHybridMu.Unlock()
+
+	if fpfHybrid == nil {
+		fpfHybrid = buildFPFHybridFunc()
+		if fpfHybrid != nil {
+			fpfHybrid.Prewarm()
+		}
+	}
+	return fpfHybrid
+}
 
 // buildFPFHybrid wires the optional FPF spec semantic layer, forcing the baked
 // MRL dimension so the runtime query embeds match the baked vectors. nil when
@@ -303,9 +320,6 @@ func (h *FpfHybrid) resolveEmbedder() embedding.Embedder {
 	return embedder
 }
 
-// buildIndex loads the baked section vectors for the runtime model contract into
-// a fresh in-memory cosine Index, then detaches from the ephemeral fpf.db. A nil
-// result (no sidecar, schema<v3, or no vectors under this contract) degrades.
 // buildIndex loads the baked section vectors and splits them into the card and
 // prose cosine arms. Returns (nil, nil) only on a hard failure (no sidecar,
 // schema mismatch, or no vectors under the runtime contract); a successful load

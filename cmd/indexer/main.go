@@ -41,6 +41,14 @@ func verifyIndex(args []string) error {
 		return fmt.Errorf("fpf.db is STALE: meta fpf_commit=%q but submodule HEAD=%q — run `task fpf-refresh` and commit the result", commit, expectedSHA)
 	}
 
+	schemaVersion, err := fpf.GetSpecMeta(db, "schema_version")
+	if err != nil {
+		return fmt.Errorf("read schema_version meta: %w", err)
+	}
+	if strings.TrimSpace(schemaVersion) != fpf.SpecIndexSchemaVersion {
+		return fmt.Errorf("fpf.db schema_version=%q but code expects %q — run `task fpf-refresh` and commit the result", schemaVersion, fpf.SpecIndexSchemaVersion)
+	}
+
 	_, _, _, count, err := fpf.SpecEmbeddingContract(db)
 	if err != nil {
 		return fmt.Errorf("read embedding contract: %w", err)

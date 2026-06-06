@@ -134,10 +134,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 				searcher := buildHybridSearcher(artStore, database.GetRawDB())
 				crossHybrid := buildCrossProjectHybrid(indexStore)
 
-				fpfHybrid = buildFPFHybrid()
-				if fpfHybrid != nil {
-					fpfHybrid.Prewarm() // background-load the baked FPF vectors so the first fpf search is fast
-				}
+				ensureFPFHybrid() // background-load the baked FPF vectors so the first fpf search is fast
 
 				server.SetV5Handler(makeV5Handler(artStore, searcher, crossHybrid, haftDir, projCfg, indexStore))
 			}

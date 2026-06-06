@@ -740,6 +740,81 @@ func TestSearchSpec_FTSIgnoresBlankPatternSections(t *testing.T) {
 	}
 }
 
+func TestSearchSpec_FTSUsesExplicitSectionID(t *testing.T) {
+	chunks := []SpecChunk{
+		{
+			ID:      0,
+			Heading: "Spec prose",
+			Level:   2,
+			Body:    "Plain prose without the target phrase.",
+		},
+		{
+			ID:        PatternChunkIDBase,
+			Heading:   "TEST-01 - Pattern Card",
+			Level:     2,
+			Body:      "Noncontiguous card targetphrase.",
+			PatternID: "TEST-01",
+			Keywords:  []string{"targetphrase"},
+		},
+	}
+
+	_, db, cleanup := buildIndexWithChunks(t, chunks, false)
+	defer cleanup()
+
+	results, err := SearchSpecWithOptions(db, "targetphrase", SpecSearchOptions{
+		Limit: 5,
+		Tier:  SpecSearchTierFTS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected noncontiguous pattern-card FTS hit")
+	}
+	if results[0].SectionID != PatternChunkIDBase {
+		t.Fatalf("section id = %d, want %d", results[0].SectionID, PatternChunkIDBase)
+	}
+	if results[0].PatternID != "TEST-01" {
+		t.Fatalf("pattern id = %q, want TEST-01", results[0].PatternID)
+	}
+}
+
+func TestSearchFTSSectionIDsUsesExplicitSectionID(t *testing.T) {
+	chunks := []SpecChunk{
+		{
+			ID:      0,
+			Heading: "Spec prose",
+			Level:   2,
+			Body:    "Plain prose without the target phrase.",
+		},
+		{
+			ID:        PatternChunkIDBase,
+			Heading:   "TEST-01 - Pattern Card",
+			Level:     2,
+			Body:      "Noncontiguous card hybridtarget.",
+			PatternID: "TEST-01",
+			Keywords:  []string{"hybridtarget"},
+		},
+	}
+
+	_, db, cleanup := buildIndexWithChunks(t, chunks, false)
+	defer cleanup()
+
+	results, err := SearchFTSSectionIDs(db, "hybridtarget", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected noncontiguous pattern-card section FTS hit")
+	}
+	if results[0].SectionID != PatternChunkIDBase {
+		t.Fatalf("section id = %d, want %d", results[0].SectionID, PatternChunkIDBase)
+	}
+	if results[0].PatternID != "TEST-01" {
+		t.Fatalf("pattern id = %q, want TEST-01", results[0].PatternID)
+	}
+}
+
 func TestSearchSpec_NoResults(t *testing.T) {
 	_, db, cleanup := buildTestIndex(t)
 	defer cleanup()

@@ -78,8 +78,9 @@ func retrieveSpecSearchResults(db *sql.DB, query string, request SpecRetrievalRe
 			Mode:  specMode,
 		})
 	}
-	// Explicit fts mode forces the reproducible deterministic path.
-	if normalizeSpecRetrievalMode(request.Mode) == SpecRetrievalModeFTS {
+	// Explicit controls force the reproducible deterministic path. HybridSearch
+	// only accepts query+limit, so it cannot honor tier filters or tree mode.
+	if hasExplicitSpecRetrievalControls(request) {
 		return deterministic()
 	}
 	// Hybrid by default when the composition root wired it (degrade-safe — the
@@ -89,6 +90,16 @@ func retrieveSpecSearchResults(db *sql.DB, query string, request SpecRetrievalRe
 		return request.HybridSearch(db, query, request.Limit)
 	}
 	return deterministic()
+}
+
+func hasExplicitSpecRetrievalControls(request SpecRetrievalRequest) bool {
+	if strings.TrimSpace(request.Tier) != "" {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(request.Mode), SpecSearchModeTree) {
+		return true
+	}
+	return normalizeSpecRetrievalMode(request.Mode) == SpecRetrievalModeFTS
 }
 
 func normalizeSpecRetrievalMode(mode string) string {

@@ -101,6 +101,57 @@ func TestRetrieveSpec_TreeModeUsesDrillDownTier(t *testing.T) {
 	}
 }
 
+func TestRetrieveSpec_ExplicitControlsBypassHybrid(t *testing.T) {
+	_, db, cleanup := buildRetrievalTestIndex(t)
+	defer cleanup()
+
+	tests := []struct {
+		name string
+		req  SpecRetrievalRequest
+	}{
+		{
+			name: "fts retrieval mode",
+			req: SpecRetrievalRequest{
+				Query: "boundary",
+				Limit: 2,
+				Mode:  SpecRetrievalModeFTS,
+			},
+		},
+		{
+			name: "tree search mode",
+			req: SpecRetrievalRequest{
+				Query: "boundary deontics",
+				Limit: 3,
+				Mode:  SpecSearchModeTree,
+			},
+		},
+		{
+			name: "tier filter",
+			req: SpecRetrievalRequest{
+				Query: "boundary",
+				Limit: 2,
+				Tier:  SpecSearchTierRoute,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		calls := 0
+		req := tt.req
+		req.HybridSearch = func(_ *sql.DB, _ string, _ int) ([]SpecSearchResult, error) {
+			calls++
+			return []SpecSearchResult{{PatternID: "HYBRID-SENTINEL", Heading: "wrong"}}, nil
+		}
+
+		if _, err := RetrieveSpec(db, req); err != nil {
+			t.Fatalf("%s: RetrieveSpec returned error: %v", tt.name, err)
+		}
+		if calls != 0 {
+			t.Fatalf("%s: explicit controls should bypass hybrid, calls = %d", tt.name, calls)
+		}
+	}
+}
+
 func buildRetrievalTestIndex(t *testing.T) (string, *sql.DB, func()) {
 	t.Helper()
 
