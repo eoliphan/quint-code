@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased] — governance substrate pivot
+## [8.1.0] — 2026-06-06 — shared embedding runtime
 
 Architectural pivot recorded in
 `.haft/decisions/dec-20260525-v8-architecture-pivot-from-standalone-agent-to-g-bbe45cb7.md`.
@@ -44,6 +44,15 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 
 ### Added
 
+- **Shared Rust embedding sidecar daemon.** Local embeddings now use one
+  per-user/per-model `haft-embed` process instead of one model process per
+  `haft serve` instance. The Go embedding adapter first connects to a
+  user-owned Unix socket daemon keyed by binary/model/cache/dim; the first
+  client starts it under a lockfile, later Claude Code / Codex / MCP sessions
+  reuse the same loaded ONNX model. The socket directory is private to the
+  current user, sockets are `0600`, startup races are serialized, and the daemon
+  exits after an idle timeout so memory is released when agents stop using it.
+  The old stdio child-process adapter remains the fallback path.
 - **Code-graph retrieval — codegraph-parity lexical heuristics.** `haft_query`
   symbol seeds and the `search` action now tolerate typos (bounded edit
   distance), split compound identifiers (`getUserName` → get/user/name), stem
@@ -143,6 +152,19 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 - **Code drift surfaced in `/h-status` (H1)** — `haft_query(action="status")`
   reports decisions whose affected files changed since baseline, so drift is
   visible without a manual `/h-verify`.
+- **Auto-baseline disposition floor — safety classifier** (`dec-20260606-9b4a4c52`).
+  Pure deterministic classifier (`internal/artifact/autobaseline.go`) that maps
+  each drift report to one disposition by keying off the existing symbol-level
+  `SymbolVerdict`: provably-additive drift → auto-resolve-silent; a
+  modified/removed governed symbol (or deleted file) → stage-for-confirm;
+  anything unprovable (no baseline / unanalyzable) → surface-for-review.
+  Conservative by construction — a governed-symbol change can **never** be
+  silently auto-baselined, regression-pinned against the seeded harness-drain
+  removed-func case. This release ships the tested safety core only; acting on
+  the silent bucket (re-baseline + snapshot history for reversibility), the
+  staged confirm-digest surface, and the callee-closure monitoring extension are
+  deferred slices — the closure step waits on cross-package code-graph edges
+  (`note-20260606-90688835`).
 - **Context graph — code intelligence fused with the reasoning graph**
   (`dec-20260603-5825abc6`, plan `note-20260603-7d6632f1`). A code-graph
   (symbols + call/dispatch edges) built on the existing tree-sitter substrate,
@@ -335,6 +357,13 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
 
 ### Changed
 
+- **Embedding startup is lazy and shared.** `haft serve` no longer prewarms the
+  FPF, per-project, or cross-project embedding layers just because an MCP client
+  connected. The model is loaded only when a semantic query actually needs it,
+  and multiple live `haft serve` processes share that one Rust sidecar when the
+  shared socket path is available. On any shared-daemon setup fault, recall
+  still degrades through the existing optional-embedding contract rather than
+  hard-failing.
 - **Embedding sidecar defaults to int8-quantized EmbeddingGemma.** The local
   `haft-embed` sidecar now defaults to `embeddinggemma-300m-q`: measured
   retrieval parity with the fp32 model (FPF card R@10 0.88, MRR ~0.73) at a

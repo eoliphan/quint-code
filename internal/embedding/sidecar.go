@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/m0n0x41d/haft/logger"
@@ -31,11 +32,12 @@ const (
 	DefaultLocalModel = "embeddinggemma-300m-q"
 )
 
-// sidecarAdapter is the local Embedder adapter: it owns a long-lived haft-embed
-// child process (the model loads once) and serializes request/response lines
-// over its stdio pipe. It is self-healing — if the process faults mid-session it
-// respawns once and retries, so a sidecar crash costs a single failed query, not
-// FTS5+PPR for the rest of the session. Implements the Embedder port.
+// sidecarAdapter is the stdio local Embedder adapter: it owns a long-lived
+// haft-embed child process (the model loads once) and serializes
+// request/response lines over its stdio pipe. It is self-healing — if the
+// process faults mid-session it respawns once and retries, so a sidecar crash
+// costs a single failed query, not FTS5+PPR for the rest of the session.
+// Implements the Embedder port.
 type sidecarAdapter struct {
 	binary string
 	args   []string
@@ -69,22 +71,45 @@ type sidecarHandshake struct {
 	Error string `json:"error"`
 }
 
+type sidecarSpec struct {
+	Model    string
+	CacheDir string
+	Dim      int
+	Args     []string
+}
+
 func newSidecarAdapter(cfg Config) (Embedder, error) {
 	binary, ok := locateSidecar()
 	if !ok {
 		return nil, ErrSidecarUnavailable
 	}
 
+	spec := sidecarSpecFromConfig(cfg)
+	if sharedSidecarEnabled() {
+		adapter, err := newSharedSidecarAdapter(binary, spec)
+		if err == nil {
+			return adapter, nil
+		}
+		logger.Info().Err(err).Msg("shared embedding sidecar unavailable — falling back to stdio child")
+	}
+	return newStdioSidecarAdapter(binary, spec)
+}
+
+func sidecarSpecFromConfig(cfg Config) sidecarSpec {
 	model := cfg.Model
 	if model == "" {
 		model = DefaultLocalModel
 	}
-	args := []string{"--model", model, "--cache-dir", resolveCacheDir(cfg.CacheDir)}
+	cacheDir := resolveCacheDir(cfg.CacheDir)
+	args := []string{"--model", model, "--cache-dir", cacheDir}
 	if cfg.Dim > 0 {
 		args = append(args, "--dim", strconv.Itoa(cfg.Dim))
 	}
+	return sidecarSpec{Model: model, CacheDir: cacheDir, Dim: cfg.Dim, Args: args}
+}
 
-	adapter := &sidecarAdapter{binary: binary, args: args}
+func newStdioSidecarAdapter(binary string, spec sidecarSpec) (Embedder, error) {
+	adapter := &sidecarAdapter{binary: binary, args: spec.Args}
 	adapter.mu.Lock()
 	err := adapter.spawn()
 	adapter.mu.Unlock()
@@ -270,6 +295,19 @@ func resolveCacheDir(configured string) string {
 
 // sidecarBinaryEnv overrides binary discovery with an explicit path.
 const sidecarBinaryEnv = "HAFT_EMBED_BIN"
+
+// sharedSidecarEnv disables per-user daemon sharing when set to 0/false/no.
+const sharedSidecarEnv = "HAFT_EMBED_SHARED"
+
+func sharedSidecarEnabled() bool {
+	value := strings.TrimSpace(os.Getenv(sharedSidecarEnv))
+	switch strings.ToLower(value) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
 
 // locateSidecar resolves the haft-embed binary: an explicit HAFT_EMBED_BIN
 // override, then the installed runtime location (mirroring open-sleigh under

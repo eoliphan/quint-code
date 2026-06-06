@@ -34,6 +34,7 @@ func TestSidecarRespawnsAfterFault(t *testing.T) {
 		t.Fatalf("write fake sidecar: %v", err)
 	}
 	t.Setenv(sidecarBinaryEnv, path)
+	t.Setenv(sharedSidecarEnv, "0")
 
 	embedder, err := New(Config{Provider: ProviderLocal})
 	if err != nil {
