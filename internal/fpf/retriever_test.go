@@ -1,9 +1,7 @@
 package fpf
 
 import (
-	"context"
 	"database/sql"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -63,35 +61,19 @@ func TestRetrieveSpec_HydratesFullSectionContent(t *testing.T) {
 	}
 }
 
-func TestRetrieveSpec_SemanticModeUsesExperimentalTier(t *testing.T) {
+// The opt-in "semantic" retrieval mode was retired in favor of hybrid-by-default
+// (the local-sidecar baked-vector path injected via HybridSearch). An unknown or
+// retired mode must fall back to the deterministic search, never error.
+func TestRetrieveSpec_RetiredSemanticModeFallsBackToDeterministic(t *testing.T) {
 	_, db, cleanup := buildRetrievalTestIndex(t)
 	defer cleanup()
 
-	artifactPath := filepath.Join(t.TempDir(), "semantic-retriever.json.gz")
-	embedder := newDeterministicSemanticTestEmbedder()
-	if err := BuildSemanticArtifact(context.Background(), db, embedder, artifactPath); err != nil {
-		t.Fatalf("BuildSemanticArtifact returned error: %v", err)
-	}
-
-	result, err := RetrieveSpec(db, SpecRetrievalRequest{
-		Query:                "boundary contract unpacking",
-		Limit:                2,
-		Mode:                 SpecRetrievalModeSemantic,
-		SemanticArtifactPath: artifactPath,
-		SemanticEmbedder:     embedder,
-	})
-	if err != nil {
-		t.Fatalf("RetrieveSpec returned error: %v", err)
-	}
-
-	if len(result.Results) == 0 {
-		t.Fatal("expected semantic retrieval results")
-	}
-	if result.Results[0].Tier != SpecSearchTierSemantic {
-		t.Fatalf("expected semantic tier, got %q", result.Results[0].Tier)
-	}
-	if !strings.Contains(result.Results[0].Reason, "semantic route seed") {
-		t.Fatalf("expected semantic reason, got %q", result.Results[0].Reason)
+	if _, err := RetrieveSpec(db, SpecRetrievalRequest{
+		Query: "boundary contract unpacking",
+		Limit: 2,
+		Mode:  SpecRetrievalModeSemantic,
+	}); err != nil {
+		t.Fatalf("a retired/unknown mode must fall back to deterministic search, not error: %v", err)
 	}
 }
 

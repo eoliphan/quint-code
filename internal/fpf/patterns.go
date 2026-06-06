@@ -11,6 +11,12 @@ import (
 	"sync"
 )
 
+// PatternChunkIDBase is the section-id floor assigned to the compiled FPF
+// pattern cards, offset above the spec-chunk ids so the two id spaces never
+// collide. It also marks the "pattern card" embedding scope: id >= this base
+// is a compiled thinking-pattern card, below it is spec prose.
+const PatternChunkIDBase = 90000
+
 //go:embed patterns/*.md
 var embeddedPatterns embed.FS
 
@@ -30,7 +36,7 @@ func LoadPatternChunks(patternsDir string) ([]SpecChunk, error) {
 	}
 
 	var chunks []SpecChunk
-	idCounter := 90000 // offset to avoid collision with spec chunk IDs
+	idCounter := PatternChunkIDBase // offset to avoid collision with spec chunk IDs
 
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {

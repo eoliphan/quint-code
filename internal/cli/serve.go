@@ -134,6 +134,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 				searcher := buildHybridSearcher(artStore, database.GetRawDB())
 				crossHybrid := buildCrossProjectHybrid(indexStore)
 
+				fpfHybrid = buildFPFHybrid()
+				if fpfHybrid != nil {
+					fpfHybrid.Prewarm() // background-load the baked FPF vectors so the first fpf search is fast
+				}
+
 				server.SetV5Handler(makeV5Handler(artStore, searcher, crossHybrid, haftDir, projCfg, indexStore))
 			}
 		}
@@ -198,6 +203,12 @@ func embeddingConfigFromFile() embedding.Config {
 		}
 		embCfg.Model = cfg.Embedding.Model
 		embCfg.Dim = cfg.Embedding.Dim
+	}
+	// Env override (wins over the config file) — the runtime query embedder must
+	// use the SAME model the FPF vectors were baked with, or the contract mismatch
+	// degrades to FTS.
+	if m := strings.TrimSpace(os.Getenv("HAFT_EMBED_MODEL")); m != "" {
+		embCfg.Model = m
 	}
 	return embCfg
 }

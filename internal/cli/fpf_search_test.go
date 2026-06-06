@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"database/sql"
 	"io"
 	"os"
@@ -71,76 +70,6 @@ func TestRunFPFSearch_FullFlagLoadsFullSectionBody(t *testing.T) {
 	}
 	if !strings.Contains(fullOutput, "TAIL-MARKER") {
 		t.Fatalf("expected --full output to include the complete section body, got:\n%s", fullOutput)
-	}
-}
-
-func TestRunFPFSemanticSearch_ExplainAndFull(t *testing.T) {
-	dbPath := buildFPFSearchTestDB(t)
-
-	restoreOpen := stubOpenFPFDB(t, dbPath)
-	defer restoreOpen()
-
-	artifactPath := filepath.Join(t.TempDir(), "semantic-cli.json.gz")
-	embedder := newCLISemanticTestEmbedder()
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("sql.Open returned error: %v", err)
-	}
-	if err := fpf.BuildSemanticArtifact(context.Background(), db, embedder, artifactPath); err != nil {
-		_ = db.Close()
-		t.Fatalf("BuildSemanticArtifact returned error: %v", err)
-	}
-	_ = db.Close()
-
-	restoreFactory := stubFPFSemanticEmbedderFactory(t, func(model string, dimensions int) (fpf.SemanticEmbedder, error) {
-		return embedder, nil
-	})
-	defer restoreFactory()
-
-	restoreFlags := stubFPFSemanticSearchFlags(t, 1, true, true, artifactPath, "test-semantic-cli", 6)
-	defer restoreFlags()
-
-	output, err := captureStdout(t, func() error {
-		return runFPFSemanticSearch(nil, []string{"boundary", "contract", "unpacking"})
-	})
-	if err != nil {
-		t.Fatalf("runFPFSemanticSearch returned error: %v", err)
-	}
-	if !strings.Contains(output, "tier: semantic · semantic route seed Boundary discipline and routing") {
-		t.Fatalf("expected semantic explain metadata, got:\n%s", output)
-	}
-	if !strings.Contains(output, "TAIL-MARKER") {
-		t.Fatalf("expected semantic --full output to include the full section body, got:\n%s", output)
-	}
-}
-
-func TestRunFPFSemanticIndex_BuildsArtifact(t *testing.T) {
-	dbPath := buildFPFSearchTestDB(t)
-
-	restoreOpen := stubOpenFPFDB(t, dbPath)
-	defer restoreOpen()
-
-	artifactPath := filepath.Join(t.TempDir(), "semantic-build.json.gz")
-	embedder := newCLISemanticTestEmbedder()
-	restoreFactory := stubFPFSemanticEmbedderFactory(t, func(model string, dimensions int) (fpf.SemanticEmbedder, error) {
-		return embedder, nil
-	})
-	defer restoreFactory()
-
-	restoreFlags := stubFPFSemanticSearchFlags(t, 0, false, false, artifactPath, "test-semantic-cli", 6)
-	defer restoreFlags()
-
-	output, err := captureStdout(t, func() error {
-		return runFPFSemanticIndex(nil, nil)
-	})
-	if err != nil {
-		t.Fatalf("runFPFSemanticIndex returned error: %v", err)
-	}
-	if !strings.Contains(output, artifactPath) {
-		t.Fatalf("expected artifact path in output, got:\n%s", output)
-	}
-	if _, err := os.Stat(artifactPath); err != nil {
-		t.Fatalf("expected built artifact at %q: %v", artifactPath, err)
 	}
 }
 
@@ -466,97 +395,6 @@ func stubFPFSearchFlags(t *testing.T, limit int, full bool, explain bool, tier s
 		fpfSearchTier = originalTier
 		fpfSearchMode = originalMode
 	}
-}
-
-func stubFPFSemanticSearchFlags(
-	t *testing.T,
-	limit int,
-	full bool,
-	explain bool,
-	artifactPath string,
-	model string,
-	dimensions int,
-) func() {
-	t.Helper()
-
-	originalLimit := fpfSemanticSearchLimit
-	originalFull := fpfSemanticSearchFull
-	originalExplain := fpfSemanticSearchExplain
-	originalArtifactPath := fpfSemanticArtifactPath
-	originalModel := fpfSemanticModel
-	originalDimensions := fpfSemanticDimensions
-
-	fpfSemanticSearchLimit = limit
-	fpfSemanticSearchFull = full
-	fpfSemanticSearchExplain = explain
-	fpfSemanticArtifactPath = artifactPath
-	fpfSemanticModel = model
-	fpfSemanticDimensions = dimensions
-
-	return func() {
-		fpfSemanticSearchLimit = originalLimit
-		fpfSemanticSearchFull = originalFull
-		fpfSemanticSearchExplain = originalExplain
-		fpfSemanticArtifactPath = originalArtifactPath
-		fpfSemanticModel = originalModel
-		fpfSemanticDimensions = originalDimensions
-	}
-}
-
-func stubFPFSemanticEmbedderFactory(
-	t *testing.T,
-	factory func(model string, dimensions int) (fpf.SemanticEmbedder, error),
-) func() {
-	t.Helper()
-
-	original := newFPFSemanticEmbedder
-	newFPFSemanticEmbedder = factory
-
-	return func() {
-		newFPFSemanticEmbedder = original
-	}
-}
-
-type cliSemanticTestEmbedder struct{}
-
-func newCLISemanticTestEmbedder() cliSemanticTestEmbedder {
-	return cliSemanticTestEmbedder{}
-}
-
-func (cliSemanticTestEmbedder) Descriptor() fpf.SemanticEmbedderDescriptor {
-	return fpf.SemanticEmbedderDescriptor{
-		Provider:   "test",
-		Model:      "test-semantic-cli",
-		Dimensions: 6,
-	}
-}
-
-func (cliSemanticTestEmbedder) EmbedTexts(ctx context.Context, texts []string) ([][]float32, error) {
-	_ = ctx
-
-	vectors := make([][]float32, 0, len(texts))
-	for _, text := range texts {
-		lower := strings.ToLower(text)
-		vectors = append(vectors, []float32{
-			axisScore(lower, "boundary", "contract", "routing"),
-			axisScore(lower, "norm", "square", "deontic"),
-			axisScore(lower, "decision", "record", "rationale"),
-			0,
-			0,
-			0,
-		})
-	}
-	return vectors, nil
-}
-
-func axisScore(text string, terms ...string) float32 {
-	score := float32(0)
-	for _, term := range terms {
-		if strings.Contains(text, term) {
-			score++
-		}
-	}
-	return score
 }
 
 func captureStdout(t *testing.T, fn func() error) (string, error) {
