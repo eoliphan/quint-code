@@ -82,6 +82,11 @@ struct Response {
 fn resolve_model(name: &str) -> Result<EmbeddingModel> {
     match name.to_ascii_lowercase().replace('_', "-").as_str() {
         "embeddinggemma-300m" | "embeddinggemma" | "gemma" => Ok(EmbeddingModel::EmbeddingGemma300M),
+        // Quantized EmbeddingGemma: same 768-native MRL model, int8/4-bit weights —
+        // 3-4x faster CPU inference and a far smaller first-use download than fp32,
+        // with near-identical retrieval quality. Same asymmetric prefixes apply.
+        "embeddinggemma-300m-q" | "gemma-q" => Ok(EmbeddingModel::EmbeddingGemma300MQ),
+        "embeddinggemma-300m-q4" | "gemma-q4" => Ok(EmbeddingModel::EmbeddingGemma300MQ4),
         "bge-small-en-v1.5" | "bge-small" => Ok(EmbeddingModel::BGESmallENV15),
         other => Err(anyhow!("unknown model id: {other}")),
     }

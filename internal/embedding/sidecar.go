@@ -23,7 +23,12 @@ var ErrSidecarUnavailable = errors.New("embedding sidecar (haft-embed) not found
 
 const (
 	sidecarBinaryName = "haft-embed"
-	defaultLocalModel = "embeddinggemma-300m"
+	// defaultLocalModel is the int8-quantized EmbeddingGemma: identical retrieval
+	// quality to the fp32 model (measured R@10 parity) but a ~304MB first-use
+	// download instead of ~1.1GB. The shipped FPF vectors are baked under this
+	// same model id, so the runtime query embedder must default to it to match the
+	// baked contract (a mismatch silently degrades semantic search to FTS).
+	defaultLocalModel = "embeddinggemma-300m-q"
 )
 
 // sidecarAdapter is the local Embedder adapter: it owns a long-lived haft-embed
