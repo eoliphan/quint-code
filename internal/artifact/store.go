@@ -317,7 +317,7 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]*Artifac
 	// list that kind rather than match nothing.
 	if len(ftsTerms) == 0 {
 		if len(kindFilter) > 0 {
-			return s.ListByKind(ctx, kindFilter[0], limit)
+			return s.listByKinds(ctx, kindFilter, limit)
 		}
 		return nil, nil
 	}
@@ -332,6 +332,48 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]*Artifac
 		return s.searchFTS(ctx, strings.Join(ftsTerms, " OR "), kindFilter, limit)
 	}
 	return results, nil
+}
+
+func (s *Store) listByKinds(ctx context.Context, kinds []Kind, limit int) ([]*Artifact, error) {
+	uniqueKinds := make([]Kind, 0, len(kinds))
+	seen := make(map[Kind]struct{}, len(kinds))
+	for _, kind := range kinds {
+		if _, ok := seen[kind]; ok {
+			continue
+		}
+		seen[kind] = struct{}{}
+		uniqueKinds = append(uniqueKinds, kind)
+	}
+	if len(uniqueKinds) == 0 {
+		return nil, nil
+	}
+	if len(uniqueKinds) == 1 {
+		return s.ListByKind(ctx, uniqueKinds[0], limit)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(`SELECT id, kind, version, status, context, mode, title, content, valid_until, created_at, updated_at
+		FROM artifacts WHERE kind IN (`)
+	args := make([]any, 0, len(uniqueKinds)+1)
+	for i, kind := range uniqueKinds {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteByte('?')
+		args = append(args, string(kind))
+	}
+	sb.WriteString(") ORDER BY created_at DESC")
+	if limit > 0 {
+		sb.WriteString(" LIMIT ?")
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, sb.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanArtifacts(rows)
 }
 
 // searchFTS runs one MATCH query, optionally constrained to a set of artifact

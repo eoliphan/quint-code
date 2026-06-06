@@ -233,9 +233,6 @@ func runInit(cmd *cobra.Command, args []string) error {
 		} else {
 			fmt.Printf("  ✓ Configured MCP for Gemini CLI (project: %s)\n", cwd)
 		}
-		if destPath, removed := cleanupLegacySlashCommands(cwd, "gemini", initLocal); removed > 0 {
-			fmt.Printf("  ✓ Removed %d legacy slash commands (%s)\n", removed, destPath)
-		}
 	}
 
 	if hosts.codex || hosts.air {

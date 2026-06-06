@@ -187,6 +187,21 @@ func TestSearchKindFilter(t *testing.T) {
 			t.Errorf("kind-only query leaked a %s", a.Meta.Kind)
 		}
 	}
+
+	multiKind, err := store.Search(ctx, "kind:Note kind:DecisionRecord", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenKinds := map[Kind]bool{}
+	for _, a := range multiKind {
+		seenKinds[a.Meta.Kind] = true
+	}
+	if !seenKinds[KindNote] {
+		t.Fatalf("multi-kind-only query should include notes, got %+v", seenKinds)
+	}
+	if !seenKinds[KindDecisionRecord] {
+		t.Fatalf("multi-kind-only query should include decisions, got %+v", seenKinds)
+	}
 }
 
 func TestUpdate(t *testing.T) {

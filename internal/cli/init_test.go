@@ -30,6 +30,68 @@ func TestNormalizeInitHostOptionsAllMeansSupportedHostsOnly(t *testing.T) {
 	}
 }
 
+func TestRunInit_GeminiKeepsLegacyCommands(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(cwd) }()
+
+	oldInitClaude := initClaude
+	oldInitCursor := initCursor
+	oldInitGemini := initGemini
+	oldInitCodex := initCodex
+	oldInitAir := initAir
+	oldInitOpencode := initOpencode
+	oldInitAll := initAll
+	oldInitLocal := initLocal
+	oldInitNoClaudeMD := initNoClaudeMD
+	defer func() {
+		initClaude = oldInitClaude
+		initCursor = oldInitCursor
+		initGemini = oldInitGemini
+		initCodex = oldInitCodex
+		initAir = oldInitAir
+		initOpencode = oldInitOpencode
+		initAll = oldInitAll
+		initLocal = oldInitLocal
+		initNoClaudeMD = oldInitNoClaudeMD
+	}()
+
+	tmpDir := t.TempDir()
+	homeDir := t.TempDir()
+	commandsDir := filepath.Join(homeDir, ".gemini", "commands")
+	legacyCommand := filepath.Join(commandsDir, "h-frame.toml")
+
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyCommand, []byte("description = \"legacy haft command\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", homeDir)
+
+	initClaude = false
+	initCursor = false
+	initGemini = true
+	initCodex = false
+	initAir = false
+	initOpencode = false
+	initAll = false
+	initLocal = false
+	initNoClaudeMD = true
+
+	if err := runInit(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(legacyCommand); err != nil {
+		t.Fatalf("Gemini init removed legacy command without replacement: %v", err)
+	}
+}
+
 func TestCreateDirectoryStructure_CreatesWorkflowExample(t *testing.T) {
 	haftDir := filepath.Join(t.TempDir(), ".haft")
 
