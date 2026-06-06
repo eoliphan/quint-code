@@ -109,6 +109,7 @@ jobs:
         continue-on-error: true
         run: |
           cd embed-sidecar
+          rm -f target/release/haft-embed
           cargo build --release
 
       - name: Package
@@ -117,9 +118,10 @@ jobs:
           mkdir -p runtimes/open-sleigh
           cp -R open-sleigh/_build/prod/rel/open_sleigh/. runtimes/open-sleigh/
           mkdir -p runtimes/haft-embed/bin
-          if [ -x embed-sidecar/target/release/haft-embed ]; then
-            cp embed-sidecar/target/release/haft-embed runtimes/haft-embed/bin/haft-embed
-            echo "bundled haft-embed sidecar ($(du -h embed-sidecar/target/release/haft-embed | cut -f1))"
+          sidecar_path=embed-sidecar/target/release/haft-embed
+          if [ "${{ steps.embed.outcome }}" = "success" ] && [ -x "$sidecar_path" ]; then
+            cp "$sidecar_path" runtimes/haft-embed/bin/haft-embed
+            echo "bundled haft-embed sidecar ($(du -h "$sidecar_path" | cut -f1))"
           else
             echo "::warning::haft-embed sidecar not built for ${{ matrix.goos }}-${{ matrix.goarch }} — semantic recall will fall back to FTS5+PPR or install.sh source build"
           fi
