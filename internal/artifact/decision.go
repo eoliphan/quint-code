@@ -1149,6 +1149,11 @@ func CheckDrift(ctx context.Context, store ArtifactStore, projectRoot string) ([
 
 		decisionFields := decisionArtifact.UnmarshalDecisionFields()
 
+		// Load the stored symbol-level baseline once per decision and group it
+		// by file. Activates the symbol-drift path so CheckDrift can partition a
+		// modified file into added-only (benign) vs governed-body-modified.
+		baselineSymbolsByFile := groupSymbolsByFile(store.GetAffectedSymbols(ctx, d.Meta.ID))
+
 		report := DriftReport{
 			DecisionID:    d.Meta.ID,
 			DecisionTitle: decisionArtifact.Meta.Title,
@@ -1213,6 +1218,7 @@ func CheckDrift(ctx context.Context, store ArtifactStore, projectRoot string) ([
 					Status:       DriftModified,
 					LinesChanged: lines,
 					Invariants:   copyDriftInvariants(decisionFields.Invariants),
+					Symbols:      computeSymbolDrift(projectRoot, f.Path, baselineSymbolsByFile[f.Path]),
 				})
 				hasDrift = true
 			}
@@ -1240,6 +1246,63 @@ func CheckDrift(ctx context.Context, store ArtifactStore, projectRoot string) ([
 	logger.Debug().Int("drift_reports", len(reports)).Msg("drift.check.complete")
 
 	return reports, nil
+}
+
+// groupSymbolsByFile buckets a decision's stored symbol baseline by file path.
+// It tolerates a load error (returns nil) so drift detection degrades to
+// file-level rather than failing the session-mandatory status check.
+func groupSymbolsByFile(symbols []AffectedSymbol, err error) map[string][]AffectedSymbol {
+	if err != nil || len(symbols) == 0 {
+		return nil
+	}
+	byFile := make(map[string][]AffectedSymbol)
+	for _, s := range symbols {
+		byFile[s.FilePath] = append(byFile[s.FilePath], s)
+	}
+	return byFile
+}
+
+// computeSymbolDrift partitions a modified file's change at symbol granularity
+// against its stored baseline. It returns nil — which SymbolVerdict reads as
+// needs-review (fail-safe to the operator) — whenever the file cannot be proven
+// benign: no symbol baseline, an unanalyzable/empty current parse, or a change
+// outside any tracked symbol body. A non-nil result lists each added/modified/
+// removed symbol, the deterministic floor the triage keys off.
+func computeSymbolDrift(projectRoot, relPath string, baseline []AffectedSymbol) []SymbolDriftItem {
+	if len(baseline) == 0 {
+		return nil
+	}
+	current, err := codebase.ExtractSymbolSnapshots(projectRoot, relPath)
+	if err != nil || len(current) == 0 {
+		// Unsupported language, oversized file, or no parseable symbols: cannot
+		// classify — fail-safe rather than mislabel every baseline symbol removed.
+		return nil
+	}
+	baseSnaps := make([]codebase.SymbolSnapshot, 0, len(baseline))
+	for _, s := range baseline {
+		baseSnaps = append(baseSnaps, codebase.SymbolSnapshot{
+			FilePath:   s.FilePath,
+			SymbolName: s.SymbolName,
+			SymbolKind: s.SymbolKind,
+			Line:       s.Line,
+			Hash:       s.Hash,
+		})
+	}
+	drifts := codebase.CompareSymbolSnapshots(baseSnaps, current)
+	if len(drifts) == 0 {
+		// File hash changed but no tracked symbol did — the change sits outside
+		// symbol bodies (imports, package vars, comments). Not provably benign.
+		return nil
+	}
+	items := make([]SymbolDriftItem, 0, len(drifts))
+	for _, d := range drifts {
+		items = append(items, SymbolDriftItem{
+			SymbolName: d.SymbolName,
+			SymbolKind: d.SymbolKind,
+			Status:     d.Status,
+		})
+	}
+	return items
 }
 
 func persistDriftManifests(

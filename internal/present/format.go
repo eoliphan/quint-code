@@ -226,6 +226,19 @@ func BaselineResponse(decisionRef string, files []artifact.AffectedFile, navStri
 	return sb.String()
 }
 
+// symbolVerdictHint renders the operator-facing action implied by a report's
+// symbol-level triage verdict — the deterministic floor for session-start drift.
+func symbolVerdictHint(verdict string) string {
+	switch verdict {
+	case artifact.SymbolVerdictAdditiveOnly:
+		return " — additive only; safe to re-baseline without review"
+	case artifact.SymbolVerdictGovernedModified:
+		return " — a governed symbol body changed; surface to the operator"
+	default:
+		return " — could not prove benign; surface to the operator"
+	}
+}
+
 // DriftResponseSummary formats drift results compactly: per-report counts +
 // up to 5 modified file paths (the actionable ones). Suitable as the default
 // reply from haft_refresh scan; the full per-file dump (DriftResponse) can
@@ -261,12 +274,18 @@ func DriftResponseSummary(reports []artifact.DriftReport, navStrip string) strin
 			}
 			var modified, added, missing int
 			var modifiedPaths []string
+			var changedSymbols []string // non-added symbols across modified files — the actionable ones
 			for _, f := range r.Files {
 				switch f.Status {
 				case artifact.DriftModified:
 					modified++
 					if len(modifiedPaths) < topModifiedPerReport {
 						modifiedPaths = append(modifiedPaths, f.Path)
+					}
+					for _, s := range f.Symbols {
+						if s.Status != "added" && len(changedSymbols) < topModifiedPerReport {
+							changedSymbols = append(changedSymbols, fmt.Sprintf("%s %s %s", s.Status, s.SymbolKind, s.SymbolName))
+						}
 					}
 				case artifact.DriftAdded:
 					added++
@@ -276,6 +295,13 @@ func DriftResponseSummary(reports []artifact.DriftReport, navStrip string) strin
 			}
 			sb.WriteString(fmt.Sprintf("### %s [%s]\n", r.DecisionTitle, r.DecisionID))
 			sb.WriteString(fmt.Sprintf("  %d modified, %d added, %d missing\n", modified, added, missing))
+			sb.WriteString(fmt.Sprintf("  Symbol verdict: %s%s\n", r.SymbolVerdict(), symbolVerdictHint(r.SymbolVerdict())))
+			if len(changedSymbols) > 0 {
+				sb.WriteString("  Governed symbols changed:\n")
+				for _, s := range changedSymbols {
+					sb.WriteString(fmt.Sprintf("    ~ %s\n", s))
+				}
+			}
 			if len(modifiedPaths) > 0 {
 				sb.WriteString("  Top modified:\n")
 				for _, p := range modifiedPaths {
