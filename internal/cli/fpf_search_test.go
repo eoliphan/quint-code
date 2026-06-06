@@ -230,6 +230,37 @@ func TestFpfHybridSearchDoesNotBlockOnColdEmbedderFactory(t *testing.T) {
 	waitForFpfHybridIdle(t, hybrid)
 }
 
+func TestFpfHybridSearchBuildsSynchronouslyOnFirstSearch(t *testing.T) {
+	dbPath := buildFPFSearchTestDB(t)
+	bakeFPFSearchTestEmbeddings(t, dbPath)
+
+	restoreOpen := stubOpenFPFDB(t, dbPath)
+	defer restoreOpen()
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	buildCalls := 0
+	hybrid := NewFpfHybrid(func() (embedding.Embedder, error) {
+		buildCalls++
+		return fpfSearchTestEmbedder{}, nil
+	})
+
+	results, err := hybrid.Search(db, "semantic-only", 2)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("embedder factory calls = %d, want 1", buildCalls)
+	}
+	if !hasSearchTier(results, "semantic") {
+		t.Fatalf("expected first search to include semantic hits, got %#v", results)
+	}
+}
+
 func TestFPFEmbeddingConfigPinsShippedContract(t *testing.T) {
 	global := embedding.Config{
 		Provider: embedding.ProviderOpenAI,
@@ -307,6 +338,46 @@ func (f fpfSearchTestEmbedder) Embed(_ context.Context, _ embedding.Role, texts 
 
 func (f fpfSearchTestEmbedder) Close() error {
 	return nil
+}
+
+type fpfSearchSpecEmbedder struct{}
+
+func (f fpfSearchSpecEmbedder) Descriptor() fpf.SemanticEmbedderDescriptor {
+	descriptor := fpfSearchTestEmbedder{}.Descriptor()
+	return fpf.SemanticEmbedderDescriptor{
+		Provider:   descriptor.Provider,
+		Model:      descriptor.Model,
+		Dimensions: descriptor.Dimensions,
+	}
+}
+
+func (f fpfSearchSpecEmbedder) EmbedTexts(ctx context.Context, texts []string) ([][]float32, error) {
+	return fpfSearchTestEmbedder{}.Embed(ctx, embedding.RoleDocument, texts)
+}
+
+func bakeFPFSearchTestEmbeddings(t *testing.T, dbPath string) {
+	t.Helper()
+
+	if err := fpf.SetSpecMeta(dbPath, "schema_version", fpf.SpecIndexSchemaVersion); err != nil {
+		t.Fatalf("SetSpecMeta schema_version failed: %v", err)
+	}
+
+	baked, err := fpf.BakeSpecEmbeddings(context.Background(), dbPath, fpfSearchSpecEmbedder{}, fpf.ScopeAllSections)
+	if err != nil {
+		t.Fatalf("BakeSpecEmbeddings failed: %v", err)
+	}
+	if baked == 0 {
+		t.Fatal("BakeSpecEmbeddings baked no vectors")
+	}
+}
+
+func hasSearchTier(results []fpf.SpecSearchResult, tier string) bool {
+	for _, result := range results {
+		if result.Tier == tier {
+			return true
+		}
+	}
+	return false
 }
 
 func waitForFpfHybridIdle(t *testing.T, hybrid *FpfHybrid) {

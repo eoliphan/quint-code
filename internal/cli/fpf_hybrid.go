@@ -46,9 +46,6 @@ func ensureFPFHybrid() *FpfHybrid {
 
 	if fpfHybrid == nil {
 		fpfHybrid = buildFPFHybridFunc()
-		if fpfHybrid != nil {
-			fpfHybrid.Prewarm()
-		}
 	}
 	return fpfHybrid
 }
@@ -145,7 +142,7 @@ func (h *FpfHybrid) Search(db *sql.DB, query string, limit int) ([]fpf.SpecSearc
 		return deterministic, nil
 	}
 
-	h.ensureWarming()
+	h.ensureBuiltForSearch()
 	embedder, cardIndex, proseIndex, ready := h.snapshot()
 	if !ready {
 		return deterministic, nil
@@ -268,6 +265,23 @@ func (h *FpfHybrid) ensureWarming() {
 	h.building = true
 	h.mu.Unlock()
 	go h.warmAsync()
+}
+
+func (h *FpfHybrid) ensureBuiltForSearch() {
+	h.mu.Lock()
+	if h.embedderUnavailable || h.newEmbedder == nil || h.built || h.building {
+		h.mu.Unlock()
+		return
+	}
+	h.building = true
+	h.mu.Unlock()
+
+	cardIndex, proseIndex := h.buildIndex()
+	h.mu.Lock()
+	h.building = false
+	h.cardIndex, h.proseIndex = cardIndex, proseIndex
+	h.built = true
+	h.mu.Unlock()
 }
 
 func (h *FpfHybrid) warmAsync() {
