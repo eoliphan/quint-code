@@ -176,6 +176,33 @@ func TestCrossHybridFusesSemanticHit(t *testing.T) {
 	}
 }
 
+// TestCrossHybridFiltersSelfSemanticHits proves the cross-project surface keeps
+// its boundary even when the semantic index contains the current project's own
+// decisions. The global index may warm over all projects, but Search must only
+// return other-project rows.
+func TestCrossHybridFiltersSelfSemanticHits(t *testing.T) {
+	ctx := context.Background()
+	store := newTempIndexStore(t)
+	seedDecision(t, ctx, store, "current", "dec-self", "Rust fastembed gemma sidecar", "local embeddings", "augment keyword search")
+	seedDecision(t, ctx, store, "other", "dec-other", "Rust fastembed gemma sidecar", "local embeddings", "augment keyword search")
+
+	hybrid := NewCrossHybrid(store, func() (embedding.Embedder, error) { return &fakeEmbedderProj{}, nil })
+	if err := hybrid.Warm(ctx); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	results, err := hybrid.Search(ctx, "compute dense vector representations", "current", "go", 5)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if rankIn(results, "current|dec-self") < crossRankMiss {
+		t.Fatalf("self-project semantic hit leaked into cross-project recall: %v", recallIDs(results))
+	}
+	if rankIn(results, "other|dec-other") >= crossRankMiss {
+		t.Fatalf("other-project semantic hit should remain after filtering self hits: %v", recallIDs(results))
+	}
+}
+
 // queryFaultEmbedder embeds documents fine (so Warm builds a ready index) but
 // faults on query embeds — simulating a sidecar that crashes/times out on the
 // query call after warm.

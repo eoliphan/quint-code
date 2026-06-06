@@ -80,8 +80,9 @@ func (c crossVectorCache) store(ctx context.Context, d embedding.Descriptor, pro
 // crossCorpusRow is an indexed decision plus its language (CL is assigned at
 // query time against the caller's currentLang, like IndexStore.Search).
 type crossCorpusRow struct {
-	recall IndexRecall
-	lang   string
+	recall    IndexRecall
+	projectID string
+	lang      string
 }
 
 // CrossHybrid fuses FTS and semantic ranking over the cross-project index.
@@ -183,7 +184,7 @@ func (h *CrossHybrid) Search(ctx context.Context, query, currentProjectID, curre
 	semantic := index.Search(queryVectors[0], pool)
 
 	fused := fuseRRF([][]string{recallIDs(ftsResults), semanticIDs(semantic, crossMinSimilarity)}, crossRRFK)
-	result := resolveRecall(fused, byID, ftsResults, currentLang, limit)
+	result := resolveRecall(fused, byID, ftsResults, currentProjectID, currentLang, limit)
 
 	// Recall floor: embeddings AUGMENT, never reduce recall. The clean AND+semantic
 	// fusion gives the high-quality top ranks; if it under-fills, top up with the
@@ -293,7 +294,8 @@ func (h *CrossHybrid) buildIndex(ctx context.Context) (*embedding.Index, map[str
 				WhySelected: entry.WhySelected,
 				WeakestLink: entry.WeakestLink,
 			},
-			lang: entry.PrimaryLang,
+			projectID: entry.ProjectID,
+			lang:      entry.PrimaryLang,
 		}
 		text := corpusText(entry)
 		if text == "" {
@@ -345,7 +347,7 @@ func (h *CrossHybrid) embedMisses(ctx context.Context, embedder embedding.Embedd
 
 // resolveRecall maps the fused id ordering back to IndexRecall rows. FTS rows
 // carry their query-time CL/Similarity; semantic-only rows get CL assigned now.
-func resolveRecall(orderedIDs []string, byID map[string]crossCorpusRow, ftsResults []IndexRecall, currentLang string, limit int) []IndexRecall {
+func resolveRecall(orderedIDs []string, byID map[string]crossCorpusRow, ftsResults []IndexRecall, currentProjectID string, currentLang string, limit int) []IndexRecall {
 	ftsByID := make(map[string]IndexRecall, len(ftsResults))
 	for _, r := range ftsResults {
 		ftsByID[r.ProjectName+"|"+r.DecisionID] = r
@@ -356,6 +358,9 @@ func resolveRecall(orderedIDs []string, byID map[string]crossCorpusRow, ftsResul
 		if r, ok := ftsByID[id]; ok {
 			out = append(out, r)
 		} else if row, ok := byID[id]; ok {
+			if currentProjectID != "" && row.projectID == currentProjectID {
+				continue
+			}
 			r := row.recall
 			r.CL = clFor(currentLang, row.lang)
 			out = append(out, r)
