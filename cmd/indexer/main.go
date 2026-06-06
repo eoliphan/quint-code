@@ -126,9 +126,12 @@ func buildIndex(specPath, dbPath, commitSHA, routePath string) error {
 		return fmt.Errorf("setting meta: %w", err)
 	}
 
-	baked, err := bakeSpecEmbeddings(dbPath)
+	baked, err := bakeSpecEmbeddingsFunc(dbPath)
 	if err != nil {
 		return fmt.Errorf("bake embeddings: %w", err)
+	}
+	if baked == 0 {
+		return fmt.Errorf("bake embeddings: no section vectors baked — install/build haft-embed before running indexer")
 	}
 
 	fmt.Printf("Indexed %d chunks (%d spec + %d patterns) into %s; baked %d section vectors\n",
@@ -136,16 +139,16 @@ func buildIndex(specPath, dbPath, commitSHA, routePath string) error {
 	return nil
 }
 
+var bakeSpecEmbeddingsFunc = bakeSpecEmbeddings
+
 // bakeSpecEmbeddings embeds every section into fpf_embeddings via the local
-// sidecar (MRL-256). When haft-embed is absent the index is still valid (empty
-// vectors table) and the runtime degrades to FTS — a missing sidecar must never
-// fail a build. Returns the number of vectors baked.
+// sidecar (MRL-256). Index refresh is allowed to degrade at runtime, but the
+// committed fpf.db must not be vectorless.
 func bakeSpecEmbeddings(dbPath string) (int, error) {
 	emb, err := embedding.New(embedding.Config{Provider: embedding.ProviderLocal, Model: os.Getenv("HAFT_EMBED_MODEL"), Dim: specEmbeddingBakeDim()})
 	if err != nil {
 		if embedding.Degraded(err) {
-			fmt.Println("haft-embed absent at index time — fpf.db built WITHOUT vectors (runtime degrades to FTS)")
-			return 0, nil
+			return 0, fmt.Errorf("haft-embed unavailable; cannot build committed FPF index without baked vectors: %w", err)
 		}
 		return 0, fmt.Errorf("start embedder: %w", err)
 	}

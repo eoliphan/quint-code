@@ -114,6 +114,24 @@ func TestVerifyIndexRejectsSchemaVersionMismatch(t *testing.T) {
 	}
 }
 
+func TestBuildIndexRejectsVectorlessBake(t *testing.T) {
+	tempDir := t.TempDir()
+	specPath := filepath.Join(tempDir, "FPF-Spec.md")
+	dbPath := filepath.Join(tempDir, "fpf.db")
+	routePath := filepath.Join(tempDir, "routes.json")
+
+	writeIndexerFixture(t, specPath, routePath)
+	stubBakeSpecEmbeddings(t, 0, nil)
+
+	err := buildIndex(specPath, dbPath, "", routePath)
+	if err == nil {
+		t.Fatal("expected vectorless bake to fail")
+	}
+	if !strings.Contains(err.Error(), "no section vectors baked") {
+		t.Fatalf("expected no-vectors error, got %v", err)
+	}
+}
+
 func TestCleanSpecCommitRef(t *testing.T) {
 	tests := []struct {
 		name string
@@ -157,20 +175,8 @@ func TestBuildIndex_PreservesHeadingOnlyRootPatternShells(t *testing.T) {
 	dbPath := filepath.Join(tempDir, "fpf.db")
 	routePath := filepath.Join(tempDir, "routes.json")
 
-	spec := `## A.17 - Canonical “Characteristic” (A.CHR-NORM)
-
-### A.17:1 - Context
-
-To have reproducibility and explainability there is a need to measure various aspects of systems or knowledge artifacts.
-`
-	routes := `{"routes":[]}`
-
-	if err := os.WriteFile(specPath, []byte(spec), 0o644); err != nil {
-		t.Fatalf("write spec: %v", err)
-	}
-	if err := os.WriteFile(routePath, []byte(routes), 0o644); err != nil {
-		t.Fatalf("write routes: %v", err)
-	}
+	writeIndexerFixture(t, specPath, routePath)
+	stubBakeSpecEmbeddings(t, 1, nil)
 
 	if err := buildIndex(specPath, dbPath, "", routePath); err != nil {
 		t.Fatalf("buildIndex() error: %v", err)
@@ -199,4 +205,35 @@ To have reproducibility and explainability there is a need to measure various as
 	if !strings.Contains(aliasesJSON, "A.CHR-NORM") {
 		t.Fatalf("expected technical alias in aliases_json, got %q", aliasesJSON)
 	}
+}
+
+func writeIndexerFixture(t *testing.T, specPath, routePath string) {
+	t.Helper()
+
+	spec := `## A.17 - Canonical “Characteristic” (A.CHR-NORM)
+
+### A.17:1 - Context
+
+To have reproducibility and explainability there is a need to measure various aspects of systems or knowledge artifacts.
+`
+	routes := `{"routes":[]}`
+
+	if err := os.WriteFile(specPath, []byte(spec), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	if err := os.WriteFile(routePath, []byte(routes), 0o644); err != nil {
+		t.Fatalf("write routes: %v", err)
+	}
+}
+
+func stubBakeSpecEmbeddings(t *testing.T, baked int, err error) {
+	t.Helper()
+
+	original := bakeSpecEmbeddingsFunc
+	bakeSpecEmbeddingsFunc = func(string) (int, error) {
+		return baked, err
+	}
+	t.Cleanup(func() {
+		bakeSpecEmbeddingsFunc = original
+	})
 }
