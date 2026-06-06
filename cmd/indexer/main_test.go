@@ -5,10 +5,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/m0n0x41d/haft/internal/fpf"
 	_ "modernc.org/sqlite"
 )
 
@@ -84,33 +86,116 @@ func TestVerifyIndexRejectsSchemaVersionMismatch(t *testing.T) {
 	dbPath := filepath.Join(tempDir, "fpf.db")
 	expectedCommit := "expected-sha"
 
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	writeVerifyIndexFixture(t, dbPath, verifyIndexFixture{
+		commit:          expectedCommit,
+		schemaVersion:   "3",
+		indexedSections: 1,
+		rows:            rowsForContract(shippedFPFEmbeddingContract, 1),
+	})
 
-	stmts := []string{
-		`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`,
-		`CREATE TABLE fpf_embeddings (provider TEXT NOT NULL, model TEXT NOT NULL, dim INTEGER NOT NULL)`,
-		`INSERT INTO meta (key, value) VALUES ('fpf_commit', 'expected-sha')`,
-		`INSERT INTO meta (key, value) VALUES ('schema_version', '3')`,
-		`INSERT INTO fpf_embeddings (provider, model, dim) VALUES ('local', 'test', 256)`,
-	}
-	for _, stmt := range stmts {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("exec %q: %v", stmt, err)
-		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close db: %v", err)
-	}
-
-	err = verifyIndex([]string{dbPath, expectedCommit})
+	err := verifyIndex([]string{dbPath, expectedCommit})
 	if err == nil {
 		t.Fatal("expected schema mismatch error")
 	}
 	if !strings.Contains(err.Error(), "schema_version") {
 		t.Fatalf("expected schema_version error, got %v", err)
+	}
+}
+
+func TestVerifyIndexAcceptsShippedEmbeddingContract(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "fpf.db")
+	expectedCommit := "expected-sha"
+
+	writeVerifyIndexFixture(t, dbPath, verifyIndexFixture{
+		commit:          expectedCommit,
+		schemaVersion:   fpf.SpecIndexSchemaVersion,
+		indexedSections: 2,
+		rows:            rowsForContract(shippedFPFEmbeddingContract, 1, 2),
+	})
+
+	err := verifyIndex([]string{dbPath, expectedCommit})
+	if err != nil {
+		t.Fatalf("verifyIndex() error: %v", err)
+	}
+}
+
+func TestVerifyIndexRejectsWrongEmbeddingContract(t *testing.T) {
+	tests := []struct {
+		name     string
+		contract specEmbeddingContract
+	}{
+		{
+			name: "provider",
+			contract: specEmbeddingContract{
+				provider: "openai",
+				model:    shippedFPFEmbeddingContract.model,
+				dim:      shippedFPFEmbeddingContract.dim,
+			},
+		},
+		{
+			name: "model",
+			contract: specEmbeddingContract{
+				provider: shippedFPFEmbeddingContract.provider,
+				model:    "embeddinggemma-300m",
+				dim:      shippedFPFEmbeddingContract.dim,
+			},
+		},
+		{
+			name: "dim",
+			contract: specEmbeddingContract{
+				provider: shippedFPFEmbeddingContract.provider,
+				model:    shippedFPFEmbeddingContract.model,
+				dim:      0,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			dbPath := filepath.Join(tempDir, "fpf.db")
+			expectedCommit := "expected-sha"
+
+			writeVerifyIndexFixture(t, dbPath, verifyIndexFixture{
+				commit:          expectedCommit,
+				schemaVersion:   fpf.SpecIndexSchemaVersion,
+				indexedSections: 2,
+				rows:            rowsForContract(tt.contract, 1, 2),
+			})
+
+			err := verifyIndex([]string{dbPath, expectedCommit})
+			if err == nil {
+				t.Fatal("expected wrong-contract error")
+			}
+			if !strings.Contains(err.Error(), "vector contract mismatch") {
+				t.Fatalf("expected vector contract error, got %v", err)
+			}
+			if !strings.Contains(err.Error(), "found 0") {
+				t.Fatalf("expected zero shipped-contract vectors, got %v", err)
+			}
+		})
+	}
+}
+
+func TestVerifyIndexRejectsPartialEmbeddingBake(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "fpf.db")
+	expectedCommit := "expected-sha"
+
+	writeVerifyIndexFixture(t, dbPath, verifyIndexFixture{
+		commit:          expectedCommit,
+		schemaVersion:   fpf.SpecIndexSchemaVersion,
+		indexedSections: 2,
+		rows:            rowsForContract(shippedFPFEmbeddingContract, 1),
+	})
+
+	err := verifyIndex([]string{dbPath, expectedCommit})
+	if err == nil {
+		t.Fatal("expected partial-bake error")
+	}
+	if !strings.Contains(err.Error(), "found 1") {
+		t.Fatalf("expected partial vector count error, got %v", err)
 	}
 }
 
@@ -236,4 +321,79 @@ func stubBakeSpecEmbeddings(t *testing.T, baked int, err error) {
 	t.Cleanup(func() {
 		bakeSpecEmbeddingsFunc = original
 	})
+}
+
+type verifyIndexFixture struct {
+	commit          string
+	schemaVersion   string
+	indexedSections int
+	rows            []verifyEmbeddingRow
+}
+
+type verifyEmbeddingRow struct {
+	sectionID int
+	contract  specEmbeddingContract
+}
+
+func rowsForContract(contract specEmbeddingContract, sectionIDs ...int) []verifyEmbeddingRow {
+	rows := make([]verifyEmbeddingRow, 0, len(sectionIDs))
+	for _, sectionID := range sectionIDs {
+		rows = append(rows, verifyEmbeddingRow{sectionID: sectionID, contract: contract})
+	}
+	return rows
+}
+
+func writeVerifyIndexFixture(t *testing.T, dbPath string, fixture verifyIndexFixture) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	stmts := []string{
+		`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`,
+		`CREATE TABLE fpf_embeddings (
+			section_id INTEGER NOT NULL,
+			provider TEXT NOT NULL,
+			model TEXT NOT NULL,
+			dim INTEGER NOT NULL,
+			content_hash TEXT NOT NULL,
+			vector BLOB NOT NULL,
+			PRIMARY KEY (section_id, provider, model, dim)
+		)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("exec %q: %v", stmt, err)
+		}
+	}
+
+	metadata := map[string]string{
+		"fpf_commit":       fixture.commit,
+		"schema_version":   fixture.schemaVersion,
+		"indexed_sections": strconv.Itoa(fixture.indexedSections),
+	}
+	for key, value := range metadata {
+		_, err := db.Exec(`INSERT INTO meta (key, value) VALUES (?, ?)`, key, value)
+		if err != nil {
+			t.Fatalf("insert meta %s: %v", key, err)
+		}
+	}
+
+	for _, row := range fixture.rows {
+		_, err := db.Exec(
+			`INSERT INTO fpf_embeddings (section_id, provider, model, dim, content_hash, vector) VALUES (?, ?, ?, ?, ?, ?)`,
+			row.sectionID,
+			row.contract.provider,
+			row.contract.model,
+			row.contract.dim,
+			"hash",
+			[]byte{0, 1, 2, 3},
+		)
+		if err != nil {
+			t.Fatalf("insert embedding row %+v: %v", row, err)
+		}
+	}
 }

@@ -49,16 +49,80 @@ func verifyIndex(args []string) error {
 		return fmt.Errorf("fpf.db schema_version=%q but code expects %q — run `task fpf-refresh` and commit the result", schemaVersion, fpf.SpecIndexSchemaVersion)
 	}
 
-	_, _, _, count, err := fpf.SpecEmbeddingContract(db)
+	indexedSections, err := readIndexedSectionCount(db)
+	if err != nil {
+		return err
+	}
+
+	count, err := countSpecEmbeddingsForContract(db, shippedFPFEmbeddingContract)
 	if err != nil {
 		return fmt.Errorf("read embedding contract: %w", err)
 	}
-	if count == 0 {
-		return fmt.Errorf("fpf.db has NO baked vectors — run `task fpf-refresh` with the embedding sidecar installed, then commit")
+	if count != indexedSections {
+		return fmt.Errorf("fpf.db vector contract mismatch: expected %d vectors for %s, found %d (%s) — run `task fpf-refresh` without HAFT_FPF_BAKE_SCOPE/HAFT_FPF_BAKE_DIM/HAFT_EMBED_MODEL overrides and commit the result",
+			indexedSections, shippedFPFEmbeddingContract, count, describeDominantSpecEmbeddingContract(db))
 	}
 
-	fmt.Printf("fpf.db OK: commit %s, %d baked section vectors\n", commit[:min(8, len(commit))], count)
+	fmt.Printf("fpf.db OK: commit %s, %d baked section vectors for %s\n", commit[:min(8, len(commit))], count, shippedFPFEmbeddingContract)
 	return nil
+}
+
+const shippedFPFEmbeddingDim = 256
+
+type specEmbeddingContract struct {
+	provider string
+	model    string
+	dim      int
+}
+
+func (c specEmbeddingContract) String() string {
+	return fmt.Sprintf("%s/%s/%d", c.provider, c.model, c.dim)
+}
+
+var shippedFPFEmbeddingContract = specEmbeddingContract{
+	provider: embedding.ProviderLocal,
+	model:    embedding.DefaultLocalModel,
+	dim:      shippedFPFEmbeddingDim,
+}
+
+func readIndexedSectionCount(db *sql.DB) (int, error) {
+	value, err := fpf.GetSpecMeta(db, "indexed_sections")
+	if err != nil {
+		return 0, fmt.Errorf("read indexed_sections meta: %w", err)
+	}
+
+	count, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("indexed_sections=%q is not an integer", value)
+	}
+	if count <= 0 {
+		return 0, fmt.Errorf("indexed_sections=%d must be positive", count)
+	}
+	return count, nil
+}
+
+func countSpecEmbeddingsForContract(db *sql.DB, contract specEmbeddingContract) (int, error) {
+	var count int
+	err := db.
+		QueryRow(
+			`SELECT COUNT(*) FROM fpf_embeddings WHERE provider=? AND model=? AND dim=?`,
+			contract.provider,
+			contract.model,
+			contract.dim,
+		).
+		Scan(&count)
+	return count, err
+}
+
+func describeDominantSpecEmbeddingContract(db *sql.DB) string {
+	provider, model, dim, count, err := fpf.SpecEmbeddingContract(db)
+	if err != nil {
+		return fmt.Sprintf("dominant contract unavailable: %v", err)
+	}
+	if count == 0 {
+		return "no baked vectors"
+	}
+	return fmt.Sprintf("dominant contract %s/%s/%d has %d vectors", provider, model, dim, count)
 }
 
 const routeArtifactPath = "internal/fpf/fpf-routes.json"
@@ -167,7 +231,7 @@ func specEmbeddingBakeDim() int {
 			return d
 		}
 	}
-	return 256
+	return shippedFPFEmbeddingDim
 }
 
 // bakeScopeFromEnv selects the embedding scope. Default is the full corpus;
