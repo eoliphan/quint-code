@@ -203,15 +203,15 @@ func waitForSharedSidecar(
 		select {
 		case err := <-started.done:
 			if err == nil {
-				return nil, errors.New("shared sidecar exited before opening socket")
+				return nil, fmt.Errorf("%w: exited before opening socket", errSharedSidecarUnusable)
 			}
-			return nil, fmt.Errorf("shared sidecar exited before opening socket: %w", err)
+			return nil, fmt.Errorf("%w: exited before opening socket: %v", errSharedSidecarUnusable, err)
 		default:
 		}
 
 		if timeout > 0 && time.Now().After(deadline) {
 			_ = started.cmd.Process.Kill()
-			return nil, errors.New("shared sidecar startup timed out")
+			return nil, fmt.Errorf("%w: startup timed out", errSharedSidecarUnusable)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

@@ -48,9 +48,12 @@ tasks:
     cmds:
       - task fpf-index
 
+  # build/install/dev use the COMMITTED internal/cli/fpf.db (go:embed'd into the
+  # binary), the same source of truth CI verifies but never rebakes. Rebaking
+  # needs a live haft-embed and is the explicit maintainer step `task fpf-refresh`
+  # — run it after an FPF spec bump, then commit the regenerated fpf.db.
   build:
-    desc: Build Go binary
-    deps: [fpf-refresh]
+    desc: Build Go binary (uses the committed FPF index; run `task fpf-refresh` to rebake)
     cmds:
       - go build -o {{.BIN_NAME}} -trimpath ./cmd/haft/
     generates:
@@ -58,7 +61,7 @@ tasks:
 
   install:
     desc: Build and install haft (CLI + Open-Sleigh runtime) locally
-    deps: [fpf-refresh, open-sleigh:install-runtime]
+    deps: [open-sleigh:install-runtime]
     cmds:
       # Remove any stale `haft` in GOBIN so PATH picks up BIN_DIR/haft,
       # not a leftover `go install`'d binary from an older build.
@@ -72,8 +75,7 @@ tasks:
       - echo "Installed {{.OPEN_SLEIGH_INSTALL_DIR}}"
 
   dev:
-    desc: Build Go binary only (no Open-Sleigh runtime release)
-    deps: [fpf-index]
+    desc: Build Go binary only (no Open-Sleigh runtime release; uses the committed FPF index)
     cmds:
       - go build -o {{.BIN_NAME}} -trimpath ./cmd/haft/
 
