@@ -92,12 +92,20 @@ func withSharedSidecarLock(
 	defer file.Close()
 	_ = file.Chmod(0o600)
 
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flockFile(file, syscall.LOCK_EX); err != nil {
 		return nil, fmt.Errorf("lock shared sidecar: %w", err)
 	}
-	defer func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = flockFile(file, syscall.LOCK_UN) }()
 
 	return fn()
+}
+
+func flockFile(file *os.File, how int) error {
+	fd := file.Fd()
+	if fd > (^uintptr(0) >> 1) {
+		return fmt.Errorf("file descriptor %d exceeds int range", fd)
+	}
+	return syscall.Flock(int(fd), how) // #nosec G115 -- fd is range-checked above.
 }
 
 func dialSharedSidecar(binary string, spec sidecarSpec, socket string) (*sharedSidecarAdapter, error) {
