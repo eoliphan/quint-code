@@ -488,6 +488,22 @@ plugged into Claude Code / Codex / OpenCode / Cursor over their native skill
   tensor and the sidecar ballooned past 6 GB and stalled. The batch is bounded
   small (peak activation back in the low hundreds of MB), with negligible
   throughput cost.
+- **Incompatible/old `haft-embed` degrades to FTS instead of hanging.** When the
+  resolved sidecar binary could not serve the shared daemon (e.g. an older
+  `haft-embed` that rejects `--serve-socket`), the stdio fallback then blocked
+  forever on a handshake the old protocol never sends. The shared path now flags
+  an unusable binary (`errSharedSidecarUnusable`) and recall degrades straight to
+  FTS5+PPR; the stdio handshake is additionally bounded by
+  `HAFT_EMBED_STARTUP_TIMEOUT_SECS` (generous default for a cold model download,
+  `0` = unbounded) so no resolved binary can hang the caller. Honors the
+  "recall never hard-fails on the optional layer" invariant. (`internal/embedding`.)
+- **`task install` / `task build` use the committed FPF index, never rebake.**
+  They depended on `fpf-refresh`, which re-pulled the FPF submodule and rebaked
+  `internal/cli/fpf.db` through a live `haft-embed` — failing (or, before the
+  hang fix, stalling) whenever the local sidecar was missing or stale. The
+  committed `fpf.db` (go:embed'd into the binary, the same artifact CI verifies)
+  is now built as-is; rebaking is the explicit `task fpf-refresh` maintainer step
+  after an FPF spec bump.
 - **Terminal-status artifacts no longer resurface as expiry debt** — the
   `haft_refresh` stale-collection path now excludes `deprecated` / `superseded`
   artifacts, matching the active-decision scan's status filter. An archived-but-

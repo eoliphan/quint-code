@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/m0n0x41d/haft/logger"
 )
@@ -21,6 +22,15 @@ import (
 // MUST degrade to FTS5+PPR recall on this error (decision invariant) — it is
 // the expected state on a default install without the optional sidecar.
 var ErrSidecarUnavailable = errors.New("embedding sidecar (haft-embed) not found")
+
+// errSharedSidecarUnusable signals the shared-daemon attempt resolved a binary
+// that ran but could not serve (rejected the daemon flags / never opened its
+// socket / startup timed out) — i.e. an old or incompatible haft-embed. The
+// same binary will not behave in stdio mode either, so callers degrade straight
+// to FTS5+PPR instead of risking a stdio handshake hang. The shared (unix) path
+// wraps its failures with this sentinel; the non-unix stub does not, so Windows
+// still falls back to stdio.
+var errSharedSidecarUnusable = errors.New("shared embedding sidecar could not serve")
 
 const (
 	sidecarBinaryName = "haft-embed"
@@ -90,6 +100,13 @@ func newSidecarAdapter(cfg Config) (Embedder, error) {
 		if err == nil {
 			return adapter, nil
 		}
+		if errors.Is(err, errSharedSidecarUnusable) {
+			// The binary ran but could not serve (old/incompatible haft-embed).
+			// Retrying it over stdio would risk a handshake hang, so degrade to
+			// FTS5+PPR now — recall never hard-fails on the optional layer.
+			logger.Info().Err(err).Msg("embedding sidecar incompatible — recall falls back to FTS5+PPR")
+			return nil, ErrSidecarUnavailable
+		}
 		logger.Info().Err(err).Msg("shared embedding sidecar unavailable — falling back to stdio child")
 	}
 	return newStdioSidecarAdapter(binary, spec)
@@ -138,10 +155,10 @@ func (a *sidecarAdapter) spawn() error {
 	}
 
 	reader := bufio.NewReader(stdout)
-	handshake, err := readHandshake(reader)
+	handshake, err := readHandshakeWithin(reader, stdioHandshakeTimeout())
 	if err != nil {
 		_ = stdin.Close()
-		_ = cmd.Process.Kill()
+		_ = cmd.Process.Kill() // closing stdout unblocks a leaked reader goroutine
 		_ = cmd.Wait()
 		return err
 	}
@@ -169,6 +186,56 @@ func readHandshake(reader *bufio.Reader) (sidecarHandshake, error) {
 		return sidecarHandshake{}, fmt.Errorf("sidecar failed to start: %s", handshake.Error)
 	}
 	return handshake, nil
+}
+
+// stdioHandshakeTimeoutEnv bounds how long the stdio handshake waits. A cold
+// start that downloads the model is legitimately slow, so the default is
+// generous; 0 opts out (unbounded, the original behavior). Shares the env name
+// with the shared-daemon startup budget.
+const stdioHandshakeTimeoutEnv = "HAFT_EMBED_STARTUP_TIMEOUT_SECS"
+
+// defaultStdioHandshakeTimeout is generous enough for a first-use model download
+// yet finite, so an incompatible binary that never speaks the protocol degrades
+// to FTS5+PPR instead of hanging the caller forever.
+const defaultStdioHandshakeTimeout = 10 * time.Minute
+
+func stdioHandshakeTimeout() time.Duration {
+	value := strings.TrimSpace(os.Getenv(stdioHandshakeTimeoutEnv))
+	if value == "" {
+		return defaultStdioHandshakeTimeout
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds < 0 {
+		return defaultStdioHandshakeTimeout
+	}
+	return time.Duration(seconds) * time.Second // 0 = unbounded (opt-out)
+}
+
+type handshakeResult struct {
+	handshake sidecarHandshake
+	err       error
+}
+
+// readHandshakeWithin bounds readHandshake so a binary that never emits the
+// handshake line (an old protocol, an incompatible build) cannot block the
+// caller forever. timeout<=0 preserves the unbounded cold-start read. On
+// timeout the caller kills the process; closing its stdout unblocks the leaked
+// reader goroutine, which then exits via the buffered channel.
+func readHandshakeWithin(reader *bufio.Reader, timeout time.Duration) (sidecarHandshake, error) {
+	if timeout <= 0 {
+		return readHandshake(reader)
+	}
+	ch := make(chan handshakeResult, 1)
+	go func() {
+		handshake, err := readHandshake(reader)
+		ch <- handshakeResult{handshake: handshake, err: err}
+	}()
+	select {
+	case result := <-ch:
+		return result.handshake, result.err
+	case <-time.After(timeout):
+		return sidecarHandshake{}, fmt.Errorf("sidecar handshake timed out after %s", timeout)
+	}
 }
 
 func (a *sidecarAdapter) Descriptor() Descriptor {
