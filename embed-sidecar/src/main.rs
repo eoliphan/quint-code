@@ -1,10 +1,11 @@
 //! haft-embed — local embedding sidecar.
 //!
-//! Speaks newline-delimited JSON over stdio so haft can spawn it as a child
-//! process and stream embedding requests without a vector DB or a network hop.
+//! Speaks newline-delimited JSON over stdio or a Unix socket so haft can stream
+//! embedding requests without a vector DB or a network hop.
 //! Protocol:
-//!   - on startup, emits one handshake line: {"ready":true,"model":..,"dim":N}
-//!     (or {"ready":false,"error":..} + exit 1 if the model fails to load)
+//!   - on stdio startup, or on each socket connection, emits one handshake line:
+//!     {"ready":true,"model":..,"dim":N}
+//!     (or {"ready":false,"error":..} + exit 1 on stdio if the model fails)
 //!   - then, per input line: request  {"id":N,"task":"query|document|raw","texts":[..]}
 //!                           response {"id":N,"vectors":[[f32..]..]}  | {"id":N,"error":..}
 //!   - EOF on stdin -> exit 0.
@@ -13,8 +14,17 @@
 //! It exists only to AUGMENT that recall with semantic similarity — the
 //! decision graph stays primary (dec-20260605-fe77b358).
 
-use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener, UnixStream};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
@@ -40,6 +50,14 @@ struct Args {
     /// Show model-download progress on stderr (kept off so stdout stays a clean JSON stream).
     #[arg(long)]
     show_progress: bool,
+
+    /// Serve the same JSON protocol over this Unix socket instead of stdio.
+    #[arg(long)]
+    serve_socket: Option<PathBuf>,
+
+    /// Exit socket server mode after this many idle seconds. 0 = never exit.
+    #[arg(long, default_value_t = 1200)]
+    idle_timeout_secs: u64,
 }
 
 #[derive(Deserialize)]
@@ -61,7 +79,7 @@ enum Task {
     Raw,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Handshake {
     ready: bool,
     model: String,
@@ -81,7 +99,9 @@ struct Response {
 
 fn resolve_model(name: &str) -> Result<EmbeddingModel> {
     match name.to_ascii_lowercase().replace('_', "-").as_str() {
-        "embeddinggemma-300m" | "embeddinggemma" | "gemma" => Ok(EmbeddingModel::EmbeddingGemma300M),
+        "embeddinggemma-300m" | "embeddinggemma" | "gemma" => {
+            Ok(EmbeddingModel::EmbeddingGemma300M)
+        }
         // Quantized EmbeddingGemma: same 768-native MRL model, int8/4-bit weights —
         // 3-4x faster CPU inference and a far smaller first-use download than fp32,
         // with near-identical retrieval quality. Same asymmetric prefixes apply.
@@ -132,7 +152,11 @@ impl Embedder {
 
         let probe = model.embed(vec!["x"], None).context("probe embedding")?;
         let native = probe.first().map(Vec::len).unwrap_or(0);
-        let dim = if args.dim > 0 && args.dim < native { args.dim } else { native };
+        let dim = if args.dim > 0 && args.dim < native {
+            args.dim
+        } else {
+            native
+        };
         Ok(Self { model, dim })
     }
 
@@ -153,12 +177,24 @@ fn handle_line(embedder: &mut Embedder, line: &str) -> Response {
     let request: Request = match serde_json::from_str(line) {
         Ok(request) => request,
         Err(err) => {
-            return Response { id: 0, vectors: None, error: Some(format!("bad request json: {err}")) }
+            return Response {
+                id: 0,
+                vectors: None,
+                error: Some(format!("bad request json: {err}")),
+            }
         }
     };
     match embedder.embed(request.task, &request.texts) {
-        Ok(vectors) => Response { id: request.id, vectors: Some(vectors), error: None },
-        Err(err) => Response { id: request.id, vectors: None, error: Some(format!("{err:#}")) },
+        Ok(vectors) => Response {
+            id: request.id,
+            vectors: Some(vectors),
+            error: None,
+        },
+        Err(err) => Response {
+            id: request.id,
+            vectors: None,
+            error: Some(format!("{err:#}")),
+        },
     }
 }
 
@@ -166,6 +202,13 @@ fn handle_line(embedder: &mut Embedder, line: &str) -> Response {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if let Some(socket) = &args.serve_socket {
+        return run_socket(&args, socket);
+    }
+    run_stdio(&args)
+}
+
+fn run_stdio(args: &Args) -> Result<()> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
@@ -179,7 +222,11 @@ fn main() -> Result<()> {
         }
     };
 
-    let handshake = Handshake { ready: true, model: args.model.clone(), dim: embedder.dim };
+    let handshake = Handshake {
+        ready: true,
+        model: args.model.clone(),
+        dim: embedder.dim,
+    };
     writeln!(out, "{}", serde_json::to_string(&handshake)?)?;
     out.flush()?;
 
@@ -194,4 +241,152 @@ fn main() -> Result<()> {
         out.flush()?;
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn run_socket(args: &Args, socket: &Path) -> Result<()> {
+    let embedder = Embedder::load(args).context("load embedding daemon")?;
+    let handshake = Handshake {
+        ready: true,
+        model: args.model.clone(),
+        dim: embedder.dim,
+    };
+
+    if socket.exists() {
+        std::fs::remove_file(socket)
+            .with_context(|| format!("remove stale socket {}", socket.display()))?;
+    }
+    let listener =
+        UnixListener::bind(socket).with_context(|| format!("bind socket {}", socket.display()))?;
+    std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("secure socket {}", socket.display()))?;
+    listener
+        .set_nonblocking(true)
+        .context("set socket nonblocking")?;
+
+    let embedder = Arc::new(Mutex::new(embedder));
+    let active = Arc::new(AtomicUsize::new(0));
+    let last_activity = Arc::new(Mutex::new(Instant::now()));
+    let idle_timeout = Duration::from_secs(args.idle_timeout_secs);
+
+    loop {
+        match listener.accept() {
+            Ok((stream, _addr)) => {
+                stream
+                    .set_nonblocking(false)
+                    .context("set client socket blocking")?;
+                mark_activity(&last_activity);
+                spawn_client(
+                    stream,
+                    embedder.clone(),
+                    handshake.clone(),
+                    active.clone(),
+                    last_activity.clone(),
+                );
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                if should_exit_idle(&active, &last_activity, idle_timeout) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(err) => return Err(err).context("accept socket client"),
+        }
+    }
+
+    let _ = std::fs::remove_file(socket);
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn run_socket(_args: &Args, _socket: &Path) -> Result<()> {
+    Err(anyhow!(
+        "socket server mode is only supported on Unix platforms"
+    ))
+}
+
+#[cfg(unix)]
+fn spawn_client(
+    stream: UnixStream,
+    embedder: Arc<Mutex<Embedder>>,
+    handshake: Handshake,
+    active: Arc<AtomicUsize>,
+    last_activity: Arc<Mutex<Instant>>,
+) {
+    active.fetch_add(1, Ordering::SeqCst);
+    thread::spawn(move || {
+        let _guard = ActiveClient { active };
+        if let Err(err) = handle_client(stream, embedder, handshake, last_activity) {
+            eprintln!("haft-embed client error: {err:#}");
+        }
+    });
+}
+
+#[cfg(unix)]
+struct ActiveClient {
+    active: Arc<AtomicUsize>,
+}
+
+#[cfg(unix)]
+impl Drop for ActiveClient {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+#[cfg(unix)]
+fn handle_client(
+    stream: UnixStream,
+    embedder: Arc<Mutex<Embedder>>,
+    handshake: Handshake,
+    last_activity: Arc<Mutex<Instant>>,
+) -> Result<()> {
+    let reader_stream = stream.try_clone().context("clone socket stream")?;
+    let mut reader = BufReader::new(reader_stream);
+    let mut out = stream;
+
+    writeln!(out, "{}", serde_json::to_string(&handshake)?)?;
+    out.flush()?;
+
+    loop {
+        let mut line = String::new();
+        let bytes = reader.read_line(&mut line).context("read socket request")?;
+        if bytes == 0 {
+            return Ok(());
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        mark_activity(&last_activity);
+        let response = {
+            let mut guard = embedder
+                .lock()
+                .map_err(|_| anyhow!("embedding model lock poisoned"))?;
+            handle_line(&mut guard, &line)
+        };
+        writeln!(out, "{}", serde_json::to_string(&response)?)?;
+        out.flush()?;
+    }
+}
+
+#[cfg(unix)]
+fn mark_activity(last_activity: &Arc<Mutex<Instant>>) {
+    if let Ok(mut last) = last_activity.lock() {
+        *last = Instant::now();
+    }
+}
+
+#[cfg(unix)]
+fn should_exit_idle(
+    active: &Arc<AtomicUsize>,
+    last_activity: &Arc<Mutex<Instant>>,
+    idle_timeout: Duration,
+) -> bool {
+    if idle_timeout.is_zero() || active.load(Ordering::SeqCst) > 0 {
+        return false;
+    }
+    last_activity
+        .lock()
+        .map(|last| last.elapsed() >= idle_timeout)
+        .unwrap_or(false)
 }

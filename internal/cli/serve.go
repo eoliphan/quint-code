@@ -134,10 +134,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 				searcher := buildHybridSearcher(artStore, database.GetRawDB())
 				crossHybrid := buildCrossProjectHybrid(indexStore)
 
-				if hybrid := ensureFPFHybrid(); hybrid != nil {
-					hybrid.Prewarm() // background-load the baked FPF vectors so the first fpf search is fast
-				}
-
 				server.SetV5Handler(makeV5Handler(artStore, searcher, crossHybrid, haftDir, projCfg, indexStore))
 			}
 		}
@@ -158,8 +154,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 // buildHybridSearcher wires the optional embedding layer over the artifact
 // store. The embedder is resolved lazily on first search, so startup never
-// blocks on a first-run model download. A nil result (provider disabled or any
-// setup fault) means search runs FTS5+PPR only — recall never hard-fails on the
+// blocks on a first-run model download or spawns an embedding sidecar just
+// because an MCP client connected. A nil result (provider disabled or any setup
+// fault) means search runs FTS5+PPR only — recall never hard-fails on the
 // optional layer (dec-20260605-fe77b358).
 func buildHybridSearcher(store *artifact.Store, rawDB *sql.DB) recall.Searcher {
 	embCfg := embeddingConfigFromFile()
@@ -188,7 +185,6 @@ func buildHybridSearcher(store *artifact.Store, rawDB *sql.DB) recall.Searcher {
 	}
 
 	hybrid := recall.NewHybrid(store, newEmbedder, rawDB)
-	hybrid.Prewarm() // warm the corpus index in the background so the first search is fast
 	return hybrid
 }
 
@@ -214,6 +210,8 @@ func embeddingConfigFromFile() embedding.Config {
 // buildCrossProjectHybrid wires the optional embedding layer over the
 // cross-project index, mirroring buildHybridSearcher. nil (provider disabled /
 // no index) means cross-project recall runs the FTS path (now AND+OR) only.
+// The embedder is intentionally lazy so a single MCP server does not load an
+// additional ONNX model before the operator asks for cross-project recall.
 func buildCrossProjectHybrid(indexStore *project.IndexStore) *project.CrossHybrid {
 	if indexStore == nil {
 		return nil
@@ -235,7 +233,6 @@ func buildCrossProjectHybrid(indexStore *project.IndexStore) *project.CrossHybri
 		return embedder, nil
 	}
 	hybrid := project.NewCrossHybrid(indexStore, newEmbedder)
-	hybrid.Prewarm() // background-warm the cross-project index so the first frame recall is fast
 	return hybrid
 }
 
